@@ -28,7 +28,6 @@ class PixooSwitch(SwitchEntity):
         self._attr_name = f"Pixoo64 {name}"
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_icon = icon
-        
         self._attr_is_on = self.hub.ui_state.get(key, default_val)
         self.hub.ui_state[key] = self._attr_is_on
 

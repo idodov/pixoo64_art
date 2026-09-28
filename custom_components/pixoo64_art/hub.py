@@ -189,10 +189,10 @@ class PixooHub:
             font_color = processed_data.get('font_color', '#FFFFFF')
             bg_color_str = processed_data.get('background_color', '#000000')
 
-            if self.config.light and not self.media_data.playing_tv:
+            if getattr(self.config, 'light', None) and not getattr(self.media_data, 'playing_tv', False):
                 rgb = processed_data.get('background_color_rgb', (0,0,0))
                 await self._control_light('on', rgb, self.media_data.is_night)
-            if self.config.wled and not self.media_data.playing_tv:
+            if getattr(self.config, 'wled', None) and not getattr(self.media_data, 'playing_tv', False):
                 c1 = processed_data.get('color1')
                 c2 = processed_data.get('color2')
                 c3 = processed_data.get('color3')
@@ -203,7 +203,7 @@ class PixooHub:
                 "song": self.media_data.title,
                 "source": self.media_data.pic_source,
                 "lyrics_found": len(self.media_data.lyrics) > 0,
-                "active_mode": "Lyrics" if self.config.show_lyrics else "Standard",
+                "active_mode": "Lyrics" if getattr(self.config, 'show_lyrics', False) else "Standard",
                 "font_color": font_color
             }
 
@@ -219,11 +219,11 @@ class PixooHub:
             took_over = False
             spotify_animation_took_over = False
 
-            if self.config.spotify_slide and not self.media_data.radio_logo and not self.media_data.playing_tv:
+            if getattr(self.config, 'spotify_slide', False) and not getattr(self.media_data, 'radio_logo', False) and not getattr(self.media_data, 'playing_tv', False):
                 self.spotify_service.spotify_data = await self.spotify_service.get_spotify_json(self.media_data.artist, self.media_data.title)
                 if self.spotify_service.spotify_data:
                     t0 = time.perf_counter()
-                    if self.config.special_mode and getattr(self.config, 'special_mode_spotify_slider', False):
+                    if getattr(self.config, 'special_mode', False) and getattr(self.config, 'special_mode_spotify_slider', False):
                         await self.spotify_service.spotify_album_art_animation(self.pixoo_device, self.media_data, self.select_index)
                     else:
                         await self.spotify_service.spotify_albums_slide(self.pixoo_device, self.media_data, self.select_index)
@@ -236,7 +236,7 @@ class PixooHub:
                     else:
                         await self.pixoo_device.send_command({"Command": "Channel/SetIndex", "SelectIndex": self.select_index})
 
-            self.media_data.lyrics_font_color = self.config.force_font_color or font_color
+            self.media_data.lyrics_font_color = getattr(self.config, 'force_font_color', font_color)
             self.cached_static_items = await self._build_text_items_list(self.media_data.lyrics_font_color, bg_color_str, scope="static")
             
             if not took_over:
@@ -248,7 +248,7 @@ class PixooHub:
                 await asyncio.sleep(0.3)
                 await self._render_and_send_text_layers()
 
-            elif spotify_animation_took_over and self.config.special_mode:
+            elif spotify_animation_took_over and getattr(self.config, 'special_mode', False):
                 await self._render_and_send_text_layers()
 
             if not spotify_animation_took_over:
@@ -257,7 +257,7 @@ class PixooHub:
             if self.sensor:
                 self.sensor.update_state(f"{self.media_data.artist} - {self.media_data.title}", sensor_attrs)
 
-            if self.config.show_lyrics and self.media_data.lyrics:
+            if getattr(self.config, 'show_lyrics', False) and self.media_data.lyrics:
                 self.lyrics_active_mode = True
                 await self._calculate_and_schedule_next()
             else:
@@ -271,19 +271,19 @@ class PixooHub:
     async def _build_text_items_list(self, font_color, bg_color, scope="all"):
         text_items = []
         if scope in ["all", "static"]:
-            if self.config.special_mode:
+            if getattr(self.config, 'special_mode', False):
                 text_items.append({"TextId": 1, "type": 14, "x": 3, "y": 1, "dir": 0, "font": 18, "TextWidth": 33, "Textheight": 6, "speed": 100, "align": 1, "color": font_color})
                 text_items.append({"TextId": 2, "type": 5, "x": 1, "y": 1, "dir": 0, "font": 18, "TextWidth": 63, "Textheight": 6, "speed": 100, "align": 2, "color": font_color})
                 t_type = 22 if getattr(self.media_data, 'temperature', None) else 17
                 text_items.append({"TextId": 3, "type": t_type, "x": 48, "y": 1, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": getattr(self.media_data, 'temperature', "") or ""})
                 
-                if (self.config.show_text and not self.media_data.playing_tv) or getattr(self.media_data, 'spotify_slide_pass', False):
+                if (getattr(self.config, 'show_text', True) and not getattr(self.media_data, 'playing_tv', False)) or getattr(self.media_data, 'spotify_slide_pass', False):
                     a_rtl = 1 if has_bidi(self.media_data.artist) else 0
                     text_items.append({"TextId": 4, "type": 22, "x": 0, "y": 42, "dir": a_rtl, "font": 190, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(self.media_data.artist) if a_rtl else self.media_data.artist, "color": font_color})
                     t_rtl = 1 if has_bidi(self.media_data.title) else 0
                     text_items.append({"TextId": 5, "type": 22, "x": 0, "y": 52, "dir": t_rtl, "font": 190, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(self.media_data.title) if t_rtl else self.media_data.title, "color": font_color})
 
-            elif (self.config.show_text or self.config.show_clock or self.config.temperature) and not self.config.show_lyrics:
+            elif (getattr(self.config, 'show_text', True) or getattr(self.config, 'show_clock', True) or getattr(self.config, 'temperature', False)) and not getattr(self.config, 'show_lyrics', False):
                 y_text = 0 if getattr(self.config, 'top_text', False) else 48
                 y_info = 56 if getattr(self.config, 'info_position', 'Top') == "Bottom" else 3
                 
@@ -291,13 +291,13 @@ class PixooHub:
                 if len(txt) > 14: txt += "        "
                 rtl = 1 if has_bidi(txt) else 0
                 
-                if self.config.show_text and not self.media_data.radio_logo and not self.media_data.playing_tv:
+                if getattr(self.config, 'show_text', True) and not getattr(self.media_data, 'radio_logo', False) and not getattr(self.media_data, 'playing_tv', False):
                     text_items.append({"TextId": 4, "type": 22, "x": 0, "y": y_text, "dir": rtl, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(txt) if rtl else txt, "color": font_color})
                 
-                if self.config.show_clock:
+                if getattr(self.config, 'show_clock', True):
                     x_c = 44 if getattr(self.config, 'clock_align', 'Right') == "Right" else 3
                     text_items.append({"TextId": 2, "type": 5, "x": x_c, "y": y_info, "dir": 0, "font": 18, "TextWidth": 32, "Textheight": 16, "speed": 100, "align": 1, "color": font_color})
-                if self.config.temperature:
+                if getattr(self.config, 'temperature', False):
                     x_t = 3 if getattr(self.config, 'clock_align', 'Right') == "Right" else 40
                     t_type = 22 if getattr(self.media_data, 'temperature', None) else 17
                     text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": getattr(self.media_data, 'temperature', "") or ""})
@@ -305,9 +305,12 @@ class PixooHub:
         return text_items
 
     async def _control_light(self, action, rgb, is_night):
-        if not getattr(self.config, 'light', None) or (not is_night and getattr(self.config, 'only_at_night', False)): return
         try:
-            data = {"entity_id": self.config.light}
+            lights = getattr(self.config, 'light', [])
+            if not lights or (not is_night and getattr(self.config, 'only_at_night', False)): return
+            # התאמה לרשימת נורות
+            if isinstance(lights, str): lights = [lights]
+            data = {"entity_id": lights}
             if action == 'on': data.update({"rgb_color": rgb, "transition": 1})
             await self.hass.services.async_call("light", f"turn_{action}", data)
         except Exception as e: _LOGGER.error("Light error: %s", e)
@@ -351,17 +354,15 @@ class PixooHub:
             pos += elapsed - float(self.config.lyrics_sync)
         
         try:
-            # תיקון קריטי: העברת המילים ישירות למנוע החישוב
-            if hasattr(self.lyrics_provider, 'get_refresh_plan'):
-                layout, delay = self.lyrics_provider.get_refresh_plan(pos, lyrics_list=self.media_data.lyrics)
-            else:
-                layout, delay = None, None
+            # הזרקה בטוחה של המילים פנימה כדי למנוע קריסה
+            if hasattr(self.lyrics_provider, 'lyrics'):
+                self.lyrics_provider.lyrics = self.media_data.lyrics
+            layout, delay = self.lyrics_provider.get_refresh_plan(pos)
+        except TypeError:
+            layout, delay = self.lyrics_provider.get_refresh_plan(pos, lyrics_list=self.media_data.lyrics)
         except Exception as e:
-            try:
-                layout, delay = self.lyrics_provider.get_refresh_plan(pos)
-            except Exception as backup_e:
-                _LOGGER.error(f"Lyrics Error: {backup_e}")
-                layout, delay = None, None
+            _LOGGER.error("Lyrics error: %s", e)
+            layout, delay = None, None
 
         self.current_lyrics_items = []
         if layout is not None:
@@ -382,7 +383,7 @@ class PixooHub:
             self._unsub_listeners.append(async_call_later(self.hass, delay, _timer))
 
     async def _update_progress_bar_loop(self):
-        if self.notification_manager.is_active or not self.config.progress_bar_enabled: return
+        if self.notification_manager.is_active or not getattr(self.config, 'progress_bar_enabled', False): return
         state = self.hass.states.get(self.media_player)
         if not state or state.state not in ["playing", "on"]: return
         

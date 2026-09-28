@@ -85,8 +85,18 @@ class PixooHub:
         self.config.progress_bar_enabled = self.ui_state.get("progress_bar", True)
         self.config.spotify_slide = self.ui_state.get("spotify_slider", False)
         
-        self.config.top_text = (self.ui_state.get("text_position", "Bottom") == "Top")
-        self.config.clock_align = self.ui_state.get("clock_align", "Right")
+        # --- ההיגיון החדש של המיקומים ---
+        self.config.text_position = self.ui_state.get("text_position", "Bottom")
+        self.config.top_text = (self.config.text_position == "Top")
+        
+        info_pos = self.ui_state.get("info_position", "Opposite to Text")
+        if info_pos == "Opposite to Text":
+            # אם יוזר בחר "ההפך מהטקסט", אנחנו מחליפים אוטומטית!
+            self.config.info_position = "Bottom" if self.config.top_text else "Top"
+        else:
+            self.config.info_position = info_pos
+            
+        self.config.clock_align = self.ui_state.get("info_align", "Right")
         
         crop = self.ui_state.get("crop_mode", "Default")
         self.config.crop_borders = crop in ["Crop", "Extra Crop"]
@@ -261,7 +271,10 @@ class PixooHub:
                     text_items.append({"TextId": 5, "type": 22, "x": 0, "y": 52, "dir": t_rtl, "font": 190, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(self.media_data.title) if t_rtl else self.media_data.title, "color": font_color})
 
             elif (self.config.show_text or self.config.show_clock or self.config.temperature) and not self.config.show_lyrics:
-                y_text, y_info = (0, 56) if getattr(self.config, 'top_text', False) else (48, 3)
+                # --- קביעת מיקומים דינמית לפי בחירת המשתמש ---
+                y_text = 0 if getattr(self.config, 'top_text', False) else 48
+                y_info = 56 if getattr(self.config, 'info_position', 'Top') == "Bottom" else 3
+                
                 txt = f"{self.media_data.artist} - {self.media_data.title}"
                 if len(txt) > 14: txt += "        "
                 rtl = 1 if has_bidi(txt) else 0
@@ -270,10 +283,10 @@ class PixooHub:
                     text_items.append({"TextId": 4, "type": 22, "x": 0, "y": y_text, "dir": rtl, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(txt) if rtl else txt, "color": font_color})
                 
                 if self.config.show_clock:
-                    x_c = 44 if getattr(self.config, 'clock_align', "Right") == "Right" else 3
+                    x_c = 44 if getattr(self.config, 'clock_align', 'Right') == "Right" else 3
                     text_items.append({"TextId": 2, "type": 5, "x": x_c, "y": y_info, "dir": 0, "font": 18, "TextWidth": 32, "Textheight": 16, "speed": 100, "align": 1, "color": font_color})
                 if self.config.temperature:
-                    x_t = 3 if getattr(self.config, 'clock_align', "Right") == "Right" else 40
+                    x_t = 3 if getattr(self.config, 'clock_align', 'Right') == "Right" else 40
                     t_type = 22 if getattr(self.media_data, 'temperature', None) else 17
                     text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": getattr(self.media_data, 'temperature', "") or ""})
         

@@ -1,6 +1,5 @@
 """
 Core Services for Pixoo64 Media Album Art
-Contains all business logic, image processing, API calls, and managers.
 """
 import aiohttp
 import asyncio
@@ -34,17 +33,7 @@ _LOGGER = logging.getLogger(__name__)
 
 HEBREW = r"\u0590-\u05FF"
 ARABIC = r"\u0600-\u06FF|\u0750-\u077F|\u08A0-\u08FF|\uFB50-\uFDFF|\uFE70-\uFEFF|\u0621-\u06FF"
-SYRIAC = r"\u0700-\u074F"
-THAANA = r"\u0780-\u07BF"
-NKOO = r"\u07C0-\u07FF"
-RUMI = r"\U00010E60-\U00010E7F"
-ARABIC_MATH = r"\U0001EE00-\U0001EEFF"
-SYMBOLS = r"\U0001F110-\U0001F5FF"
-OLD_PERSIAN_PHAISTOS = r"\U00010F00-\U00010FFF"
-SAMARITAN = r"\u0800-\u08FF"
-
-BIDI_REGEX_PATTERN = f"[{HEBREW}|{ARABIC}|{SYRIAC}|{THAANA}|{NKOO}|{RUMI}|{ARABIC_MATH}|{SYMBOLS}|{OLD_PERSIAN_PHAISTOS}|{SAMARITAN}]"
-BIDI_REGEX = re.compile(BIDI_REGEX_PATTERN)
+BIDI_REGEX = re.compile(f"[{HEBREW}|{ARABIC}]")
 
 def get_bidi(text):
     if not bidi_support: return text
@@ -64,14 +53,10 @@ class Config:
     def __init__(self, entry):
         data = entry.data
         options = entry.options
-        
-        self.args = {**data, **options}
-
+        self.temperature_sensor = options.get("temperature_entity", None)
         self.media_player = data.get("media_player", "media_player.living_room")
         self.pixoo_ip = data.get("pixoo_ip")
         self.pixoo_url = f"http://{self.pixoo_ip}:80/post"
-        self.ha_url = options.get("ha_url", "http://homeassistant.local:8123")
-        
         self.pollinations = options.get("pollinations_key", "")
         self.ai_fallback = options.get("ai_model", "flux")
         self.spotify_client_id = options.get("spotify_client_id", "")
@@ -81,17 +66,6 @@ class Config:
         self.tidal_client_secret = options.get("tidal_client_secret", "")
         self.lastfm = options.get("lastfm", "")
         self.discogs = options.get("discogs", "")
-
-        self.light = options.get("light", None)
-        self.wled = options.get("wled_ip", None)
-        self.brightness = 255
-        self.effect = 38
-        self.effect_speed = 60
-        self.effect_intensity = 128
-        self.only_at_night = True
-        self.palette = 0
-        self.sound_effect = 0
-
         self.show_text = options.get("show_text", False)
         self.clean_title = True
         self.text_bg = options.get("text_background", True)
@@ -99,10 +73,8 @@ class Config:
         self.special_mode_spotify_slider = False
         self.force_font_color = None
         self.burned = False
-        
         self.crop_borders = options.get("crop_borders", True)
         self.crop_extra = options.get("crop_extra", True)
-        
         self.images_cache = 25
         self.full_control = True
         self.contrast = False
@@ -120,7 +92,6 @@ class Config:
         self.show_lyrics = False
         self.lyrics_font = 190
         self.lyrics_sync = -1 
-
         self.progress_bar_enabled = options.get("progress_bar_enabled", True)
         self.progress_bar_entity = "input_boolean.pixoo64_progress_bar"
         self.progress_bar_character = "-"
@@ -128,9 +99,8 @@ class Config:
         self.progress_bar_resolution = 21
         self.progress_bar_color = "match"
         self.progress_bar_y_offset = 64
-        self.progress_bar_exclude_modes = []
-        self.temperature_sensor = options.get("temperature_entity", None)
         self.force_ai = False
+        self.default_font = ImageFont.load_default()
 
 class PixooDevice:
     def __init__(self, config: "Config", session: aiohttp.ClientSession): 
@@ -181,9 +151,7 @@ class ImageProcessor:
         self._executor.shutdown(wait=False)
 
     async def get_image(self, picture: Optional[str], media_data: "MediaData", spotify_slide: bool = False) -> Optional[dict]:
-        if not picture:
-            return None
-
+        if not picture: return None
         cache_key = f"{picture}_{media_data.artist}_{media_data.title}" if getattr(self.config, 'burned', False) else picture
         use_cache = not spotify_slide and not getattr(media_data, 'playing_tv', False)
         cached_data = None
@@ -193,67 +161,29 @@ class ImageProcessor:
             cached_data = self.image_cache[cache_key]
         else:
             try:
-                # התיקון הקריטי: משיכת הכתובת הפנימית האמיתית של השרת
-                from homeassistant.helpers.network import get_url
                 if picture.startswith('http'):
                     url = picture
                 else:
-                    try:
-                        base_url = get_url(media_data.hass)
-                    except Exception:
-                        base_url = "http://127.0.0.1:8123"
+                    try: base_url = get_url(media_data.hass)
+                    except Exception: base_url = "http://127.0.0.1:8123"
                     url = f"{base_url}{picture}"
 
                 async with self.session.get(url, timeout=30) as response:
-                    response.raise_for_status()
-                    image_data = await response.read()
-                    cached_data = await self.process_image_data(image_data, media_data)
-                    
-                    if cached_data and not spotify_slide:
-                        if len(self.image_cache) >= self.cache_size:
-                            self.image_cache.popitem(last=False)
-                        self.image_cache[cache_key] = cached_data
+                    if response.status == 200:
+                        image_data = await response.read()
+                        cached_data = await self.process_image_data(image_data, media_data)
+                        if cached_data and not spotify_slide:
+                            if len(self.image_cache) >= self.cache_size: self.image_cache.popitem(last=False)
+                            self.image_cache[cache_key] = cached_data
             except Exception as e:
                 _LOGGER.error(f"Error fetching/processing image: {e}")
                 return self._fallback_response()
 
         if not cached_data: return self._fallback_response()
-
         final_img = cached_data['pil_image'].copy()
         final_img = self.text_clock_img(final_img, cached_data, media_data)
         
-        return {
-            'base64_image': self.gbase64(final_img),
-            **cached_data 
-        }
-
-    def _fallback_response(self) -> dict:
-        # יצירת מסך שחור וגיבוי בפורמט גולמי תקין
-        img = Image.new("RGB", (64, 64), color=(0, 0, 0))
-        return {
-            "base64_image": self.gbase64(img),
-            "font_color": "#FFFFFF",
-            "clock_color": "#FFFFFF",
-            "temp_color": "#FFFFFF",
-            "brightness": 0,
-            "brightness_lower_part": 0.5,
-            "background_color_rgb": (0, 0, 0),
-            "color1": "#000000",
-            "color2": "#000000",
-            "color3": "#000000"
-        }
-
-    def gbase64(self, img: Image.Image) -> Optional[str]:
-        try:
-            # חובה לוודא שהתמונה בפורמט RGB לפני ההמרה כדי למנוע קריסת נתונים
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            raw_data = img.tobytes()
-            b64 = base64.b64encode(raw_data)
-            return b64.decode("utf-8")
-        except Exception as e:
-            _LOGGER.error(f"Error converting image to base64: {e}")
-            return None
+        return {'base64_image': self.gbase64(final_img), **cached_data}
 
     async def process_image_data(self, image_data: bytes, media_data: "MediaData") -> Optional[dict]:
         loop = asyncio.get_event_loop()
@@ -264,6 +194,8 @@ class ImageProcessor:
             with Image.open(BytesIO(image_data)) as img:
                 img.load() 
                 img = ensure_rgb(img)
+                if not img: return None
+                
                 max_dimension = 320
                 if max(img.size) > max_dimension:
                     scale_factor = max_dimension / max(img.size)
@@ -274,17 +206,11 @@ class ImageProcessor:
 
                 img = self.fixed_size(img)
                 if img.width > 64 or img.height > 64: img = img.resize((64, 64), Image.Resampling.BILINEAR)
-                if self.config.contrast or self.config.sharpness or self.config.colors or self.config.kernel or self.config.limit_color:
-                    img = self.filter_image(img)
+                
                 if self.config.burned and not media_data.radio_logo:
-                    img = self._draw_burned_text(img, media_data.artist, media_data.title_clean)
-                if self.config.special_mode: img = self.special_mode(img)
+                    img = self._draw_burned_text(img, media_data.artist, media_data.title)
                 
                 vals = self.img_values(img)
-                if self.config.force_font_color: media_data.lyrics_font_color = self.config.force_font_color
-                elif vals.get('font_color'): media_data.lyrics_font_color = vals['font_color']
-                else: media_data.lyrics_font_color = "#FF00FF"
-
                 return {'pil_image': img, 'font_color': vals['font_color'], 'brightness_lower_part': vals['brightness_lower_part'], 'background_color_rgb': vals['background_color_rgb']}
         except Exception as e:
             return None
@@ -292,7 +218,6 @@ class ImageProcessor:
     def img_values(self, img: Image.Image) -> dict:
         analysis_img = img.resize((50, 50), Image.Resampling.NEAREST)
         palette = self.get_image_palette(analysis_img) 
-        text_box = (0, 0, 64, 16) if self.config.top_text else (0, 48, 64, 64)
         
         if self.config.text_bg:
              prime_color = palette[0] if palette else (255, 255, 0)
@@ -359,7 +284,50 @@ class ImageProcessor:
             return "#ffffff"
 
     def crop_image_borders(self, img: Image.Image, radio_logo: bool) -> Image.Image: return img
-    def _draw_burned_text(self, img: Image.Image, artist: str, title: str) -> Image.Image: return img
+    
+    def _draw_burned_text(self, img: Image.Image, artist: str, title: str) -> Image.Image:
+        if not (artist or title): return img
+        img_copy = img.copy().convert("RGBA")
+        layer = ImageDraw.Draw(img_copy)
+        font = self.config.default_font
+        pad = 2
+        max_w = img.width - (2 * pad)
+        
+        def _wrap(text):
+            if not text: return []
+            words = text.split()
+            lines = []
+            cur = ""
+            for w in words:
+                test = f"{cur} {w}".strip() if cur else w
+                if layer.textbbox((0,0), test, font=font)[2] <= max_w: cur = test
+                else:
+                    if cur: lines.append(cur)
+                    cur = w
+            if cur: lines.append(cur)
+            return lines
+
+        artist_lines = _wrap(artist)
+        title_lines = _wrap(title)
+        
+        y = max(pad, (img.height - ((len(artist_lines) + len(title_lines)) * 11 + 4)) // 2)
+
+        for line in artist_lines:
+            w = layer.textbbox((0,0), line, font=font)[2]
+            x = (img.width - w) // 2
+            layer.text((x+1, y+1), line, font=font, fill=(0,0,0,180))
+            layer.text((x, y), line, font=font, fill=(255,255,255,255))
+            y += 11
+        if artist_lines and title_lines: y += 4
+        for line in title_lines:
+            w = layer.textbbox((0,0), line, font=font)[2]
+            x = (img.width - w) // 2
+            layer.text((x+1, y+1), line, font=font, fill=(0,0,0,180))
+            layer.text((x, y), line, font=font, fill=(255,255,0,255))
+            y += 11
+
+        return img_copy.convert("RGB")
+
     def fixed_size(self, img: Image.Image) -> Image.Image:
         width, height = img.size
         if width == height: return img
@@ -377,20 +345,7 @@ class ImageProcessor:
             img = img.crop((left, top, left + new_size, top + new_size))
         return img
 
-    def filter_image(self, img: Image.Image) -> Image.Image:
-        if self.config.colors: img = ImageEnhance.Color(img).enhance(1.5)
-        if self.config.contrast: img = ImageEnhance.Contrast(img).enhance(1.5)
-        if self.config.sharpness: img = ImageEnhance.Sharpness(img).enhance(4.0)
-        return img
-
-    def special_mode(self, img: Image.Image) -> Image.Image: return img
-
     def text_clock_img(self, img: Image.Image, cached_data: dict, media_data: "MediaData") -> Image.Image:
-        if getattr(self.config, 'burned', False):
-            img = ImageEnhance.Color(img).enhance(1.5)
-            img = ImageEnhance.Contrast(img).enhance(1.2)
-            img = ImageEnhance.Brightness(img).enhance(0.7)
-            
         brightness_lower_part = cached_data.get('brightness_lower_part', 0.5)
 
         if media_data.lyrics and getattr(self.config, 'show_lyrics', False) and getattr(self.config, 'text_bg', False) and not getattr(media_data, 'playing_radio', False):
@@ -407,13 +362,13 @@ class ImageProcessor:
             else: lpc = (2, 2, 18, 9) if self.config.clock_align == "Right" else (47, 2, 63, 9)
             lower_part_img = img.crop(lpc); lower_part_img = ImageEnhance.Brightness(lower_part_img).enhance(0.3); img.paste(lower_part_img, lpc)
 
-        if self.config.text_bg and self.config.show_text and not self.config.show_lyrics and not media_data.playing_tv:
+        if self.config.text_bg and self.config.show_text and not self.config.show_lyrics and not getattr(media_data, 'playing_tv', False):
             if self.config.top_text: lpc = (0, 0, 64, 16)
             else: lpc = (0, 48, 64, 64)
             lower_part_img = img.crop(lpc); lower_part_img = ImageEnhance.Brightness(lower_part_img).enhance(brightness_lower_part); img.paste(lower_part_img, lpc)
 
         if getattr(media_data, 'show_progress_bar', False):
-            y_bottom = self.config.progress_bar_y_offset - 1
+            y_bottom = getattr(self.config, 'progress_bar_y_offset', 64) - 1
             if y_bottom >= 63: y_bottom = 63
             y_top = y_bottom - 1 
             try:
@@ -425,6 +380,24 @@ class ImageProcessor:
                 img.paste(bottom_area, bottom_box)
             except Exception: pass
         return img
+
+    def gbase64(self, img: Image.Image) -> Optional[str]:
+        try:
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            raw_data = img.tobytes()
+            b64 = base64.b64encode(raw_data)
+            return b64.decode("utf-8")
+        except Exception as e:
+            _LOGGER.error(f"Error converting image to base64: {e}")
+            return None
+
+    def _fallback_response(self) -> dict:
+        img = Image.new("RGB", (64, 64), color=(0, 0, 0))
+        return {
+            "base64_image": self.gbase64(img),
+            "font_color": "#FFFFFF", "brightness_lower_part": 0.5, "background_color_rgb": (0, 0, 0)
+        }
 
 class SpotifyService:
     def __init__(self, config: "Config", session: aiohttp.ClientSession, image_processor: "ImageProcessor"): 
@@ -459,9 +432,6 @@ class LyricsProvider:
         fetched_lyrics = []
         base_url_get = "https://lrclib.net/api/get"
         params = { 'artist_name': artist, 'track_name': title }
-        if album: params['album_name'] = album
-        if duration: params['duration'] = str(int(duration))
-
         try:
             async with self.session.get(base_url_get, params=params, timeout=10) as response:
                 if response.status == 200:
@@ -548,7 +518,6 @@ class MediaData:
         self.track_changed = False 
         self.artist = ""
         self.title = ""
-        self.title_original = ""
         self.album = None
         self.lyrics = []
         self.picture = None
@@ -578,9 +547,7 @@ class MediaData:
 
             if (raw_artist is None or str(raw_artist).strip() == "") and app_name: raw_artist = app_name
 
-            self.title_original = raw_title
-            self.title_clean = raw_title
-            self.title = self.title_clean
+            self.title = raw_title
             self.artist = raw_artist if raw_artist else ""
             self.album = attributes.get('album_name') or attributes.get('media_album_name') or ""
             self.picture = attributes.get('entity_picture')
@@ -591,9 +558,7 @@ class MediaData:
             except (ValueError, TypeError): pass
 
             if self.config.progress_bar_enabled:
-                pb_state = self.hass.states.get(self.config.progress_bar_entity)
-                is_toggled_on = True if pb_state is None else str(pb_state.state).lower() in ['on', 'true']
-                self.show_progress_bar = is_toggled_on and self.media_duration > 0
+                self.show_progress_bar = True if self.media_duration > 0 else False
             else: self.show_progress_bar = False
 
             pos_updated_at_str = attributes.get('media_position_updated_at')
@@ -604,7 +569,7 @@ class MediaData:
             self.playing_tv = "netflix" in str(app_name).lower() or "youtube" in str(app_name).lower()
 
             if getattr(self.config, 'show_lyrics', False) and not getattr(self.config, 'special_mode', False) and not self.playing_tv:
-                self.lyrics = await self.lyrics_provider.get_lyrics(self.artist, self.title_original, self.album, self.media_duration)
+                self.lyrics = await self.lyrics_provider.get_lyrics(self.artist, self.title, self.album, self.media_duration)
             else:
                 self.lyrics = []
 
@@ -632,28 +597,16 @@ class FallbackService:
         self.pixoo_device = pixoo_device 
 
     async def get_final_url(self, picture: Optional[str], media_data: "MediaData") -> Optional[dict]: 
-        if self.config.force_ai and not media_data.radio_logo and not media_data.playing_tv:
+        if self.config.force_ai and not getattr(media_data, 'playing_radio', False) and not getattr(media_data, 'playing_tv', False):
             return await self._try_ai_generation(media_data)
 
         try:
-            if not media_data.playing_radio or media_data.radio_logo:
+            if picture and not getattr(media_data, 'playing_radio', False):
                 result = await self.image_processor.get_image(picture, media_data, False)
                 if result:
                     media_data.pic_source = "Original"
                     return result
         except Exception: pass 
-
-        if self.config.spotify_client_id and self.config.spotify_client_secret:
-            try:
-                album_id, _ = await self.spotify_service.get_spotify_album_id(media_data)
-                if album_id:
-                    image_url = await self.spotify_service.get_spotify_album_image_url(album_id)
-                    if image_url:
-                        result = await self.image_processor.get_image(image_url, media_data, False)
-                        if result:
-                            media_data.pic_source = "Spotify"
-                            return result
-            except Exception: pass 
         
         result = await self._try_ai_generation(media_data)
         if result: 
@@ -661,21 +614,18 @@ class FallbackService:
             return result
 
         media_data.pic_source = "Internal"
-        return self._get_fallback_black_image_data() 
+        return self.image_processor._fallback_response() 
 
     async def _try_ai_generation(self, media_data):
         ai_url = media_data.format_ai_image_prompt(media_data.artist, media_data.title)
         if not ai_url: return None
-        for attempt in range(3):
+        for attempt in range(2):
             try:
-                result = await asyncio.wait_for(self.image_processor.get_image(ai_url, media_data, False), timeout=25)
+                result = await asyncio.wait_for(self.image_processor.get_image(ai_url, media_data, False), timeout=15)
                 if result: return result
             except Exception:
-                if attempt < 2: await asyncio.sleep(1.5)
+                if attempt < 1: await asyncio.sleep(1.5)
         return None
-
-    def _get_fallback_black_image_data(self) -> dict: 
-        return self.image_processor._fallback_response()
 
 class ProgressBarManager:
     def __init__(self, config: "Config", hass: HomeAssistant):

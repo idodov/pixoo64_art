@@ -394,13 +394,20 @@ class ImageProcessor:
         }
 
     def text_clock_img(self, img: Image.Image, cached_data: dict, media_data: "MediaData") -> Image.Image:
+        # --- התוספת של BURNED EFFECT ---
+        if getattr(self.config, 'burned', False):
+            from PIL import ImageEnhance
+            img = ImageEnhance.Color(img).enhance(1.5)
+            img = ImageEnhance.Contrast(img).enhance(1.2)
+            img = ImageEnhance.Brightness(img).enhance(0.7)
+            
         brightness_lower_part = cached_data.get('brightness_lower_part', 0.5)
 
-        if media_data.lyrics and self.config.show_lyrics and self.config.text_bg and brightness_lower_part != None and not media_data.playing_radio:
+        if media_data.lyrics and getattr(self.config, 'show_lyrics', False) and getattr(self.config, 'text_bg', False) and brightness_lower_part != None and not getattr(media_data, 'playing_radio', False):
+            from PIL import ImageEnhance
             img = ImageEnhance.Brightness(img).enhance(0.55)
             img = ImageEnhance.Contrast(img).enhance(0.5)
 
-        # אזור הצללה של השעון והטמפרטורה
         if self.config.text_bg and not self.config.show_lyrics:
             info_y_start = 55 if getattr(self.config, 'info_position', 'Top') == 'Bottom' else 2
             
@@ -969,52 +976,21 @@ class FallbackService:
         self.fail_txt = False
         self.fallback = False
 
-    async def get_final_url(self, picture: Optional[str], media_data: "MediaData") -> Optional[dict]: 
-        self.fail_txt = False
-        self.fallback = False
-        media_data.pic_url = None 
-        
-        if picture:
-            media_data.pic_url = picture if picture.startswith('http') else f"{self.config.ha_url}{picture}"
-        else:
-            media_data.pic_url = None
-        
-        if self.config.force_ai and not media_data.radio_logo and not media_data.playing_tv:
-            return await self._try_ai_generation(media_data)
+    async def get_final_url(self, original_url, media_data):
+        if getattr(self.config, 'force_ai', False):
+            return await self._generate_ai_image(media_data)
 
-        try:
-            if not media_data.playing_radio or media_data.radio_logo:
-                result = await self.image_processor.get_image(picture, media_data, media_data.spotify_slide_pass)
-                if result:
-                    media_data.pic_source = "Original"
-                    return result
-        except Exception as e: 
-            pass 
+        if original_url and not getattr(media_data, 'playing_radio', False):
+            if "spotify" in original_url or self.config.args.get('spotify_client_id'):
+                spotify_url = await self.spotify_service.get_spotify_album_art(media_data.artist, media_data.title)
+                if spotify_url:
+                    media_data.pic_source = 'Spotify'
+                    return await self._process_image_from_url(spotify_url, media_data)
+            
+            media_data.pic_source = 'Original'
+            return await self._process_image_from_url(original_url, media_data)
 
-        if self.config.spotify_client_id and self.config.spotify_client_secret:
-            try:
-                spotify_service = self.spotify_service 
-                album_id, first_album = await spotify_service.get_spotify_album_id(media_data)
-                
-                if album_id:
-                    image_url = await spotify_service.get_spotify_album_image_url(album_id)
-                    if image_url:
-                        result = await self.image_processor.get_image(image_url, media_data, media_data.spotify_slide_pass)
-                        if result:
-                            media_data.pic_url = image_url
-                            media_data.pic_source = "Spotify"
-                            return result
-            except Exception as e: 
-                pass 
-        
-        result = await self._try_ai_generation(media_data)
-        if result: 
-            media_data.pic_source = "AI"
-            return result
-
-        media_data.pic_url = "Black Screen"
-        media_data.pic_source = "Internal"
-        return self._get_fallback_black_image_data() 
+        return await self._get_fallback_image(media_data)
 
     async def _try_ai_generation(self, media_data):
         ai_url = media_data.format_ai_image_prompt(media_data.artist, media_data.title)

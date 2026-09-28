@@ -181,9 +181,11 @@ class ImageProcessor:
         self._executor.shutdown(wait=False)
 
     async def get_image(self, picture: Optional[str], media_data: "MediaData", spotify_slide: bool = False) -> Optional[dict]:
-        if not picture: return None
-        cache_key = f"{picture}_{media_data.artist}_{media_data.title}" if self.config.burned else picture
-        use_cache = not spotify_slide and not media_data.playing_tv
+        if not picture:
+            return None
+
+        cache_key = f"{picture}_{media_data.artist}_{media_data.title}" if getattr(self.config, 'burned', False) else picture
+        use_cache = not spotify_slide and not getattr(media_data, 'playing_tv', False)
         cached_data = None
 
         if use_cache and cache_key in self.image_cache:
@@ -191,29 +193,67 @@ class ImageProcessor:
             cached_data = self.image_cache[cache_key]
         else:
             try:
+                # התיקון הקריטי: משיכת הכתובת הפנימית האמיתית של השרת
+                from homeassistant.helpers.network import get_url
                 if picture.startswith('http'):
                     url = picture
                 else:
-                    try: base_url = get_url(media_data.hass)
-                    except Exception: base_url = "http://127.0.0.1:8123"
+                    try:
+                        base_url = get_url(media_data.hass)
+                    except Exception:
+                        base_url = "http://127.0.0.1:8123"
                     url = f"{base_url}{picture}"
 
                 async with self.session.get(url, timeout=30) as response:
-                    if response.status == 200:
-                        image_data = await response.read()
-                        cached_data = await self.process_image_data(image_data, media_data)
-                        if cached_data and not spotify_slide:
-                            if len(self.image_cache) >= self.cache_size: self.image_cache.popitem(last=False)
-                            self.image_cache[cache_key] = cached_data
+                    response.raise_for_status()
+                    image_data = await response.read()
+                    cached_data = await self.process_image_data(image_data, media_data)
+                    
+                    if cached_data and not spotify_slide:
+                        if len(self.image_cache) >= self.cache_size:
+                            self.image_cache.popitem(last=False)
+                        self.image_cache[cache_key] = cached_data
             except Exception as e:
                 _LOGGER.error(f"Error fetching/processing image: {e}")
-                return None
+                return self._fallback_response()
 
-        if not cached_data: return None
+        if not cached_data: return self._fallback_response()
+
         final_img = cached_data['pil_image'].copy()
         final_img = self.text_clock_img(final_img, cached_data, media_data)
         
-        return {'base64_image': self.gbase64(final_img), **cached_data}
+        return {
+            'base64_image': self.gbase64(final_img),
+            **cached_data 
+        }
+
+    def _fallback_response(self) -> dict:
+        # יצירת מסך שחור וגיבוי בפורמט גולמי תקין
+        img = Image.new("RGB", (64, 64), color=(0, 0, 0))
+        return {
+            "base64_image": self.gbase64(img),
+            "font_color": "#FFFFFF",
+            "clock_color": "#FFFFFF",
+            "temp_color": "#FFFFFF",
+            "brightness": 0,
+            "brightness_lower_part": 0.5,
+            "background_color_rgb": (0, 0, 0),
+            "color1": "#000000",
+            "color2": "#000000",
+            "color3": "#000000"
+        }
+
+    def gbase64(self, img: Image.Image) -> Optional[str]:
+        try:
+            # חובה לוודא שהתמונה בפורמט RGB לפני ההמרה כדי למנוע קריסת נתונים
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            raw_data = img.tobytes()
+            b64 = base64.b64encode(raw_data)
+            return b64.decode("utf-8")
+        except Exception as e:
+            _LOGGER.error(f"Error converting image to base64: {e}")
+            return None
 
     async def process_image_data(self, image_data: bytes, media_data: "MediaData") -> Optional[dict]:
         loop = asyncio.get_event_loop()
@@ -385,24 +425,6 @@ class ImageProcessor:
                 img.paste(bottom_area, bottom_box)
             except Exception: pass
         return img
-
-    def gbase64(self, img: Image.Image) -> Optional[str]:
-        try:
-            buffered = BytesIO()
-            img.save(buffered, format="JPEG", quality=85)
-            return base64.b64encode(buffered.getvalue()).decode("utf-8")
-        except Exception as e:
-            _LOGGER.error(f"Error converting image to base64: {e}")
-            return None
-
-    def _fallback_response(self) -> dict:
-        img = Image.new("RGB", (64, 64), color=(0, 0, 0))
-        buffered = BytesIO()
-        img.save(buffered, format="JPEG", quality=85)
-        return {
-            "base64_image": base64.b64encode(buffered.getvalue()).decode("utf-8"),
-            "font_color": "#FFFFFF", "brightness_lower_part": 0.5, "background_color_rgb": (0, 0, 0)
-        }
 
 class SpotifyService:
     def __init__(self, config: "Config", session: aiohttp.ClientSession, image_processor: "ImageProcessor"): 

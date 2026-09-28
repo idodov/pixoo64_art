@@ -352,16 +352,16 @@ class ImageProcessor:
             _LOGGER.error(f"Error processing image: {e}")
             return None
 
-    def img_values(self, img: Image.Image) -> dict:
+    ddef img_values(self, img: Image.Image) -> dict:
         full_img = img
         analysis_img = full_img.resize((50, 50), Image.Resampling.NEAREST)
         palette = self.get_image_palette(analysis_img) 
         
-        text_box = (0, 0, 64, 16) if self.config.top_text else (0, 48, 64, 64)
-        info_y_start = 56 if self.config.top_text else 0
+        text_box = (0, 0, 64, 16) if getattr(self.config, 'top_text', False) else (0, 48, 64, 64)
+        info_y_start = 56 if getattr(self.config, 'info_position', 'Top') == 'Bottom' else 0
 
-        clock_box = (32, info_y_start, 64, info_y_start + 12) if self.config.clock_align == "Right" else (0, info_y_start, 32, info_y_start + 12)
-        temp_box = (0, info_y_start, 32, info_y_start + 12) if self.config.clock_align == "Right" else (32, info_y_start, 64, info_y_start + 12)
+        clock_box = (32, info_y_start, 64, info_y_start + 12) if getattr(self.config, 'clock_align', 'Right') == "Right" else (0, info_y_start, 32, info_y_start + 12)
+        temp_box = (0, info_y_start, 32, info_y_start + 12) if getattr(self.config, 'clock_align', 'Right') == "Right" else (32, info_y_start, 64, info_y_start + 12)
 
         if self.config.text_bg:
              prime_color = palette[0] if palette else (255, 255, 0)
@@ -392,6 +392,50 @@ class ImageProcessor:
             'background_color_rgb': most_common_color_alternative_rgb,
             'color1': color1_hex, 'color2': color2_hex, 'color3': color3_hex
         }
+
+    def text_clock_img(self, img: Image.Image, cached_data: dict, media_data: "MediaData") -> Image.Image:
+        brightness_lower_part = cached_data.get('brightness_lower_part', 0.5)
+
+        if media_data.lyrics and self.config.show_lyrics and self.config.text_bg and brightness_lower_part != None and not media_data.playing_radio:
+            img = ImageEnhance.Brightness(img).enhance(0.55)
+            img = ImageEnhance.Contrast(img).enhance(0.5)
+
+        # אזור הצללה של השעון והטמפרטורה
+        if self.config.text_bg and not self.config.show_lyrics:
+            info_y_start = 55 if getattr(self.config, 'info_position', 'Top') == 'Bottom' else 2
+            
+            if self.config.show_clock:
+                lpc = (43, info_y_start, 62, info_y_start + 7) if getattr(self.config, 'clock_align', 'Right') == "Right" else (2, info_y_start, 21, info_y_start + 7)
+                lp_img = img.crop(lpc)
+                img.paste(ImageEnhance.Brightness(lp_img).enhance(0.3), lpc)
+
+            if self.config.temperature:
+                lpc = (2, info_y_start, 18, info_y_start + 7) if getattr(self.config, 'clock_align', 'Right') == "Right" else (47, info_y_start, 63, info_y_start + 7)
+                lp_img = img.crop(lpc)
+                img.paste(ImageEnhance.Brightness(lp_img).enhance(0.3), lpc)
+
+        # אזור הצללה של טקסט (אמן/שיר)
+        if self.config.text_bg and self.config.show_text and not self.config.show_lyrics and not getattr(media_data, 'playing_tv', False):
+            if getattr(self.config, 'top_text', False):
+                lpc = (0, 0, 64, 16)
+            else:
+                lpc = (0, 48, 64, 64)
+            lp_img = img.crop(lpc)
+            img.paste(ImageEnhance.Brightness(lp_img).enhance(brightness_lower_part), lpc)
+
+        # אזור הצללה של שורת התקדמות
+        if getattr(media_data, 'show_progress_bar', False):
+            y_bottom = self.config.progress_bar_y_offset - 1
+            if y_bottom >= 63: y_bottom = 63
+            y_top = y_bottom - 1 
+            try:
+                top_box = (0, y_top, 64, y_top + 1)
+                img.paste(ImageEnhance.Brightness(img.crop(top_box)).enhance(0.8), top_box)
+                bottom_box = (0, y_bottom, 64, y_bottom + 1)
+                img.paste(ImageEnhance.Brightness(img.crop(bottom_box)).enhance(0.5), bottom_box)
+            except Exception: pass
+            
+        return img
 
     # ... Include all other ImageProcessor helper functions (get_image_palette, get_best_color_for_zone, process_slide_image, etc.) here
     def get_image_palette(self, img: Image.Image) -> list:
@@ -439,47 +483,6 @@ class ImageProcessor:
                 best_color = rgb
         if not best_color: best_color = (0, 255, 255) if is_bg_dark else (0, 0, 255)
         return f'#{best_color[0]:02x}{best_color[1]:02x}{best_color[2]:02x}'
-
-    def text_clock_img(self, img: Image.Image, cached_data: dict, media_data: "MediaData") -> Image.Image:
-        brightness_lower_part = cached_data.get('brightness_lower_part', 0.5)
-
-        if media_data.lyrics and self.config.show_lyrics and self.config.text_bg and brightness_lower_part != None and not media_data.playing_radio:
-            enhancer_lp = ImageEnhance.Brightness(img)
-            img = enhancer_lp.enhance(0.55)
-            enhancer = ImageEnhance.Contrast(img)
-            img = enhancer.enhance(0.5)
-
-        if bool(self.config.show_clock and self.config.text_bg) and not self.config.show_lyrics:
-            if self.config.top_text: lpc = (43, 55, 62, 62) if self.config.clock_align == "Right" else (2, 55, 21, 62)
-            else: lpc = (43, 2, 62, 9) if self.config.clock_align == "Right" else (2, 2, 21, 9)
-            lower_part_img = img.crop(lpc); enhancer_lp = ImageEnhance.Brightness(lower_part_img); lower_part_img = enhancer_lp.enhance(0.3); img.paste(lower_part_img, lpc)
-
-        if bool(self.config.temperature and self.config.text_bg) and not self.config.show_lyrics:
-            if self.config.top_text: lpc = (2, 55, 18, 62) if self.config.clock_align == "Right" else (47, 55, 63, 62)
-            else: lpc = (2, 2, 18, 9) if self.config.clock_align == "Right" else (47, 2, 63, 9)
-            lower_part_img = img.crop(lpc); enhancer_lp = ImageEnhance.Brightness(lower_part_img); lower_part_img = enhancer_lp.enhance(0.3); img.paste(lower_part_img, lpc)
-
-        if self.config.text_bg and self.config.show_text and not self.config.show_lyrics and not media_data.playing_tv:
-            if self.config.top_text: lpc = (0, 0, 64, 16)
-            else: lpc = (0, 48, 64, 64)
-            lower_part_img = img.crop(lpc); enhancer_lp = ImageEnhance.Brightness(lower_part_img); lower_part_img = enhancer_lp.enhance(brightness_lower_part); img.paste(lower_part_img, lpc)
-
-        # Apply Progress Bar (Background Dimming Only - NO PIXEL DRAWING)
-        if getattr(media_data, 'show_progress_bar', False):
-            y_bottom = self.config.progress_bar_y_offset - 1
-            if y_bottom >= 63: y_bottom = 63
-            y_top = y_bottom - 1 
-            try:
-                top_box = (0, y_top, 64, y_top + 1)
-                top_area = img.crop(top_box)
-                top_area = ImageEnhance.Brightness(top_area).enhance(0.8)
-                img.paste(top_area, top_box)
-                bottom_box = (0, y_bottom, 64, y_bottom + 1)
-                bottom_area = img.crop(bottom_box)
-                bottom_area = ImageEnhance.Brightness(bottom_area).enhance(0.5)
-                img.paste(bottom_area, bottom_box)
-            except Exception: pass
-        return img
 
     def gbase64(self, img: Image.Image) -> Optional[str]:
         try:

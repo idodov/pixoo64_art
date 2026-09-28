@@ -13,6 +13,7 @@ import time
 import textwrap
 import colorsys
 import urllib.parse
+import difflib
 from collections import Counter, OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -766,7 +767,8 @@ class LyricsProvider:
         self.current_frame_index: int = -1  
         self.filler_regex = re.compile(r"(?:[\s\W]+(?:oh+|ooh+|yeah|yea|woah|la+|na+)+[\W]*)+$", re.IGNORECASE)
 
-    async def get_lyrics(self, artist: Optional[str], title: str, album: Optional[str] = None, duration: int = 0) -> list[dict]:
+    
+async def get_lyrics(self, artist: Optional[str], title: str, album: Optional[str] = None, duration: int = 0) -> list[dict]:
         if not artist or not title: return []
         new_key = f"{artist}|{title}".lower()
         if new_key == self.current_song_key: return self.lyrics_cache.get(new_key, [])
@@ -782,6 +784,8 @@ class LyricsProvider:
         fetched_lyrics = []
         base_url_get = "https://lrclib.net/api/get"
         params = { 'artist_name': artist, 'track_name': title }
+        
+        # 1. Try Exact Match First
         try:
             async with self.session.get(base_url_get, params=params, timeout=10) as response:
                 if response.status == 200:
@@ -790,10 +794,41 @@ class LyricsProvider:
                         fetched_lyrics = self._parse_lrc(data['syncedLyrics'])
         except Exception: pass
 
+        # 2. Fuzzy Search Fallback (הוחזר למקומו)
+        if not fetched_lyrics:
+            try:
+                base_url_search = "https://lrclib.net/api/search"
+                search_params = {'q': f"{artist} {title}"}
+                async with self.session.get(base_url_search, params=search_params, timeout=10) as response:
+                    if response.status == 200:
+                        results = await response.json()
+                        if results and isinstance(results, list):
+                            best_candidate = None
+                            best_score = 0
+                            for item in results:
+                                if not item.get('syncedLyrics'): continue
+                                score = self._calculate_fuzzy_score(artist, title, float(duration) if duration else 0, item.get('artistName'), item.get('trackName'), item.get('duration'))
+                                if score > 60 and score > best_score:
+                                    best_score = score
+                                    best_candidate = item
+                            if best_candidate:
+                                fetched_lyrics = self._parse_lrc(best_candidate['syncedLyrics'])
+            except Exception: pass
+
         if len(self.lyrics_cache) >= 100: self.lyrics_cache.popitem(last=False)
         self.lyrics_cache[new_key] = fetched_lyrics
         self._build_visual_timeline(fetched_lyrics)
         return fetched_lyrics
+
+    def _calculate_fuzzy_score(self, src_artist, src_title, src_dur, tgt_artist, tgt_title, tgt_dur):
+        if not tgt_artist or not tgt_title: return 0
+        dur_diff = abs(src_dur - (tgt_dur or 0))
+        if src_dur > 0 and dur_diff > 20: return 0 
+        def norm(s): return str(s).lower().strip()
+        seq_a = difflib.SequenceMatcher(None, norm(src_artist), norm(tgt_artist))
+        seq_t = difflib.SequenceMatcher(None, norm(src_title), norm(tgt_title))
+        similarity = (seq_a.ratio() * 0.4) + (seq_t.ratio() * 0.6)
+        return (similarity * 100) - (dur_diff * 2)
 
     def _parse_lrc(self, lrc_text: str) -> list[dict]:
         if not lrc_text: return []

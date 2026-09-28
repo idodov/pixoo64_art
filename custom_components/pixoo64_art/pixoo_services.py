@@ -1002,7 +1002,15 @@ class FallbackService:
             return await self.image_processor.process_image(url, media_data)
         elif hasattr(self.image_processor, 'create_image'):
             return await self.image_processor.create_image(url, media_data)
-        return self._get_fallback_black_image_data()
+            
+        if hasattr(self, '_get_fallback_black_image_data'):
+            return self._get_fallback_black_image_data()
+        return {
+            "base64_image": "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", 
+            "font_color": "#FFFFFF", 
+            "background_color": "#000000", 
+            "background_color_rgb": (0, 0, 0)
+        }
 
     async def _try_ai_generation(self, media_data):
         ai_url = media_data.format_ai_image_prompt(media_data.artist, media_data.title)

@@ -27,6 +27,7 @@ class PixooHub:
         self.sensor = None
         self._unsub_listeners = []
         self.current_task = None
+        self.debounce_task = None
         
         self.websession = async_get_clientsession(hass)
         self.pixoo_device = PixooDevice(self.config, self.websession)
@@ -51,8 +52,16 @@ class PixooHub:
         self.sensor = sensor
 
     async def initialize(self):
+        try:
+            curr = await self.pixoo_device.get_current_channel_index()
+            if curr != 4: self.select_index = self.last_valid_index = curr
+            else: self.select_index = getattr(self, 'last_valid_index', 0)
+        except Exception:
+            self.select_index = 0
+            self.last_valid_index = 0
+
         self._unsub_listeners.append(
-            async_track_state_change_event(self.hass, [self.media_player], self._handle_media_change)
+            async_track_state_change_event(self.hass, [self.media_player], self.safe_state_change_callback)
         )
         self._apply_logic_matrix()
         await self.force_update()
@@ -60,6 +69,7 @@ class PixooHub:
     async def terminate(self):
         for unsub in self._unsub_listeners: unsub()
         if self.current_task and not self.current_task.done(): self.current_task.cancel()
+        if self.debounce_task and not self.debounce_task.done(): self.debounce_task.cancel()
         self.image_processor.shutdown()
 
     async def async_ui_update(self, key: str, value):
@@ -81,6 +91,11 @@ class PixooHub:
         self.config.top_text = (self.ui_state.get("text_position", "Bottom") == "Top")
         self.config.clock_align = self.ui_state.get("clock_align", "Right")
         self.config.info_position = self.ui_state.get("info_position", "Top")
+        
+        crop = self.ui_state.get("crop_mode", "Default")
+        self.config.crop_borders = crop in ["Crop", "Extra Crop"]
+        self.config.crop_extra = crop == "Extra Crop"
+
         if self.config.spotify_slide:
             self.config.burned = False
             self.config.special_mode = True
@@ -100,7 +115,7 @@ class PixooHub:
             items.extend(self.current_lyrics_items)
         else:
             if not self.cached_static_items:
-                 self.cached_static_items = await self._build_text_items_list(getattr(self.media_data, 'lyrics_font_color', "#FFFFFF"))
+                 self.cached_static_items = await self._build_text_items_list(getattr(self.media_data, 'lyrics_font_color', "#FFFFFF"), getattr(self.media_data, 'background_color', "#000000"), scope="static")
             items.extend(self.cached_static_items)
             
         if getattr(self.media_data, 'show_progress_bar', False):
@@ -125,6 +140,17 @@ class PixooHub:
             self.current_task = self.hass.async_create_task(self._process_and_send())
         else:
             await self._send_off_command()
+
+    async def safe_state_change_callback(self, event):
+        if self.debounce_task and not self.debounce_task.done(): self.debounce_task.cancel()
+        if self.current_task and not self.current_task.done(): self.current_task.cancel()
+        self.debounce_task = asyncio.create_task(self._run_debounced_callback(event))
+
+    async def _run_debounced_callback(self, event):
+        try:
+            await asyncio.sleep(0.5)
+            await self._handle_media_change(event)
+        except asyncio.CancelledError: pass
 
     async def _handle_media_change(self, event):
         if not self.ui_state.get("master", True): return
@@ -157,13 +183,15 @@ class PixooHub:
             
             base64_image = processed_data.get('base64_image')
             font_color = processed_data.get('font_color', '#FFFFFF')
+            bg_color_str = processed_data.get('background_color', '#000000')
 
             sensor_attrs = {
                 "artist": self.media_data.artist,
                 "song": self.media_data.title,
                 "source": self.media_data.pic_source,
                 "lyrics_found": len(self.media_data.lyrics) > 0,
-                "active_mode": "Lyrics" if self.config.show_lyrics else "Standard"
+                "active_mode": "Lyrics" if self.config.show_lyrics else "Standard",
+                "font_color": font_color
             }
 
             image_cmd = {
@@ -182,7 +210,7 @@ class PixooHub:
                 self.last_progress_str = "" 
                 
                 self.media_data.lyrics_font_color = font_color
-                self.cached_static_items = await self._build_text_items_list(font_color)
+                self.cached_static_items = await self._build_text_items_list(font_color, bg_color_str, scope="static")
                 
                 await asyncio.sleep(0.3)
                 await self._render_and_send_text_layers()
@@ -198,7 +226,7 @@ class PixooHub:
         except asyncio.CancelledError: pass
         except Exception as e: _LOGGER.error("Execution error: %s", e)
 
-    async def _build_text_items_list(self, font_color):
+    async def _build_text_items_list(self, font_color, bg_color, scope="all"):
         text_items = []
         y_text = 0 if getattr(self.config, 'top_text', False) else 48
         y_info = 56 if getattr(self.config, 'info_position', 'Top') == "Bottom" else 3
@@ -228,7 +256,7 @@ class PixooHub:
             "CommandList": [
                 {"Command": "Draw/ClearHttpText"},  
                 {"Command": "Draw/ResetHttpGifId"},
-                {"Command": "Channel/SetIndex", "SelectIndex": 0}
+                {"Command": "Channel/SetIndex", "SelectIndex": self.select_index}
             ]
         })
 

@@ -210,11 +210,6 @@ class PixooHub:
         await self.media_data.update()
         self._fetch_external_temperature()
         
-        # Check if lyrics are actually available to show
-        wants_lyrics = self.ui_state.get("display_mode") == "Lyrics"
-        has_lyrics = len(self.media_data.lyrics) > 0
-        self.config.show_lyrics = wants_lyrics and has_lyrics
-
         if self.media_data.track_changed:
             if self.current_task: self.current_task.cancel()
             self.current_task = self.hass.async_create_task(self._process_and_send())
@@ -223,9 +218,7 @@ class PixooHub:
         await self._update_progress_bar_loop()
 
     async def _process_and_send(self):
-        """Core flow: Fetch image, process, push to Pixoo, start schedulers."""
         try:
-            # 1. Fetch & Process Image
             processed_data = await self.fallback_service.get_final_url(self.media_data.picture, self.media_data)
             if not processed_data: 
                 processed_data = self.fallback_service._get_fallback_black_image_data()
@@ -235,12 +228,9 @@ class PixooHub:
             bg_color_str = processed_data.get('background_color', '#000000')
 
             sensor_attrs = {
-                "artist": self.media_data.artist,
-                "song": self.media_data.title,
-                "source": self.media_data.pic_source,
-                "lyrics_found": len(self.media_data.lyrics) > 0,
-                "active_mode": "Lyrics" if self.config.show_lyrics else "Standard",
-                "font_color": font_color
+                "artist": self.media_data.artist, "song": self.media_data.title,
+                "source": self.media_data.pic_source, "lyrics_found": len(self.media_data.lyrics) > 0,
+                "active_mode": "Lyrics" if self.config.show_lyrics else "Standard", "font_color": font_color
             }
 
             image_cmd = {
@@ -252,7 +242,6 @@ class PixooHub:
                 ]
             }
             
-            # 2. Send Image Command
             success = await self.pixoo_device.send_command(image_cmd)
             
             if success:
@@ -263,15 +252,15 @@ class PixooHub:
                 self.media_data.lyrics_font_color = font_color
                 self.media_data.background_color = bg_color_str
                 
-                # Pre-build static items to save time in loops
+                # העברת הסטטוס המעודכן לפני בניית השכבות
+                self.lyrics_active_mode = self.config.show_lyrics and len(self.media_data.lyrics) > 0
+                
                 self.cached_static_items = await self._build_text_items_list(font_color, bg_color_str, scope="static")
                 
                 await asyncio.sleep(0.3)
                 await self._render_and_send_text_layers()
 
-                # 3. Start Schedulers (Lyrics)
-                if self.config.show_lyrics and self.media_data.lyrics:
-                    self.lyrics_active_mode = True
+                if self.lyrics_active_mode:
                     await self._calculate_and_schedule_next()
                 else:
                     self._stop_lyrics_scheduler()
@@ -292,17 +281,14 @@ class PixooHub:
             return "#FFFFFF"
 
     async def _build_text_items_list(self, font_color, bg_color, scope="all"):
-        """Constructs the JSON elements for the text layer based on config."""
         text_items = []
         y_text = 0 if getattr(self.config, 'top_text', False) else 48
         y_info = 56 if getattr(self.config, 'top_text', False) else 3
         
-        # Clean artist/title string
         txt = f"{self.media_data.artist} - {self.media_data.title}"
         if len(txt) > 14: txt += "        "
         rtl = 1 if has_bidi(txt) else 0
         
-        # --- SPECIAL MODE ---
         if getattr(self.config, 'special_mode', False):
             font_color_2 = self.get_opposite_color(bg_color)
             text_items.append({"TextId": 1, "type": 14, "x": 3, "y": 1, "dir": 0, "font": 18, "TextWidth": 33, "Textheight": 6, "speed": 100, "align": 1, "color": font_color})
@@ -316,18 +302,18 @@ class PixooHub:
                 t_rtl = 1 if has_bidi(self.media_data.title) else 0
                 text_items.append({"TextId": 5, "type": 22, "x": 0, "y": 52, "dir": t_rtl, "font": 190, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(self.media_data.title) if t_rtl else self.media_data.title, "color": font_color})
 
-        # --- STANDARD / BURNED MODE ---
         else:
-            if getattr(self.config, 'show_text', True) and not getattr(self.media_data, 'playing_tv', False):
-                text_items.append({"TextId": 4, "type": 22, "x": 0, "y": y_text, "dir": rtl, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(txt) if rtl else txt, "color": font_color})
-            
-            if getattr(self.config, 'show_clock', True):
-                x_c = 44 if getattr(self.config, 'clock_align', 'Right') == "Right" else 3
-                text_items.append({"TextId": 2, "type": 5, "x": x_c, "y": y_info, "dir": 0, "font": 18, "TextWidth": 32, "Textheight": 16, "speed": 100, "align": 1, "color": font_color})
+            if not getattr(self, 'lyrics_active_mode', False):
+                if getattr(self.config, 'show_text', True) and not getattr(self.media_data, 'playing_tv', False):
+                    text_items.append({"TextId": 4, "type": 22, "x": 0, "y": y_text, "dir": rtl, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(txt) if rtl else txt, "color": font_color})
+                
+                if getattr(self.config, 'show_clock', True):
+                    x_c = 44 if getattr(self.config, 'clock_align', 'Right') == "Right" else 3
+                    text_items.append({"TextId": 2, "type": 5, "x": x_c, "y": y_info, "dir": 0, "font": 18, "TextWidth": 32, "Textheight": 16, "speed": 100, "align": 1, "color": font_color})
 
-            if getattr(self.config, 'temperature', False) and getattr(self.media_data, 'temperature', None):
-                x_t = 3 if getattr(self.config, 'clock_align', 'Right') == "Right" else 40
-                text_items.append({"TextId": 3, "type": 22, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": str(self.media_data.temperature)})
+                if getattr(self.config, 'temperature', False) and getattr(self.media_data, 'temperature', None):
+                    x_t = 3 if getattr(self.config, 'clock_align', 'Right') == "Right" else 40
+                    text_items.append({"TextId": 3, "type": 22, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": str(self.media_data.temperature)})
             
         return text_items
 

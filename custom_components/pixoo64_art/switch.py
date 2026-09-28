@@ -13,6 +13,7 @@ SWITCHES = [
     ("burned_effect", "Burned Effect", "mdi:fire", False),
     ("progress_bar", "Progress Bar", "mdi:progress-clock", True),
     ("spotify_slider", "Spotify Slider Mode", "mdi:spotify", False),
+    ("force_ai", "Force AI Generation", "mdi:robot-excited", False),
 ]
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -28,7 +29,6 @@ class PixooSwitch(SwitchEntity):
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_icon = icon
         
-        # Load saved state if exists, otherwise default
         self._attr_is_on = self.hub.ui_state.get(key, default_val)
         self.hub.ui_state[key] = self._attr_is_on
 

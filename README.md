@@ -1,3 +1,5 @@
+# ALPHA VERSION
+
 # 🎨 Pixoo64 Media Album Art for Home Assistant
 
 Transform your Divoom Pixoo64 into a dynamic, smart media display for Home Assistant. This native custom component displays real-time album art, synced lyrics, progress bars, and smart home data directly on your Pixoo64.

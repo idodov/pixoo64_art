@@ -5,32 +5,29 @@ from .const import DOMAIN
 
 async def async_setup_entry(hass, entry, async_add_entities):
     hub = hass.data[DOMAIN][entry.entry_id]
-    sensor = PixooMediaSensor(hub, entry)
+    sensor = PixooStatusSensor(hub, entry)
     hub.set_sensor(sensor)
     async_add_entities([sensor])
 
-class PixooMediaSensor(SensorEntity):
+class PixooStatusSensor(SensorEntity):
     def __init__(self, hub, entry):
         self.hub = hub
-        self._attr_name = "Pixoo64 Media Status"
-        self._attr_unique_id = f"{entry.entry_id}_sensor"
-        self._attr_icon = "mdi:monitor-dashboard"
-        self._state = "Idle"
-        self._attributes = {}
-
-    @property
-    def native_value(self):
-        return self._state
-
-    @property
-    def extra_state_attributes(self):
-        return self._attributes
+        self._attr_name = "Pixoo64 Status"
+        self._attr_unique_id = f"{entry.entry_id}_status"
+        self._attr_icon = "mdi:television-ambient-light"
+        self._attr_native_value = "Initializing"
+        self._attr_extra_state_attributes = {}
 
     @property
     def device_info(self):
-        return DeviceInfo(identifiers={(DOMAIN, self.hub.pixoo_ip)})
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.hub.pixoo_ip)},
+            name="Pixoo64 Media Display",
+            manufacturer="Divoom",
+            model="Pixoo 64",
+        )
 
-    def update_state(self, state_str: str, attributes: dict):
-        self._state = state_str
-        self._attributes = attributes
+    def update_state(self, state_val, attrs):
+        self._attr_native_value = state_val
+        self._attr_extra_state_attributes = attrs
         self.async_write_ha_state()

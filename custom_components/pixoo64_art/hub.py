@@ -25,7 +25,7 @@ class PixooHub:
         
         self.ui_state = {}
         self.config = Config(entry)
-        self.config.args = {**entry.data, **entry.options} # Store config dict
+        self.config.args = {**entry.data, **entry.options}
         self.sensor = None
         
         self._unsub_listeners = []
@@ -45,6 +45,7 @@ class PixooHub:
         self.last_text_payload_hash = None
         self.last_progress_str = ""
         self.cached_static_items = []
+        self.current_lyrics_items = []
         self.is_art_visible = False
         self.lyrics_active_mode = False
         self.scheduler_generation_id = 0
@@ -85,13 +86,11 @@ class PixooHub:
         self.config.progress_bar_enabled = self.ui_state.get("progress_bar", True)
         self.config.spotify_slide = self.ui_state.get("spotify_slider", False)
         
-        # --- ההיגיון החדש של המיקומים ---
         self.config.text_position = self.ui_state.get("text_position", "Bottom")
         self.config.top_text = (self.config.text_position == "Top")
         
         info_pos = self.ui_state.get("info_position", "Opposite to Text")
         if info_pos == "Opposite to Text":
-            # אם יוזר בחר "ההפך מהטקסט", אנחנו מחליפים אוטומטית!
             self.config.info_position = "Bottom" if self.config.top_text else "Top"
         else:
             self.config.info_position = info_pos
@@ -115,6 +114,30 @@ class PixooHub:
             s = self.hass.states.get(temp_ent)
             if s and s.state not in ("unknown", "unavailable"):
                 self.media_data.temperature = f"{s.state}°"
+
+    async def _render_and_send_text_layers(self):
+        """Centralized text renderer to prevent overlapping commands."""
+        if not self.is_art_visible: return
+        items = []
+        
+        # 1. Lyrics OR Static text (Clock, Temp, Artist)
+        if self.lyrics_active_mode and self.current_lyrics_items:
+            items.extend(self.current_lyrics_items)
+        else:
+            if not self.cached_static_items:
+                 self.cached_static_items = await self._build_text_items_list(getattr(self.media_data, 'lyrics_font_color', "#FFFFFF"), getattr(self.media_data, 'background_color', "#000000"), scope="static")
+            items.extend(self.cached_static_items)
+            
+        # 2. Progress Bar
+        if self.config.progress_bar_enabled:
+            pb = await self.progress_manager.get_payload_item(self.media_data)
+            if pb: items.extend(pb)
+            
+        # 3. Send if layout changed
+        hsh = hash(str(items))
+        if hsh != self.last_text_payload_hash:
+            await self.pixoo_device.send_command({"Command": "Draw/SendHttpItemList", "ItemList": items})
+            self.last_text_payload_hash = hsh
 
     async def force_update(self):
         if not self.ui_state.get("master", True):
@@ -159,12 +182,6 @@ class PixooHub:
             
         self.progress_timer_gen_id += 1
         await self._update_progress_bar_loop()
-        
-        if self.config.show_lyrics and self.media_data.lyrics:
-            self.lyrics_active_mode = True
-            await self._calculate_and_schedule_next()
-        else:
-            self._stop_lyrics_scheduler()
 
     async def _process_and_send(self):
         try:
@@ -226,29 +243,30 @@ class PixooHub:
             self.media_data.lyrics_font_color = self.config.force_font_color or font_color
             self.cached_static_items = await self._build_text_items_list(self.media_data.lyrics_font_color, bg_color_str, scope="static")
             
-            pb_items = await self.progress_manager.get_payload_item(self.media_data) if self.config.progress_bar_enabled else []
-            full_text_items = list(self.cached_static_items) + pb_items
-
             if not took_over:
                 await self.pixoo_device.send_command(image_cmd)
                 self.is_art_visible = True
                 self.last_text_payload_hash = None 
                 self.last_progress_str = "" 
                 
-                if full_text_items:
-                    await asyncio.sleep(0.1) 
-                    txt_payload = {"Command": "Draw/SendHttpItemList", "ItemList": full_text_items}
-                    await self.pixoo_device.send_command(txt_payload)
-                    self.last_text_payload_hash = str(txt_payload)
+                await asyncio.sleep(0.3)
+                await self._render_and_send_text_layers()
 
-            elif spotify_animation_took_over and self.config.special_mode and full_text_items:
-                await self.pixoo_device.send_command({ "Command": "Draw/SendHttpItemList", "ItemList": full_text_items })
+            elif spotify_animation_took_over and self.config.special_mode:
+                await self._render_and_send_text_layers()
 
             if not spotify_animation_took_over:
                 sensor_attrs["process_duration"] = f"{time.perf_counter() - start_time:.2f} s"
             
             if self.sensor:
                 self.sensor.update_state(f"{self.media_data.artist} - {self.media_data.title}", sensor_attrs)
+
+            # Start Lyrics logic ONLY after image and initial text is sent!
+            if self.config.show_lyrics and self.media_data.lyrics:
+                self.lyrics_active_mode = True
+                await self._calculate_and_schedule_next()
+            else:
+                self._stop_lyrics_scheduler()
 
         except asyncio.CancelledError:
             pass
@@ -271,7 +289,6 @@ class PixooHub:
                     text_items.append({"TextId": 5, "type": 22, "x": 0, "y": 52, "dir": t_rtl, "font": 190, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(self.media_data.title) if t_rtl else self.media_data.title, "color": font_color})
 
             elif (self.config.show_text or self.config.show_clock or self.config.temperature) and not self.config.show_lyrics:
-                # --- קביעת מיקומים דינמית לפי בחירת המשתמש ---
                 y_text = 0 if getattr(self.config, 'top_text', False) else 48
                 y_info = 56 if getattr(self.config, 'info_position', 'Top') == "Bottom" else 3
                 
@@ -289,10 +306,6 @@ class PixooHub:
                     x_t = 3 if getattr(self.config, 'clock_align', 'Right') == "Right" else 40
                     t_type = 22 if getattr(self.media_data, 'temperature', None) else 17
                     text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": getattr(self.media_data, 'temperature', "") or ""})
-        
-        if scope in ["all", "progress"]:
-            pb = await self.progress_manager.get_payload_item(self.media_data)
-            if pb: text_items.extend(pb)
         
         return text_items
 
@@ -330,6 +343,7 @@ class PixooHub:
     def _stop_lyrics_scheduler(self):
         self.lyrics_active_mode = False
         self.scheduler_generation_id += 1
+        self.current_lyrics_items = []
 
     async def _calculate_and_schedule_next(self):
         if self.notification_manager.is_active or not self.lyrics_active_mode: return
@@ -341,25 +355,28 @@ class PixooHub:
             elapsed = (datetime.now(timezone.utc) - self.media_data.media_position_updated_at).total_seconds()
             pos += elapsed - float(self.config.lyrics_sync)
         
-        layout, delay = self.lyrics_provider.get_refresh_plan(pos)
+        try:
+            # הזרקה בטוחה של המילים פנימה כדי למנוע קריסה
+            if hasattr(self.lyrics_provider, 'lyrics'):
+                self.lyrics_provider.lyrics = self.media_data.lyrics
+            layout, delay = self.lyrics_provider.get_refresh_plan(pos)
+        except TypeError:
+            layout, delay = self.lyrics_provider.get_refresh_plan(self.media_data.lyrics, pos)
+        except Exception as e:
+            _LOGGER.error("Lyrics error: %s", e)
+            layout, delay = None, None
+
+        self.current_lyrics_items = []
         if layout is not None:
-            items = []
             for i in range(6):
                 if i < len(layout):
                     it = layout[i]
                     h = min(it['h'], 64 - it['y'])
-                    items.append({"TextId": i+10, "type": 22, "x": 0, "y": it['y'], "dir": it['dir'], "font": getattr(self.config, 'lyrics_font', 190), "TextWidth": 64, "Textheight": h, "speed": 0, "align": 2, "TextString": it['text'], "color": getattr(self.media_data, 'lyrics_font_color', "#FFFFFF")})
+                    self.current_lyrics_items.append({"TextId": i+10, "type": 22, "x": 0, "y": it['y'], "dir": it['dir'], "font": getattr(self.config, 'lyrics_font', 190), "TextWidth": 64, "Textheight": h, "speed": 0, "align": 2, "TextString": it['text'], "color": getattr(self.media_data, 'lyrics_font_color', "#FFFFFF")})
                 else:
-                    items.append({"TextId": i+10, "type": 22, "x": 0, "y": 0, "dir": 0, "font": getattr(self.config, 'lyrics_font', 190), "TextWidth": 64, "Textheight": 12, "speed": 0, "align": 2, "TextString": "", "color": "#000000"})
+                    self.current_lyrics_items.append({"TextId": i+10, "type": 22, "x": 0, "y": 0, "dir": 0, "font": getattr(self.config, 'lyrics_font', 190), "TextWidth": 64, "Textheight": 12, "speed": 0, "align": 2, "TextString": "", "color": "#000000"})
             
-            if self.config.progress_bar_enabled:
-                pb = await self.progress_manager.get_payload_item(self.media_data)
-                if pb: items.extend(pb)
-            
-            hsh = hash(str(items))
-            if hsh != self.last_text_payload_hash or delay is None:
-                await self.pixoo_device.send_command({"Command": "Draw/SendHttpItemList", "ItemList": items})
-                self.last_text_payload_hash = hsh
+        await self._render_and_send_text_layers()
         
         if delay is not None:
             async def _timer(now):
@@ -379,12 +396,7 @@ class PixooHub:
         bar_str, delay = self.progress_manager.calculate(pos, self.media_data.media_duration)
         if self.is_art_visible and bar_str != self.last_progress_str:
             self.last_progress_str = bar_str
-            items = await self._build_text_items_list(getattr(self.media_data, 'lyrics_font_color', "#FFFFFF"), getattr(self.media_data, 'background_color', "#000000"), scope="all")
-            if items:
-                hsh = hash(str(items))
-                if hsh != self.last_text_payload_hash:
-                    await self.pixoo_device.send_command({"Command": "Draw/SendHttpItemList", "ItemList": items})
-                    self.last_text_payload_hash = hsh
+            await self._render_and_send_text_layers()
         
         if delay is not None:
             gen_id = self.progress_timer_gen_id

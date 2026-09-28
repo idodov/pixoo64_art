@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Pixoo64 Setup",
+        "description": "Welcome! Let's connect your Pixoo64 screen to Home Assistant. Please provide the basic required information to get started.",
+        "data": {
+          "pixoo_ip": "Pixoo64 IP Address",
+          "media_player": "Media Player Entity"
+        },
+        "data_description": {
+          "pixoo_ip": "The local IP address of your Divoom Pixoo64 device (e.g., 192.168.1.50).",
+          "media_player": "Select the primary media player you want the screen to track."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the Pixoo64. Please check the IP address.",
+      "unknown": "Unexpected error occurred."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Advanced Settings & APIs",
+        "description": "Configure optional APIs and smart home integrations. None of these are strictly required, but they significantly improve the experience.",
+        "data": {
+          "spotify_client_id": "Spotify Client ID (Optional)",
+          "spotify_client_secret": "Spotify Client Secret (Optional)",
+          "pollinations_key": "Pollinations AI Key (Optional)",
+          "musicbrainz_enabled": "Enable MusicBrainz Fallback",
+          "light_entity": "Sync HA Light (Optional)",
+          "wled_ip": "WLED IP Address (Optional)"
+        },
+        "data_description": {
+          "spotify_client_id": "Highly recommended for 100% accurate album art. Create a free app at developer.spotify.com.",
+          "pollinations_key": "Required ONLY if you want AI to generate conceptual art for songs without covers. Get a free key at enter.pollinations.ai/keys.",
+          "musicbrainz_enabled": "A free fallback to search for album covers if the original is missing.",
+          "light_entity": "Select an RGB light entity to automatically sync with the album cover's dominant colors.",
+          "wled_ip": "If you have a WLED device, enter its IP address here to sync it with the music."
+        }
+      }
+    }
+  }
+}

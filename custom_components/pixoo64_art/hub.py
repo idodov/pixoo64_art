@@ -25,12 +25,12 @@ class PixooHub:
         
         self.ui_state = {}
         self.config = Config(entry)
+        self.config.args = {**entry.data, **entry.options} # Store config dict
         self.sensor = None
         
         self._unsub_listeners = []
         self.current_task = None
         
-        # Initialize Core Services
         self.websession = async_get_clientsession(hass)
         self.pixoo_device = PixooDevice(self.config, self.websession)
         self.image_processor = ImageProcessor(self.config, self.websession)
@@ -67,10 +67,8 @@ class PixooHub:
         await self.force_update()
 
     async def terminate(self):
-        for unsub in self._unsub_listeners:
-            unsub()
-        if self.current_task and not self.current_task.done():
-            self.current_task.cancel()
+        for unsub in self._unsub_listeners: unsub()
+        if self.current_task and not self.current_task.done(): self.current_task.cancel()
         self.image_processor.shutdown()
 
     async def async_ui_update(self, key: str, value):
@@ -101,6 +99,13 @@ class PixooHub:
             self.config.burned = False
             self.config.special_mode = True
 
+    def _fetch_external_temperature(self):
+        temp_ent = self.config.args.get("temperature_entity")
+        if temp_ent:
+            s = self.hass.states.get(temp_ent)
+            if s and s.state not in ("unknown", "unavailable"):
+                self.media_data.temperature = f"{s.state}°"
+
     async def force_update(self):
         if not self.ui_state.get("master", True):
             await self._send_off_command()
@@ -108,6 +113,14 @@ class PixooHub:
 
         state = self.hass.states.get(self.media_player)
         if state and state.state in ["playing", "on"]:
+            self.config.show_lyrics = self.ui_state.get("show_lyrics", False)
+            await self.media_data.update()
+            self._fetch_external_temperature()
+            
+            wants_lyrics = self.ui_state.get("show_lyrics", False)
+            has_lyrics = len(self.media_data.lyrics) > 0
+            self.config.show_lyrics = wants_lyrics and has_lyrics
+            
             self.media_data.track_changed = True 
             if self.current_task: self.current_task.cancel()
             self.current_task = self.hass.async_create_task(self._process_and_send())
@@ -122,7 +135,9 @@ class PixooHub:
             self._stop_lyrics_scheduler()
             return
 
+        self.config.show_lyrics = self.ui_state.get("show_lyrics", False)
         await self.media_data.update()
+        self._fetch_external_temperature()
         
         wants_lyrics = self.ui_state.get("show_lyrics", False)
         has_lyrics = len(self.media_data.lyrics) > 0
@@ -144,8 +159,6 @@ class PixooHub:
     async def _process_and_send(self):
         try:
             start_time = time.perf_counter()
-            
-            # Fetch image / AI / fallback
             processed_data = await self.fallback_service.get_final_url(self.media_data.picture, self.media_data) or self.fallback_service._get_fallback_black_image_data()
             
             self.media_data.spotify_frames = 0
@@ -153,7 +166,6 @@ class PixooHub:
             font_color = processed_data.get('font_color', '#FFFFFF')
             bg_color_str = processed_data.get('background_color', '#000000')
 
-            # Light sync
             if self.config.light and not self.media_data.playing_tv:
                 rgb = processed_data.get('background_color_rgb', (0,0,0))
                 await self._control_light('on', rgb, self.media_data.is_night)
@@ -172,7 +184,6 @@ class PixooHub:
                 "font_color": font_color
             }
 
-            # Pixoo Setup Command
             image_cmd = {
                 "Command": "Draw/CommandList", 
                 "CommandList": [
@@ -185,7 +196,6 @@ class PixooHub:
             took_over = False
             spotify_animation_took_over = False
 
-            # Handle Spotify Animation
             if self.config.spotify_slide and not self.media_data.radio_logo and not self.media_data.playing_tv:
                 self.spotify_service.spotify_data = await self.spotify_service.get_spotify_json(self.media_data.artist, self.media_data.title)
                 if self.spotify_service.spotify_data:
@@ -203,7 +213,6 @@ class PixooHub:
                     else:
                         await self.pixoo_device.send_command({"Command": "Channel/SetIndex", "SelectIndex": self.select_index})
 
-            # Build Text Layer
             self.media_data.lyrics_font_color = self.config.force_font_color or font_color
             self.cached_static_items = await self._build_text_items_list(self.media_data.lyrics_font_color, bg_color_str, scope="static")
             
@@ -238,14 +247,6 @@ class PixooHub:
 
     async def _build_text_items_list(self, font_color, bg_color, scope="all"):
         text_items = []
-        
-        def get_opposite_color(hc):
-            hc = hc.lstrip('#')
-            if len(hc) != 6: return "#FFFFFF"
-            try:
-                return '#{:02x}{:02x}{:02x}'.format(*tuple(255 - int(hc[i:i+2], 16) for i in (0, 2, 4)))
-            except ValueError: return "#FFFFFF"
-        
         if scope in ["all", "static"]:
             if self.config.special_mode:
                 text_items.append({"TextId": 1, "type": 14, "x": 3, "y": 1, "dir": 0, "font": 18, "TextWidth": 33, "Textheight": 6, "speed": 100, "align": 1, "color": font_color})

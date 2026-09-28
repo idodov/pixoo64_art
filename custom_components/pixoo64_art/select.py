@@ -4,8 +4,9 @@ from homeassistant.helpers.entity import DeviceInfo
 from .const import DOMAIN
 
 SELECTS = [
-    ("clock_align", "Clock Alignment", ["Right", "Left"], "Right", "mdi:format-align-right"),
     ("text_position", "Text Position", ["Top", "Bottom"], "Bottom", "mdi:format-vertical-align-bottom"),
+    ("info_position", "Clock & Temp Position", ["Opposite to Text", "Top", "Bottom"], "Opposite to Text", "mdi:swap-vertical"),
+    ("info_align", "Clock & Temp Alignment", ["Right", "Left"], "Right", "mdi:format-align-right"),
     ("crop_mode", "Crop Mode", ["Default", "No Crop", "Crop", "Extra Crop"], "Default", "mdi:crop"),
     ("ai_model", "AI Generation Model", ["flux", "z-image-turbo", "gpt-image-1.5"], "flux", "mdi:robot-outline"),
 ]

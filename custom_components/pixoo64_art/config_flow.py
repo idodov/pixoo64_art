@@ -8,6 +8,8 @@ import aiohttp
 from .const import (
     DOMAIN, CONF_PIXOO_IP, CONF_MEDIA_PLAYER, CONF_POLLINATIONS_KEY,
     CONF_SPOTIFY_CLIENT_ID, CONF_SPOTIFY_CLIENT_SECRET,
+    CONF_TIDAL_CLIENT_ID, CONF_TIDAL_CLIENT_SECRET,
+    CONF_LASTFM_KEY, CONF_DISCOGS_TOKEN,
     CONF_MUSICBRAINZ_ENABLED, CONF_WLED_IP, CONF_LIGHT_ENTITY, CONF_TEMPERATURE_ENTITY
 )
 
@@ -49,10 +51,14 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema({
             vol.Optional(CONF_SPOTIFY_CLIENT_ID): str,
             vol.Optional(CONF_SPOTIFY_CLIENT_SECRET): str,
+            vol.Optional(CONF_TIDAL_CLIENT_ID): str,
+            vol.Optional(CONF_TIDAL_CLIENT_SECRET): str,
+            vol.Optional(CONF_LASTFM_KEY): str,
+            vol.Optional(CONF_DISCOGS_TOKEN): str,
             vol.Optional(CONF_POLLINATIONS_KEY): str,
             vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=True): bool,
             vol.Optional(CONF_TEMPERATURE_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature")),
-            vol.Optional(CONF_LIGHT_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="light")),
+            vol.Optional(CONF_LIGHT_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="light", multiple=True)),
             vol.Optional(CONF_WLED_IP): str,
         })
         return self.async_show_form(step_id="advanced", data_schema=schema)
@@ -73,23 +79,32 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
         options = self.config_entry.options
         data = self.config_entry.data
         
-        # Helper to safely load existing configurations and prevent Error 500
         def get_val(key, default=""):
             return options.get(key, data.get(key, default))
 
         schema = {}
         schema[vol.Optional(CONF_SPOTIFY_CLIENT_ID, default=get_val(CONF_SPOTIFY_CLIENT_ID))] = str
         schema[vol.Optional(CONF_SPOTIFY_CLIENT_SECRET, default=get_val(CONF_SPOTIFY_CLIENT_SECRET))] = str
+        schema[vol.Optional(CONF_TIDAL_CLIENT_ID, default=get_val(CONF_TIDAL_CLIENT_ID))] = str
+        schema[vol.Optional(CONF_TIDAL_CLIENT_SECRET, default=get_val(CONF_TIDAL_CLIENT_SECRET))] = str
+        schema[vol.Optional(CONF_LASTFM_KEY, default=get_val(CONF_LASTFM_KEY))] = str
+        schema[vol.Optional(CONF_DISCOGS_TOKEN, default=get_val(CONF_DISCOGS_TOKEN))] = str
         schema[vol.Optional(CONF_POLLINATIONS_KEY, default=get_val(CONF_POLLINATIONS_KEY))] = str
         schema[vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=get_val(CONF_MUSICBRAINZ_ENABLED, True))] = bool
         
+        # Safe assignment for Temperature Sensor
         temp_val = get_val(CONF_TEMPERATURE_ENTITY, None)
-        if temp_val: schema[vol.Optional(CONF_TEMPERATURE_ENTITY, default=temp_val)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
-        else: schema[vol.Optional(CONF_TEMPERATURE_ENTITY)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
+        if temp_val: 
+            schema[vol.Optional(CONF_TEMPERATURE_ENTITY, default=temp_val)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
+        else: 
+            schema[vol.Optional(CONF_TEMPERATURE_ENTITY)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
 
-        light_val = get_val(CONF_LIGHT_ENTITY, None)
-        if light_val: schema[vol.Optional(CONF_LIGHT_ENTITY, default=light_val)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="light"))
-        else: schema[vol.Optional(CONF_LIGHT_ENTITY)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="light"))
+        # Safe assignment for Multiple Lights
+        light_val = get_val(CONF_LIGHT_ENTITY, [])
+        if light_val: 
+            schema[vol.Optional(CONF_LIGHT_ENTITY, default=light_val)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="light", multiple=True))
+        else: 
+            schema[vol.Optional(CONF_LIGHT_ENTITY)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="light", multiple=True))
         
         schema[vol.Optional(CONF_WLED_IP, default=get_val(CONF_WLED_IP))] = str
 

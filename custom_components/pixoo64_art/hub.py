@@ -86,7 +86,7 @@ class PixooHub:
             self.config.special_mode = True
 
     def _fetch_external_temperature(self):
-        temp_ent = self.config.args.get("temperature_entity")
+        temp_ent = getattr(self.config, 'temperature_sensor', None)
         if temp_ent:
             s = self.hass.states.get(temp_ent)
             if s and s.state not in ("unknown", "unavailable"):

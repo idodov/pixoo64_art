@@ -14,11 +14,12 @@ from .const import (
 )
 
 class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Pixoo64."""
     VERSION = 1
 
     async def async_step_user(self, user_input=None):
-        """Step 1: Basic IP and Media Player."""
+        if not hasattr(self, 'init_data'):
+            self.init_data = {}
+            
         errors = {}
         if user_input is not None:
             ip_address = user_input[CONF_PIXOO_IP]
@@ -26,7 +27,6 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 async with aiohttp.ClientSession() as session:
                     async with session.post(f"http://{ip_address}:80/post", json={"Command": "Channel/GetIndex"}, timeout=3) as response:
                         if response.status == 200:
-                            # שומרים את הנתונים ישירות לאובייקט בצורה בטוחה
                             self.init_data = user_input
                             return await self.async_step_advanced()
                         else:
@@ -41,9 +41,7 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(step_id="user", data_schema=data_schema, errors=errors)
 
     async def async_step_advanced(self, user_input=None):
-        """Step 2: APIs and Entities."""
         if user_input is not None:
-            # מחברים את הנתונים משלב 1 ושלב 2 ושומרים את האינטגרציה
             final_data = {**self.init_data, **user_input}
             return self.async_create_entry(title="Pixoo64 Album Art", data=final_data)
 
@@ -66,7 +64,6 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry):
         return Pixoo64OptionsFlowHandler(config_entry)
-
 
 class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
     def __init__(self, config_entry):
@@ -93,16 +90,12 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
         schema[vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=get_val(CONF_MUSICBRAINZ_ENABLED, True))] = bool
         
         temp_val = get_val(CONF_TEMPERATURE_ENTITY, None)
-        if temp_val: 
-            schema[vol.Optional(CONF_TEMPERATURE_ENTITY, default=temp_val)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
-        else: 
-            schema[vol.Optional(CONF_TEMPERATURE_ENTITY)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
+        if temp_val: schema[vol.Optional(CONF_TEMPERATURE_ENTITY, default=temp_val)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
+        else: schema[vol.Optional(CONF_TEMPERATURE_ENTITY)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
 
         light_val = get_val(CONF_LIGHT_ENTITY, [])
-        if light_val: 
-            schema[vol.Optional(CONF_LIGHT_ENTITY, default=light_val)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="light", multiple=True))
-        else: 
-            schema[vol.Optional(CONF_LIGHT_ENTITY)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="light", multiple=True))
+        if light_val: schema[vol.Optional(CONF_LIGHT_ENTITY, default=light_val)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="light", multiple=True))
+        else: schema[vol.Optional(CONF_LIGHT_ENTITY)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="light", multiple=True))
         
         schema[vol.Optional(CONF_WLED_IP, default=get_val(CONF_WLED_IP))] = str
 

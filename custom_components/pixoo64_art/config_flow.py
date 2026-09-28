@@ -8,76 +8,89 @@ import aiohttp
 from .const import (
     DOMAIN, CONF_PIXOO_IP, CONF_MEDIA_PLAYER, CONF_POLLINATIONS_KEY,
     CONF_SPOTIFY_CLIENT_ID, CONF_SPOTIFY_CLIENT_SECRET,
-    CONF_MUSICBRAINZ_ENABLED, CONF_WLED_IP, CONF_LIGHT_ENTITY
+    CONF_MUSICBRAINZ_ENABLED, CONF_WLED_IP, CONF_LIGHT_ENTITY, CONF_TEMPERATURE_ENTITY
 )
 
 class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Pixoo64."""
-
     VERSION = 1
 
-    async def async_step_user(self, user_input=None):
-        """Handle the initial setup step."""
-        errors = {}
+    def __init__(self):
+        self.init_data = {}
 
+    async def async_step_user(self, user_input=None):
+        """Step 1: Basic IP and Media Player."""
+        errors = {}
         if user_input is not None:
-            # Validate Pixoo IP before saving
             ip_address = user_input[CONF_PIXOO_IP]
-            test_url = f"http://{ip_address}:80/post"
             try:
                 async with aiohttp.ClientSession() as session:
-                    # Simple ping to check if the device responds
-                    async with session.post(test_url, json={"Command": "Channel/GetIndex"}, timeout=3) as response:
+                    async with session.post(f"http://{ip_address}:80/post", json={"Command": "Channel/GetIndex"}, timeout=3) as response:
                         if response.status == 200:
-                            return self.async_create_entry(title="Pixoo64 Album Art", data=user_input)
+                            self.init_data = user_input
+                            return await self.async_step_advanced()
                         else:
                             errors["base"] = "cannot_connect"
             except Exception:
                 errors["base"] = "cannot_connect"
 
-        # The form schema (Required fields only)
         data_schema = vol.Schema({
             vol.Required(CONF_PIXOO_IP): str,
-            vol.Required(CONF_MEDIA_PLAYER): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="media_player")
-            ),
+            vol.Required(CONF_MEDIA_PLAYER): selector.EntitySelector(selector.EntitySelectorConfig(domain="media_player")),
         })
+        return self.async_show_form(step_id="user", data_schema=data_schema, errors=errors)
 
-        return self.async_show_form(
-            step_id="user", data_schema=data_schema, errors=errors
-        )
+    async def async_step_advanced(self, user_input=None):
+        """Step 2: APIs and Entities."""
+        if user_input is not None:
+            final_data = {**self.init_data, **user_input}
+            return self.async_create_entry(title="Pixoo64 Album Art", data=final_data)
+
+        schema = vol.Schema({
+            vol.Optional(CONF_SPOTIFY_CLIENT_ID): str,
+            vol.Optional(CONF_SPOTIFY_CLIENT_SECRET): str,
+            vol.Optional(CONF_POLLINATIONS_KEY): str,
+            vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=True): bool,
+            vol.Optional(CONF_TEMPERATURE_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature")),
+            vol.Optional(CONF_LIGHT_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="light")),
+            vol.Optional(CONF_WLED_IP): str,
+        })
+        return self.async_show_form(step_id="advanced", data_schema=schema)
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
-        """Get the options flow for configuring APIs."""
         return Pixoo64OptionsFlowHandler(config_entry)
 
-
 class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle options flow for advanced settings."""
-
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
+    def __init__(self, config_entry):
         self.config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
-        """Manage the options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
         options = self.config_entry.options
+        data = self.config_entry.data
+        
+        # Helper to safely load existing configurations and prevent Error 500
+        def get_val(key, default=""):
+            return options.get(key, data.get(key, default))
 
-        # Advanced options schema
-        options_schema = vol.Schema({
-            vol.Optional(CONF_SPOTIFY_CLIENT_ID, default=options.get(CONF_SPOTIFY_CLIENT_ID, "")): str,
-            vol.Optional(CONF_SPOTIFY_CLIENT_SECRET, default=options.get(CONF_SPOTIFY_CLIENT_SECRET, "")): str,
-            vol.Optional(CONF_POLLINATIONS_KEY, default=options.get(CONF_POLLINATIONS_KEY, "")): str,
-            vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=options.get(CONF_MUSICBRAINZ_ENABLED, True)): bool,
-            vol.Optional(CONF_LIGHT_ENTITY, default=options.get(CONF_LIGHT_ENTITY, "")): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="light")
-            ),
-            vol.Optional(CONF_WLED_IP, default=options.get(CONF_WLED_IP, "")): str,
-        })
+        schema = {}
+        schema[vol.Optional(CONF_SPOTIFY_CLIENT_ID, default=get_val(CONF_SPOTIFY_CLIENT_ID))] = str
+        schema[vol.Optional(CONF_SPOTIFY_CLIENT_SECRET, default=get_val(CONF_SPOTIFY_CLIENT_SECRET))] = str
+        schema[vol.Optional(CONF_POLLINATIONS_KEY, default=get_val(CONF_POLLINATIONS_KEY))] = str
+        schema[vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=get_val(CONF_MUSICBRAINZ_ENABLED, True))] = bool
+        
+        temp_val = get_val(CONF_TEMPERATURE_ENTITY, None)
+        if temp_val: schema[vol.Optional(CONF_TEMPERATURE_ENTITY, default=temp_val)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
+        else: schema[vol.Optional(CONF_TEMPERATURE_ENTITY)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
 
-        return self.async_show_form(step_id="init", data_schema=options_schema)
+        light_val = get_val(CONF_LIGHT_ENTITY, None)
+        if light_val: schema[vol.Optional(CONF_LIGHT_ENTITY, default=light_val)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="light"))
+        else: schema[vol.Optional(CONF_LIGHT_ENTITY)] = selector.EntitySelector(selector.EntitySelectorConfig(domain="light"))
+        
+        schema[vol.Optional(CONF_WLED_IP, default=get_val(CONF_WLED_IP))] = str
+
+        return self.async_show_form(step_id="init", data_schema=vol.Schema(schema))

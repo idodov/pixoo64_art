@@ -3,7 +3,6 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from PIL import Image
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event, async_call_later
 
@@ -85,6 +84,7 @@ class PixooHub:
         self.config.burned = self.ui_state.get("burned_effect", False)
         self.config.progress_bar_enabled = self.ui_state.get("progress_bar", True)
         self.config.spotify_slide = self.ui_state.get("spotify_slider", False)
+        self.config.force_ai = self.ui_state.get("force_ai", False)
         
         self.config.text_position = self.ui_state.get("text_position", "Bottom")
         self.config.top_text = (self.config.text_position == "Top")
@@ -116,11 +116,9 @@ class PixooHub:
                 self.media_data.temperature = f"{s.state}°"
 
     async def _render_and_send_text_layers(self):
-        """Centralized text renderer to prevent overlapping commands."""
         if not self.is_art_visible: return
         items = []
         
-        # 1. Lyrics OR Static text (Clock, Temp, Artist)
         if self.lyrics_active_mode and self.current_lyrics_items:
             items.extend(self.current_lyrics_items)
         else:
@@ -128,12 +126,10 @@ class PixooHub:
                  self.cached_static_items = await self._build_text_items_list(getattr(self.media_data, 'lyrics_font_color', "#FFFFFF"), getattr(self.media_data, 'background_color', "#000000"), scope="static")
             items.extend(self.cached_static_items)
             
-        # 2. Progress Bar
         if self.config.progress_bar_enabled:
             pb = await self.progress_manager.get_payload_item(self.media_data)
             if pb: items.extend(pb)
             
-        # 3. Send if layout changed
         hsh = hash(str(items))
         if hsh != self.last_text_payload_hash:
             await self.pixoo_device.send_command({"Command": "Draw/SendHttpItemList", "ItemList": items})
@@ -261,7 +257,6 @@ class PixooHub:
             if self.sensor:
                 self.sensor.update_state(f"{self.media_data.artist} - {self.media_data.title}", sensor_attrs)
 
-            # Start Lyrics logic ONLY after image and initial text is sent!
             if self.config.show_lyrics and self.media_data.lyrics:
                 self.lyrics_active_mode = True
                 await self._calculate_and_schedule_next()
@@ -356,14 +351,17 @@ class PixooHub:
             pos += elapsed - float(self.config.lyrics_sync)
         
         try:
-            if hasattr(self.lyrics_provider, 'lyrics'):
-                self.lyrics_provider.lyrics = self.media_data.lyrics
-            layout, delay = self.lyrics_provider.get_refresh_plan(pos)
-        except TypeError:
-            layout, delay = self.lyrics_provider.get_refresh_plan(self.media_data.lyrics, pos)
+            # תיקון קריטי: העברת המילים ישירות למנוע החישוב
+            if hasattr(self.lyrics_provider, 'get_refresh_plan'):
+                layout, delay = self.lyrics_provider.get_refresh_plan(pos, lyrics_list=self.media_data.lyrics)
+            else:
+                layout, delay = None, None
         except Exception as e:
-            _LOGGER.error("Lyrics error: %s", e)
-            layout, delay = None, None
+            try:
+                layout, delay = self.lyrics_provider.get_refresh_plan(pos)
+            except Exception as backup_e:
+                _LOGGER.error(f"Lyrics Error: {backup_e}")
+                layout, delay = None, None
 
         self.current_lyrics_items = []
         if layout is not None:

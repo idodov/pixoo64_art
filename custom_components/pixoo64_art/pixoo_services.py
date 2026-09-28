@@ -64,9 +64,14 @@ class Config:
     def __init__(self, entry):
         data = entry.data
         options = entry.options
+        
+        self.args = {**data, **options}
+
         self.media_player = data.get("media_player", "media_player.living_room")
         self.pixoo_ip = data.get("pixoo_ip")
         self.pixoo_url = f"http://{self.pixoo_ip}:80/post"
+        self.ha_url = options.get("ha_url", "http://homeassistant.local:8123")
+        
         self.pollinations = options.get("pollinations_key", "")
         self.ai_fallback = options.get("ai_model", "flux")
         self.spotify_client_id = options.get("spotify_client_id", "")
@@ -76,6 +81,17 @@ class Config:
         self.tidal_client_secret = options.get("tidal_client_secret", "")
         self.lastfm = options.get("lastfm", "")
         self.discogs = options.get("discogs", "")
+
+        self.light = options.get("light", None)
+        self.wled = options.get("wled_ip", None)
+        self.brightness = 255
+        self.effect = 38
+        self.effect_speed = 60
+        self.effect_intensity = 128
+        self.only_at_night = True
+        self.palette = 0
+        self.sound_effect = 0
+
         self.show_text = options.get("show_text", False)
         self.clean_title = True
         self.text_bg = options.get("text_background", True)
@@ -83,8 +99,10 @@ class Config:
         self.special_mode_spotify_slider = False
         self.force_font_color = None
         self.burned = False
+        
         self.crop_borders = options.get("crop_borders", True)
         self.crop_extra = options.get("crop_extra", True)
+        
         self.images_cache = 25
         self.full_control = True
         self.contrast = False
@@ -102,6 +120,7 @@ class Config:
         self.show_lyrics = False
         self.lyrics_font = 190
         self.lyrics_sync = -1 
+
         self.progress_bar_enabled = options.get("progress_bar_enabled", True)
         self.progress_bar_entity = "input_boolean.pixoo64_progress_bar"
         self.progress_bar_character = "-"
@@ -109,6 +128,8 @@ class Config:
         self.progress_bar_resolution = 21
         self.progress_bar_color = "match"
         self.progress_bar_y_offset = 64
+        self.progress_bar_exclude_modes = []
+        self.temperature_sensor = options.get("temperature_entity", None)
         self.force_ai = False
 
 class PixooDevice:

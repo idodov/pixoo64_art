@@ -767,8 +767,7 @@ class LyricsProvider:
         self.current_frame_index: int = -1  
         self.filler_regex = re.compile(r"(?:[\s\W]+(?:oh+|ooh+|yeah|yea|woah|la+|na+)+[\W]*)+$", re.IGNORECASE)
 
-    
-async def get_lyrics(self, artist: Optional[str], title: str, album: Optional[str] = None, duration: int = 0) -> list[dict]:
+    async def get_lyrics(self, artist: Optional[str], title: str, album: Optional[str] = None, duration: int = 0) -> list[dict]:
         if not artist or not title: return []
         new_key = f"{artist}|{title}".lower()
         if new_key == self.current_song_key: return self.lyrics_cache.get(new_key, [])
@@ -784,8 +783,6 @@ async def get_lyrics(self, artist: Optional[str], title: str, album: Optional[st
         fetched_lyrics = []
         base_url_get = "https://lrclib.net/api/get"
         params = { 'artist_name': artist, 'track_name': title }
-        
-        # 1. Try Exact Match First
         try:
             async with self.session.get(base_url_get, params=params, timeout=10) as response:
                 if response.status == 200:
@@ -794,7 +791,6 @@ async def get_lyrics(self, artist: Optional[str], title: str, album: Optional[st
                         fetched_lyrics = self._parse_lrc(data['syncedLyrics'])
         except Exception: pass
 
-        # 2. Fuzzy Search Fallback (הוחזר למקומו)
         if not fetched_lyrics:
             try:
                 base_url_search = "https://lrclib.net/api/search"

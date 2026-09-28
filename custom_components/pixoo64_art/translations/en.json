@@ -9,21 +9,33 @@
           "media_player": "Media Player Entity"
         },
         "data_description": {
-          "pixoo_ip": "The local IP address of your Pixoo64.",
-          "media_player": "Select the primary media player."
+          "pixoo_ip": "The local IP address of your Pixoo64 device.",
+          "media_player": "Select the primary media player to track."
         }
       },
       "advanced": {
         "title": "APIs & Sensors (Step 2/2)",
-        "description": "Configure APIs, Temperature, and Lights. These are optional but highly recommended.",
+        "description": "Configure APIs, Temperature, and Lights.\n\n💡 **Note:** All fields on this page are completely **optional**, but highly recommended for the best experience. Leave blank if you don't use them.",
         "data": {
-          "spotify_client_id": "Spotify Client ID (Optional)",
-          "spotify_client_secret": "Spotify Client Secret (Optional)",
-          "pollinations_key": "Pollinations AI Key (Optional)",
+          "spotify_client_id": "Spotify Client ID",
+          "spotify_client_secret": "Spotify Client Secret",
+          "tidal_client_id": "Tidal Client ID",
+          "tidal_client_secret": "Tidal Client Secret",
+          "lastfm_key": "Last.fm API Key",
+          "discogs_token": "Discogs Token",
+          "pollinations_key": "Pollinations AI Key",
           "musicbrainz_enabled": "Enable MusicBrainz Fallback",
-          "temperature_entity": "Temperature Sensor (Optional)",
-          "light_entity": "Sync HA Light (Optional)",
-          "wled_ip": "WLED IP Address (Optional)"
+          "temperature_entity": "Temperature Sensor",
+          "light_entity": "Sync HA Lights",
+          "wled_ip": "WLED IP Address"
+        },
+        "data_description": {
+          "spotify_client_id": "Highly recommended for 100% accurate album art. [Get your free key here](https://developer.spotify.com/dashboard).",
+          "tidal_client_id": "Required only if you stream via Tidal. [Get your free key here](https://developer.tidal.com/).",
+          "lastfm_key": "Backup source for album covers. [Get your free key here](https://www.last.fm/api/account/create).",
+          "discogs_token": "Backup source for album covers. [Get your free key here](https://www.discogs.com/settings/developers).",
+          "pollinations_key": "Generates AI conceptual art if no cover is found. [Get a free key here](https://enter.pollinations.ai/keys).",
+          "light_entity": "Select one or more RGB lights to automatically sync with the album cover's dominant colors."
         }
       }
     },
@@ -35,15 +47,27 @@
     "step": {
       "init": {
         "title": "Advanced Settings & APIs",
-        "description": "Update your API keys and connected entities.",
+        "description": "Update your API keys and connected entities.\n\n💡 **Note:** All fields are **optional**.",
         "data": {
           "spotify_client_id": "Spotify Client ID",
           "spotify_client_secret": "Spotify Client Secret",
+          "tidal_client_id": "Tidal Client ID",
+          "tidal_client_secret": "Tidal Client Secret",
+          "lastfm_key": "Last.fm API Key",
+          "discogs_token": "Discogs Token",
           "pollinations_key": "Pollinations AI Key",
           "musicbrainz_enabled": "Enable MusicBrainz Fallback",
           "temperature_entity": "Temperature Sensor",
-          "light_entity": "Sync HA Light",
+          "light_entity": "Sync HA Lights",
           "wled_ip": "WLED IP Address"
+        },
+        "data_description": {
+          "spotify_client_id": "Highly recommended for 100% accurate album art. [Get your free key here](https://developer.spotify.com/dashboard).",
+          "tidal_client_id": "Required only if you stream via Tidal. [Get your free key here](https://developer.tidal.com/).",
+          "lastfm_key": "Backup source for album covers. [Get your free key here](https://www.last.fm/api/account/create).",
+          "discogs_token": "Backup source for album covers. [Get your free key here](https://www.discogs.com/settings/developers).",
+          "pollinations_key": "Generates AI conceptual art if no cover is found. [Get a free key here](https://enter.pollinations.ai/keys).",
+          "light_entity": "Select one or more RGB lights to automatically sync with the album cover's dominant colors."
         }
       }
     }

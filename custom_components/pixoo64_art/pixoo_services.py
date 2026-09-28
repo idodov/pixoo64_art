@@ -352,7 +352,7 @@ class ImageProcessor:
             _LOGGER.error(f"Error processing image: {e}")
             return None
 
-    ddef img_values(self, img: Image.Image) -> dict:
+    def img_values(self, img: Image.Image) -> dict:
         full_img = img
         analysis_img = full_img.resize((50, 50), Image.Resampling.NEAREST)
         palette = self.get_image_palette(analysis_img) 

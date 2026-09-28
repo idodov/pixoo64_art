@@ -992,6 +992,15 @@ class FallbackService:
 
         return await self._get_fallback_image(media_data)
 
+    async def _process_image_from_url(self, url, media_data):
+        if hasattr(self.image_processor, 'process_image_from_url'):
+            return await self.image_processor.process_image_from_url(url, media_data)
+        elif hasattr(self.image_processor, 'process_image'):
+            return await self.image_processor.process_image(url, media_data)
+        elif hasattr(self.image_processor, 'create_image'):
+            return await self.image_processor.create_image(url, media_data)
+        return self._get_fallback_black_image_data()
+
     async def _try_ai_generation(self, media_data):
         ai_url = media_data.format_ai_image_prompt(media_data.artist, media_data.title)
         if not ai_url: return None

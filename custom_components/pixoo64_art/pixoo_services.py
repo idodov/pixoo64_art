@@ -394,45 +394,48 @@ class ImageProcessor:
         }
 
     def text_clock_img(self, img: Image.Image, cached_data: dict, media_data: "MediaData") -> Image.Image:
-        # --- התוספת של BURNED EFFECT ---
+        from PIL import ImageEnhance
+        
+        # --- Burned Effect ---
         if getattr(self.config, 'burned', False):
-            from PIL import ImageEnhance
             img = ImageEnhance.Color(img).enhance(1.5)
             img = ImageEnhance.Contrast(img).enhance(1.2)
             img = ImageEnhance.Brightness(img).enhance(0.7)
             
         brightness_lower_part = cached_data.get('brightness_lower_part', 0.5)
 
-        if media_data.lyrics and getattr(self.config, 'show_lyrics', False) and getattr(self.config, 'text_bg', False) and brightness_lower_part != None and not getattr(media_data, 'playing_radio', False):
-            from PIL import ImageEnhance
+        # --- Lyrics Background Darkening ---
+        if media_data.lyrics and getattr(self.config, 'show_lyrics', False) and getattr(self.config, 'text_bg', False) and brightness_lower_part is not None and not getattr(media_data, 'playing_radio', False):
             img = ImageEnhance.Brightness(img).enhance(0.55)
             img = ImageEnhance.Contrast(img).enhance(0.5)
 
-        if self.config.text_bg and not self.config.show_lyrics:
+        # --- Regular Background Darkening ---
+        if getattr(self.config, 'text_bg', False) and not getattr(self.config, 'show_lyrics', False):
             info_y_start = 55 if getattr(self.config, 'info_position', 'Top') == 'Bottom' else 2
             
-            if self.config.show_clock:
+            if getattr(self.config, 'show_clock', True):
                 lpc = (43, info_y_start, 62, info_y_start + 7) if getattr(self.config, 'clock_align', 'Right') == "Right" else (2, info_y_start, 21, info_y_start + 7)
-                lp_img = img.crop(lpc)
-                img.paste(ImageEnhance.Brightness(lp_img).enhance(0.3), lpc)
+                try:
+                    lp_img = img.crop(lpc)
+                    img.paste(ImageEnhance.Brightness(lp_img).enhance(0.3), lpc)
+                except Exception: pass
 
-            if self.config.temperature:
+            if getattr(self.config, 'temperature', False):
                 lpc = (2, info_y_start, 18, info_y_start + 7) if getattr(self.config, 'clock_align', 'Right') == "Right" else (47, info_y_start, 63, info_y_start + 7)
+                try:
+                    lp_img = img.crop(lpc)
+                    img.paste(ImageEnhance.Brightness(lp_img).enhance(0.3), lpc)
+                except Exception: pass
+
+        if getattr(self.config, 'text_bg', False) and getattr(self.config, 'show_text', True) and not getattr(self.config, 'show_lyrics', False) and not getattr(media_data, 'playing_tv', False):
+            lpc = (0, 0, 64, 16) if getattr(self.config, 'top_text', False) else (0, 48, 64, 64)
+            try:
                 lp_img = img.crop(lpc)
-                img.paste(ImageEnhance.Brightness(lp_img).enhance(0.3), lpc)
+                img.paste(ImageEnhance.Brightness(lp_img).enhance(brightness_lower_part), lpc)
+            except Exception: pass
 
-        # אזור הצללה של טקסט (אמן/שיר)
-        if self.config.text_bg and self.config.show_text and not self.config.show_lyrics and not getattr(media_data, 'playing_tv', False):
-            if getattr(self.config, 'top_text', False):
-                lpc = (0, 0, 64, 16)
-            else:
-                lpc = (0, 48, 64, 64)
-            lp_img = img.crop(lpc)
-            img.paste(ImageEnhance.Brightness(lp_img).enhance(brightness_lower_part), lpc)
-
-        # אזור הצללה של שורת התקדמות
         if getattr(media_data, 'show_progress_bar', False):
-            y_bottom = self.config.progress_bar_y_offset - 1
+            y_bottom = getattr(self.config, 'progress_bar_y_offset', 63) - 1
             if y_bottom >= 63: y_bottom = 63
             y_top = y_bottom - 1 
             try:

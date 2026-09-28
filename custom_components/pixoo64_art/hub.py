@@ -356,7 +356,6 @@ class PixooHub:
             pos += elapsed - float(self.config.lyrics_sync)
         
         try:
-            # הזרקה בטוחה של המילים פנימה כדי למנוע קריסה
             if hasattr(self.lyrics_provider, 'lyrics'):
                 self.lyrics_provider.lyrics = self.media_data.lyrics
             layout, delay = self.lyrics_provider.get_refresh_plan(pos)

@@ -2,7 +2,7 @@
 import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 
 from .const import DOMAIN
 from .hub import PixooHub
@@ -25,9 +25,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     
-    # הפעלה יזומה של ה-Hub מיד כשהאינטגרציה נטענת
     hass.async_create_task(hub.initialize())
 
+    async def handle_send_notification(call: ServiceCall):
+        await hub.async_handle_notification_service(call)
+
+    hass.services.async_register(
+        DOMAIN,
+        "send_notification",
+        handle_send_notification
+    )
+
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+    
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -39,5 +49,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
+        
+    if not hass.data[DOMAIN]:
+        hass.services.async_remove(DOMAIN, "send_notification")
 
     return unload_ok
+
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload config entry when options change."""
+    await hass.config_entries.async_reload(entry.entry_id)

@@ -88,6 +88,7 @@ class Config:
         self.wled_ip = get_val("wled_ip", "")
         self.light_entity = get_val("light_entity", [])
         self.only_at_night = get_val("only_at_night", True)
+        self.tv_mode = get_val("tv_mode", False)
         
         self.show_text = False
         self.clean_title = True
@@ -210,13 +211,21 @@ class ImageProcessor:
                     except Exception: base_url = "http://127.0.0.1:8123"
                     url = f"{base_url}{picture}"
 
-                async with self.session.get(url, timeout=30) as response:
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                api_key = getattr(self.config, 'pollinations', "")
+                if "pollinations.ai" in url and api_key:
+                    headers["Authorization"] = f"Bearer {str(api_key).strip()}"
+
+                async with self.session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=45)) as response:
                     if response.status == 200:
                         image_data = await response.read()
                         cached_data = await self.process_image_data(image_data, media_data)
                         if cached_data and not spotify_slide:
                             if len(self.image_cache) >= self.cache_size: self.image_cache.popitem(last=False)
                             self.image_cache[cache_key] = cached_data
+                    else:
+                        err_resp = await response.text()
+                        _LOGGER.warning("Failed to download image (HTTP %s): %s", response.status, err_resp[:150])
             except Exception as e:
                 _LOGGER.error("Error fetching/processing image: %s", e)
                 return None
@@ -1401,12 +1410,44 @@ class MediaData:
             raw_artist = attributes.get('media_artist')
             app_name = attributes.get('app_name')
 
+            app_lower = str(app_name or "").lower()
+            title_lower = str(raw_title or "").lower()
+            source_lower = str(attributes.get('source') or "").lower()
+            channel_lower = str(attributes.get('media_channel') or "").lower()
+
+            is_tv = (
+                raw_title == "TV"
+                or title_lower == "tv"
+                or app_lower == "tv"
+                or source_lower == "tv"
+                or channel_lower == "tv"
+                or "netflix" in app_lower
+                or "youtube" in app_lower
+                or "disney" in app_lower
+                or "live tv" in app_lower
+                or "audio return channel" in source_lower
+            )
+
+            if is_tv and (not raw_artist or raw_artist == "TV" or raw_title == "TV" or "netflix" in app_lower or "youtube" in app_lower or source_lower == "tv"):
+                self.artist = "TV"
+                self.title = "TV"
+                self.title_original = "TV"
+                self.playing_tv = True
+                self.picture = "TV_IS_ON_ICON" if getattr(self.config, 'tv_mode', False) else "TV_IS_ON"
+                self.lyrics = []
+                self.show_progress_bar = False
+                
+                self.track_changed = (self.title != self.prev_title or self.artist != self.prev_artist)
+                self.prev_title, self.prev_artist = self.title, self.artist
+                return self
+
             if raw_title is None or str(raw_title).strip() == "":
                 if app_name and str(app_name).strip() != "": raw_title = app_name
                 else: return None
 
             if (raw_artist is None or str(raw_artist).strip() == "") and app_name: raw_artist = app_name
 
+            self.playing_tv = False
             self.title_original = raw_title
             self.title = self.clean_title(raw_title) if self.config.clean_title else raw_title
             self.artist = raw_artist if raw_artist else ""
@@ -1429,8 +1470,6 @@ class MediaData:
             elif pos_updated_at_str: self.media_position_updated_at = datetime.fromisoformat(pos_updated_at_str.replace('Z', '+00:00'))
             else: self.media_position_updated_at = None
 
-            self.playing_tv = "netflix" in str(app_name).lower() or "youtube" in str(app_name).lower() or raw_title == "TV"
-            
             media_content_id = attributes.get('media_content_id')
             media_channel = attributes.get('media_channel')
             if media_channel and (media_content_id and (media_content_id.startswith("x-rincon") or media_content_id.startswith("aac://http") or media_content_id.startswith("rtsp://"))): 
@@ -1452,23 +1491,47 @@ class MediaData:
             return None
 
     def format_ai_image_prompt(self, artist: Optional[str], title: str) -> Optional[str]: 
-        artist_name = artist if artist else 'Pixoo64' 
-        clean_artist = artist_name.replace("/", "-").replace("\\", "-")
-        clean_title = title.replace("/", "-").replace("\\", "-")
+        api_key = getattr(self.config, 'pollinations', "")
+        
+        if not api_key or not isinstance(api_key, str) or len(api_key.strip()) <= 5:
+            _LOGGER.warning("Skipping AI Art generation: 'pollinations_key' is missing or invalid.")
+            return None
+
+        artist_name = artist if artist else 'Music' 
+        clean_artist = artist_name.replace("/", " ").replace("\\", " ").strip()
+        clean_title = title.replace("/", " ").replace("\\", " ").strip()
         
         prompts = [
-            f"Double exposure album cover blending the face of {clean_artist} with a silhouette scene representing '{clean_title}', high contrast, surreal art",
-            f"Surreal portrait of {clean_artist} where their mind is opening up to reveal '{clean_title}', vibrant colors, dali-esque dreamscape, digital art",
-            f"Pop art portrait of {clean_artist} surrounded by floating icons and symbols of '{clean_title}', Andy Warhol style, bold colors, thick lines",
-            f"A moody portrait of {clean_artist}, surrounded by a weather and atmosphere that matches the song '{clean_title}', cinematic lighting, emotional"
+            f"Minimalist vibrant vector album art for '{clean_title}' by {clean_artist}, bold geometric shapes, high contrast, clean graphics, flat color blocks, no text, no words",
+            f"Pop art colorful iconic album artwork representing '{clean_title}' by {clean_artist}, vivid neon palette, strong silhouette, Andy Warhol aesthetic, no letters, no typography",
+            f"Surreal symbolic dreamscape album cover for '{clean_title}' by {clean_artist}, dramatic rim lighting, vivid celestial palette, clean focal subject, no font, no text",
+            f"Retro synthwave album art for '{clean_title}' by {clean_artist}, deep black background, glowing magenta and cyan grid elements, high contrast, 1980s aesthetic, no words, no font",
+            f"16-bit arcade pixel art album cover representing '{clean_title}' by {clean_artist}, vibrant nostalgic color palette, iconic retro video game boss aesthetic, crisp sprites, no text, no characters",
+            f"Luminous stained glass mosaic album artwork depicting '{clean_title}' by {clean_artist}, thick black outlines, glowing saturated jewel tones, cathedral glass design, no letters, no words",
+            f"Moody graphic novel album cover for '{clean_title}' by {clean_artist}, heavy ink shadows, stark high contrast flat colors, bold dramatic silhouette, comic book art, no text, no speech bubbles",
+            f"Bauhaus modernist constructivism album art for '{clean_title}' by {clean_artist}, primary colors, stark geometric balance, abstract modernist icon, clean sharp edges, no text, no font",
+            f"Mystical symbolic Tarot card artwork for '{clean_title}' by {clean_artist}, bold central iconic talisman, deep gold and obsidian palette, sharp ornamental frame, flat mystical illustration, no typography, no words",
+            f"Modern Japanese woodblock ukiyo-e style album art for '{clean_title}' by {clean_artist}, bold black ink brushlines, vibrant flat color fills, iconic traditional wave and mountain aesthetic, no text, no kanji, no letters"
         ]
         
-        encoded_prompt = urllib.parse.quote(random.choice(prompts), safe='')
-        url_params = f"?model={self.config.ai_fallback}&width=1024&height=1024&seed={random.randint(1, 2147483647)}"
+        song_signature = f"{clean_artist}_{clean_title}".lower()
+        prompt_index = abs(hash(song_signature)) % len(prompts)
+        selected_prompt = prompts[prompt_index]
+        encoded_prompt = urllib.parse.quote(selected_prompt, safe='')
         
-        api_key = getattr(self.config, 'pollinations', "")
-        if api_key and isinstance(api_key, str) and len(api_key) > 5:
-            url_params += f"&key={api_key.strip()}"
+        seed = abs(hash(song_signature)) % 2147483647
+
+        user_model = str(getattr(self.config, 'ai_fallback', 'flux') or 'flux').lower().strip()
+        if user_model in ["turbo", "lightning"]:
+            model = "inferenceport-ai/lightning-image-turbo"
+        elif user_model in ["flux", "schnell"]:
+            model = "black-forest-labs/flux.1-schnell"
+        elif user_model == "vector":
+            model = "recraft/recraft-v4.1-vector"
+        else:
+            model = user_model
+
+        url_params = f"?model={model}&width=512&height=512&seed={seed}&nologo=true&key={api_key.strip()}"
             
         return f"https://gen.pollinations.ai/image/{encoded_prompt}{url_params}"
 
@@ -1482,27 +1545,50 @@ class FallbackService:
         self.tidal_token_cache: dict[str, Any] = {'token': None, 'expires': 0}
         self.fail_txt = False
         self.fallback = False
+        self._artwork_cache: OrderedDict[str, dict] = OrderedDict()
+        self._last_mb_query: float = 0.0
 
     async def get_final_url(self, picture: Optional[str], media_data: "MediaData") -> Optional[dict]: 
         self.fail_txt = False
         self.fallback = False
         media_data.pic_url = None 
+        song_cache_key = f"{media_data.artist}_{media_data.title}".strip().lower()
         
-        if picture:
-            media_data.pic_url = picture if picture.startswith('http') else f"http://127.0.0.1:8123{picture}"
-        
-        if getattr(self.config, 'force_ai', False) and not getattr(media_data, 'radio_logo', False) and not getattr(media_data, 'playing_tv', False):
-            return await self._try_ai_generation(media_data)
+        if getattr(self.config, 'force_ai', False) and getattr(self.config, 'pollinations', None) and not getattr(media_data, 'radio_logo', False) and not getattr(media_data, 'playing_tv', False):
+            ai_res = await self._try_ai_generation(media_data)
+            if ai_res:
+                return ai_res
+            _LOGGER.warning("Force AI generation failed; falling back to standard artwork.")
 
         if picture == "TV_IS_ON_ICON":
             media_data.pic_source = "Internal"
-            tv_img = Image.new("RGB", (64, 64), (0, 0, 0))
-            return {'base64_image': self.image_processor.gbase64(tv_img), 'font_color': '#ff00ff', 'background_color': '#000000'}
+            media_data.pic_url = "TV Icon"
+            tv_icon_img = self.create_tv_icon_image()
+            tv_icon_base64 = self.image_processor.gbase64(tv_icon_img)
+            return { 
+                'base64_image': tv_icon_base64,
+                'font_color': '#FF00FF',
+                'brightness': 0.67,
+                'brightness_lower_part': 0.5,
+                'background_color': '#000000',
+                'background_color_rgb': (0, 0, 0),
+                'color1': '#000000',
+                'color2': '#000000',
+                'color3': '#000000'
+            }
+
+        if not getattr(self.config, 'force_ai', False) and song_cache_key in self._artwork_cache:
+            cached = self._artwork_cache[song_cache_key]
+            media_data.pic_url = cached['url']
+            media_data.pic_source = cached['source']
+            _LOGGER.debug("Reusing resolved artwork for '%s' from %s", song_cache_key, cached['source'])
+            return cached['data']
 
         try:
             if picture and not (getattr(media_data, 'playing_radio', False) and not getattr(media_data, 'radio_logo', False)):
                 result = await self.image_processor.get_image(picture, media_data, getattr(media_data, 'spotify_slide_pass', False))
                 if result:
+                    self._save_to_artwork_cache(song_cache_key, result, picture, "Original")
                     media_data.pic_source = "Original"
                     media_data.pic_url = picture
                     return result
@@ -1515,26 +1601,22 @@ class FallbackService:
         if getattr(self.config, 'spotify_client_id', None) and getattr(self.config, 'spotify_client_secret', None):
             try:
                 album_id, first_album = await self.spotify_service.get_spotify_album_id(media_data)
-                
                 if first_album:
                     self.spotify_first_album = await self.spotify_service.get_spotify_album_image_url(first_album)
-                
                 if album_id:
                     image_url = await self.spotify_service.get_spotify_album_image_url(album_id)
                     if image_url:
-                        result = await self.image_processor.get_image(image_url, media_data, getattr(media_data, 'spotify_slide_pass', False))
-                        if result:
+                        proc_res = await self.image_processor.get_image(image_url, media_data, getattr(media_data, 'spotify_slide_pass', False))
+                        if proc_res:
+                            self._save_to_artwork_cache(song_cache_key, proc_res, image_url, "Spotify")
                             media_data.pic_url = image_url
                             media_data.pic_source = "Spotify"
-                            return result
-                
+                            return proc_res
                 self.spotify_artist_pic = await self.spotify_service.get_spotify_artist_image_url_by_name(media_data.artist)
             except Exception as e: 
                 _LOGGER.error("Spotify fallback failed: %s", e) 
         
-        tasks = []
-        providers = []
-
+        tasks, providers = [], []
         if getattr(self.config, 'discogs', None):
             tasks.append(self.search_discogs_album_art(media_data.artist, media_data.title))
             providers.append("Discogs")
@@ -1552,10 +1634,10 @@ class FallbackService:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for i, result in enumerate(results):
                 if isinstance(result, Exception) or not result: continue
-                
                 provider_name = providers[i]
                 proc_result = await self.image_processor.get_image(result, media_data, getattr(media_data, 'spotify_slide_pass', False))
                 if proc_result:
+                    self._save_to_artwork_cache(song_cache_key, proc_result, result, provider_name)
                     media_data.pic_url = result
                     media_data.pic_source = provider_name
                     return proc_result
@@ -1563,13 +1645,18 @@ class FallbackService:
         if self.spotify_artist_pic:
             result = await self.image_processor.get_image(self.spotify_artist_pic, media_data, getattr(media_data, 'spotify_slide_pass', False))
             if result:
+                self._save_to_artwork_cache(song_cache_key, result, self.spotify_artist_pic, "Spotify Artist")
                 media_data.pic_source = "Spotify Artist"
                 return result
 
-        result = await self._try_ai_generation(media_data)
-        if result: 
-            media_data.pic_source = "AI"
-            return result
+        if not getattr(self.config, 'force_ai', False) and getattr(self.config, 'pollinations', None):
+            _LOGGER.info("No cover art found anywhere. Invoking AI as final fallback.")
+            result = await self._try_ai_generation(media_data)
+            if result: 
+                if media_data.pic_url:
+                    self._save_to_artwork_cache(song_cache_key, result, media_data.pic_url, "AI")
+                media_data.pic_source = "AI"
+                return result
 
         if self.spotify_first_album:
             result = await self.image_processor.get_image(self.spotify_first_album, media_data, getattr(media_data, 'spotify_slide_pass', False))
@@ -1580,19 +1667,35 @@ class FallbackService:
 
         media_data.pic_url = "Black Screen"
         media_data.pic_source = "Internal"
-        return self._get_fallback_black_image_data() 
+        return self._get_fallback_black_image_data()
+
+    def _save_to_artwork_cache(self, key: str, data: dict, url: str, source: str):
+        """Saves fully processed artwork in memory cache."""
+        if len(self._artwork_cache) >= 50:
+            self._artwork_cache.popitem(last=False)
+        self._artwork_cache[key] = {
+            'data': data,
+            'url': url,
+            'source': source
+        }
 
     async def _try_ai_generation(self, media_data):
         ai_url = media_data.format_ai_image_prompt(media_data.artist, media_data.title)
         if not ai_url: return None
         for attempt in range(2):
             try:
-                result = await asyncio.wait_for(self.image_processor.get_image(ai_url, media_data, False), timeout=25)
+                _LOGGER.info("Generating AI cover art (Attempt %d/2)...", attempt + 1)
+                result = await asyncio.wait_for(self.image_processor.get_image(ai_url, media_data, False), timeout=35)
                 if result: 
                     media_data.pic_url = ai_url
+                    media_data.pic_source = "AI"
                     return result
-            except Exception:
-                if attempt < 1: await asyncio.sleep(1.5)
+            except asyncio.TimeoutError:
+                _LOGGER.warning("AI generation timed out (Attempt %d/2)", attempt + 1)
+            except Exception as e:
+                _LOGGER.warning("AI generation failed (Attempt %d/2): %s", attempt + 1, e)
+            if attempt < 1: 
+                await asyncio.sleep(1.0)
         return None
 
     def _get_fallback_black_image_data(self) -> dict: 
@@ -1606,9 +1709,21 @@ class FallbackService:
         }
 
     async def get_musicbrainz_album_art_url(self, ai_artist: str, ai_title: str) -> Optional[str]: 
+        now = time.monotonic()
+        elapsed = now - getattr(self, '_last_mb_query', 0.0)
+        if elapsed < 1.1:
+            await asyncio.sleep(1.1 - elapsed)
+        self._last_mb_query = time.monotonic()
+
         search_url = "https://musicbrainz.org/ws/2/release/"
-        headers = { "Accept": "application/json", "User-Agent": "PixooClient/1.0" }
-        params = { "query": f'artist:"{ai_artist}" AND recording:"{ai_title}"', "fmt": "json" }
+        headers = { 
+            "Accept": "application/json", 
+            "User-Agent": "Pixoo64MediaArt/1.0 (https://github.com/idodov/pixoo64_art)" 
+        }
+        clean_artist = str(ai_artist or "").replace('"', '').strip()
+        clean_title = str(ai_title or "").replace('"', '').strip()
+        params = { "query": f'artist:"{clean_artist}" AND recording:"{clean_title}"', "fmt": "json" }
+        
         try:
             async with self.session.get(search_url, params=params, headers=headers, timeout=10) as response: 
                 if response.status != 200: return None
@@ -1617,7 +1732,7 @@ class FallbackService:
                 release_id = data["releases"][0]["id"]
                 cover_art_url = f"https://coverartarchive.org/release/{release_id}"
                 try: 
-                    async with self.session.get(cover_art_url, headers=headers, timeout=20) as art_response: 
+                    async with self.session.get(cover_art_url, headers=headers, timeout=15) as art_response: 
                         if art_response.status != 200: return None
                         art_data = await art_response.json()
                         for image in art_data.get("images", []):
@@ -1690,6 +1805,85 @@ class FallbackService:
                 return access_token
         except Exception: return None
 
+    def create_tv_icon_image(self) -> Image.Image: 
+        """Draw classic retro TV set with SMPTE rainbow test bars and antennas."""
+        image_width = 300
+        image_height = 300
+        final_width = 64
+        final_height = 64
+        vertical_offset = 10
+        black = (0, 0, 0)
+        brown = (139, 69, 19)  
+        screen_bg = (240, 240, 240) 
+        white = (255, 255, 255)
+        gray = (150, 150, 150)
+        rainbow_colors = [
+            (255, 0, 0),     # Red
+            (255, 165, 0),   # Orange
+            (255, 255, 0),   # Yellow
+            (0, 255, 0),     # Green
+            (0, 0, 255),     # Blue
+            (75, 0, 130),    # Indigo
+            (238, 130, 238)  # Violet
+        ]
+        image = Image.new("RGB", (image_width, image_height), black)
+        draw = ImageDraw.Draw(image)
+        tv_body_padding = 60 + vertical_offset  
+        tv_body_rect = [
+            tv_body_padding,
+            tv_body_padding,
+            image_width - tv_body_padding,
+            image_height - tv_body_padding - 40
+        ]
+        tv_body_radius = 20
+        draw.rounded_rectangle(tv_body_rect, tv_body_radius, fill=brown)
+        screen_padding = tv_body_padding + 15 
+        screen_rect = [
+            screen_padding,
+            screen_padding,
+            image_width - screen_padding,
+            tv_body_rect[3] - 15
+        ]
+        draw.rectangle(screen_rect, fill=screen_bg)
+        num_bars = len(rainbow_colors)
+        bar_width = (screen_rect[2] - screen_rect[0]) // num_bars
+        start_x = screen_rect[0]
+        for color in rainbow_colors:
+            bar_rect = [
+                start_x,
+                screen_rect[1],
+                start_x + bar_width,
+                screen_rect[3]
+            ]
+            draw.rectangle(bar_rect, fill=color)
+            start_x += bar_width
+        antenna_color = gray
+        antenna_thickness = 3
+        antenna_length = 50
+        antenna_base_x1 = image_width // 2 - 30
+        antenna_base_x2 = image_width // 2 + 30
+        antenna_base_y = tv_body_padding  
+        draw.line(
+            (antenna_base_x1, antenna_base_y, antenna_base_x1 - 20, antenna_base_y - antenna_length),
+            fill=antenna_color, width=antenna_thickness
+        )
+        draw.line(
+            (antenna_base_x2, antenna_base_y, antenna_base_x2 + 20, antenna_base_y - antenna_length),
+            fill=antenna_color, width=antenna_thickness
+        )
+        highlight_color = white
+        highlight_thickness = 4
+        draw.line(
+            (tv_body_rect[0], tv_body_rect[1], tv_body_rect[0] + 20, tv_body_rect[1]),
+            fill=highlight_color, width=highlight_thickness
+        )
+        draw.line(
+            (tv_body_rect[0], tv_body_rect[1], tv_body_rect[0], tv_body_rect[1] + 20),
+            fill=highlight_color, width=highlight_thickness
+        )
+        image = image.resize((final_width, final_height), Image.Resampling.BILINEAR)
+        return image
+            
 class ProgressBarManager:
     def __init__(self, config: "Config", hass: HomeAssistant):
         self.config = config

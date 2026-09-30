@@ -30,6 +30,7 @@ class PixooRestoreSwitch(SwitchEntity, RestoreEntity):
     def __init__(self, hub, entry, key, name, default_val, icon):
         """Initialize the switch."""
         self.hub = hub
+        self.entry = entry
         self.key = key
         self._attr_name = f"Pixoo64 {name}"
         self._attr_unique_id = f"{entry.entry_id}_{key}"
@@ -47,6 +48,13 @@ class PixooRestoreSwitch(SwitchEntity, RestoreEntity):
             model="Pixoo 64",
         )
 
+    @property
+    def available(self) -> bool:
+        """Return False if force_ai is selected but no AI key is configured."""
+        if self.key == "force_ai":
+            return self.hub.is_ai_available
+        return True
+
     async def async_added_to_hass(self):
         """Run when entity about to be added to hass."""
         await super().async_added_to_hass()
@@ -54,11 +62,17 @@ class PixooRestoreSwitch(SwitchEntity, RestoreEntity):
         
         if last_state is not None:
             self._attr_is_on = last_state.state == "on"
+
+        if self.key == "force_ai" and not self.hub.is_ai_available:
+            self._attr_is_on = False
             
         self.hub.ui_state[self.key] = self._attr_is_on
 
     async def async_turn_on(self, **kwargs):
         """Turn the entity on."""
+        if not self.available:
+            _LOGGER.warning("Cannot turn on Force AI Art: Pollinations API key is not configured.")
+            return
         self._attr_is_on = True
         self.async_write_ha_state()
         await self.hub.async_ui_update(self.key, True)

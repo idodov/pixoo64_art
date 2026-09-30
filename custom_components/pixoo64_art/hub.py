@@ -178,17 +178,19 @@ class PixooHub:
             self.media_data.temperature = None
 
     def request_text_render(self):
+        if self.notification_manager.is_active: return
         if self._pending_render_unsub:
             self._pending_render_unsub()
         self._pending_render_unsub = async_call_later(self.hass, 0.2, self._execute_text_render)
 
     async def _execute_text_render(self, now=None):
         self._pending_render_unsub = None
+        if self.notification_manager.is_active: return
         await self._render_and_send_text_layers()
 
     async def _render_and_send_text_layers(self):
         """Builds and sends the text and overlay layers over the current image."""
-        if not self.is_art_visible: return
+        if not self.is_art_visible or self.notification_manager.is_active: return
         items = []
         
         if self.lyrics_active_mode and self.current_lyrics_items:
@@ -309,6 +311,7 @@ class PixooHub:
             pass
 
     async def _handle_media_change(self, event):
+        if self.notification_manager.is_active: return
         master_control = self.ui_state.get("master_control", True)
         if not master_control: return
         
@@ -600,24 +603,39 @@ class PixooHub:
         self.current_lyrics_items = []
 
     async def async_handle_notification_service(self, call):
-        """Handle incoming notification service calls with buzzer support and smart restore."""
+        """Handle incoming notification service calls with buzzer support, animation sequencing, and full control handling."""
         message = call.data.get("message")
         if not message:
             return
 
         previous_channel = 0
+        was_screen_on = True
         try:
             previous_channel = await self.pixoo_device.get_current_channel_index()
+            was_screen_on = await self.pixoo_device.get_screen_on_state()
         except Exception as e:
-            _LOGGER.debug("Could not get current channel before notify: %s", e)
+            _LOGGER.debug("Could not get channel/screen state before notification: %s", e)
+
+        media_state = self.hass.states.get(self.media_player)
+        is_media_playing = media_state and media_state.state in ["playing", "on"]
+        if not is_media_playing and getattr(self.config, 'full_control', False) and not self.is_art_visible:
+            was_screen_on = False
+
+        self.notification_manager.is_active = True
 
         self._stop_lyrics_scheduler()
+        if self._pending_render_unsub:
+            self._pending_render_unsub()
+            self._pending_render_unsub = None
         if self._progress_timer_unsub:
             self._progress_timer_unsub()
             self._progress_timer_unsub = None
         if self.current_task and not self.current_task.done():
             self.current_task.cancel()
             self.current_task = None
+        if self.debounce_task and not self.debounce_task.done():
+            self.debounce_task.cancel()
+            self.debounce_task = None
 
         event_data = {
             "message": message,
@@ -632,19 +650,31 @@ class PixooHub:
 
         await self.notification_manager.display(event_data)
 
-        state = self.hass.states.get(self.media_player)
-        if state and state.state in ["playing", "on"]:
+        rechecked_state = self.hass.states.get(self.media_player)
+        if rechecked_state and rechecked_state.state in ["playing", "on"]:
             self.is_art_visible = False
             await self.force_update()
         else:
-            await self.pixoo_device.send_command({
-                "Command": "Draw/CommandList",
-                "CommandList": [
-                    {"Command": "Draw/ClearHttpText"},
-                    {"Command": "Draw/ResetHttpGifId"},
-                    {"Command": "Channel/SetIndex", "SelectIndex": previous_channel}
-                ]
-            })
+            if getattr(self.config, 'full_control', False) and not was_screen_on:
+                await self.pixoo_device.send_command({
+                    "Command": "Draw/CommandList",
+                    "CommandList": [
+                        {"Command": "Draw/ClearHttpText"},
+                        {"Command": "Draw/ResetHttpGifId"},
+                        {"Command": "Channel/OnOffScreen", "OnOff": 0}
+                    ]
+                })
+                self.is_art_visible = False
+            else:
+                await self.pixoo_device.send_command({
+                    "Command": "Draw/CommandList",
+                    "CommandList": [
+                        {"Command": "Draw/ClearHttpText"},
+                        {"Command": "Draw/ResetHttpGifId"},
+                        {"Command": "Channel/OnOffScreen", "OnOff": 1},
+                        {"Command": "Channel/SetIndex", "SelectIndex": previous_channel}
+                    ]
+                })
 
     async def control_light(self, action: str, rgb_color: tuple = None, is_night: bool = True):
         if not is_night and getattr(self.config, 'only_at_night', False): return

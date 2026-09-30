@@ -163,6 +163,25 @@ class PixooDevice:
                 return response_data.get('SelectIndex', 0)
         except Exception: return 0
 
+    async def get_screen_on_state(self) -> bool: 
+        """Check if the screen is currently powered on via hardware config."""
+        if self.session.closed or not self.config.pixoo_url: 
+            return True
+        try:
+            async with self.session.post(
+                self.config.pixoo_url, 
+                headers=self.headers, 
+                json={"Command": "Channel/GetAllConf"}, 
+                timeout=4
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    # LightSwitch: 1 = On, 0 = Off
+                    return data.get("LightSwitch", 1) == 1
+        except Exception:
+            pass
+        return True
+
 class ImageProcessor:
     def __init__(self, hass: HomeAssistant, config: "Config", session: aiohttp.ClientSession):
         self.hass = hass
@@ -1842,7 +1861,10 @@ class NotificationManager:
                     "PicData": b64_frame
                 })
 
-            await asyncio.sleep(0.15)
+            if total_frames > 1:
+                await asyncio.sleep(0.4)
+            else:
+                await asyncio.sleep(0.1)
 
             text_items = self._create_text_items(lines, hex_color, text_start_y)
             if text_items:
@@ -1879,23 +1901,18 @@ class NotificationManager:
 
     @lru_cache(maxsize=64)
     def _draw_background(self, n_type: str, color: tuple, cy: int, frame_num: int = 0) -> Image.Image:
-        """Draws the border and icon based on notification type and frame number."""
         img = Image.new("RGB", (64, 64), (0, 0, 0))
         draw = ImageDraw.Draw(img)
 
         draw.rectangle([0, 0, 63, 63], outline=color, width=1)
-        
         if n_type == "text": 
             return img
 
         cx = 32
-
-        shift_x = 0
-        shift_y = 0
+        shift_x, shift_y = 0, 0
         
-        if n_type in ["alert", "phone"]:
-            if frame_num == 1: 
-                shift_x = -1 if n_type == "alert" else 1
+        if n_type in ["alert", "phone"] and frame_num == 1:
+            shift_x = -1 if n_type == "alert" else 1
         
         active_color = color
         if n_type == "attack" and frame_num == 1:
@@ -1911,20 +1928,16 @@ class NotificationManager:
 
         if n_type == "v":
             draw.line([(cx-8, cy), (cx-2, cy+8), (cx+10, cy-8)], fill=active_color, width=3)
-
         elif n_type == "x":
             s = 7
             draw.line([(cx-s, cy-s), (cx+s, cy+s)], fill=active_color, width=3)
             draw.line([(cx+s, cy-s), (cx-s, cy+s)], fill=active_color, width=3)
-
         elif n_type == "info":
             draw.ellipse([cx-9, cy-9, cx+9, cy+9], outline=active_color, width=1)
             draw.rectangle([cx-1, cy-2, cx+1, cy+5], fill=active_color) 
             draw.rectangle([cx-1, cy-5, cx+1, cy-4], fill=active_color)
-
         elif n_type == "success":
             draw.line([(cx-6, cy), (cx-2, cy+6), (cx+7, cy-5)], fill=active_color, width=2)
-
         elif n_type in ["warning", "alert"]:
             if n_type == "alert":
                 draw.arc([cx-6, cy-5, cx+6, cy+5], 180, 0, fill=active_color, width=1)
@@ -1938,18 +1951,15 @@ class NotificationManager:
                 draw.polygon([(cx, cy-9), (cx-10, cy+8), (cx+10, cy+8)], outline=active_color, fill=None)
                 draw.line([(cx, cy-3), (cx, cy+3)], fill=active_color, width=1)
                 draw.point((cx, cy+5), fill=active_color)
-
         elif n_type == "error":
             s = 5
             draw.line([(cx-s, cy-s), (cx+s, cy+s)], fill=active_color, width=2)
             draw.line([(cx+s, cy-s), (cx-s, cy+s)], fill=active_color, width=2)
-
         elif n_type == "weather":
             draw.ellipse([cx+2, cy-8, cx+8, cy-2], outline=(255, 215, 0), width=1)
             draw.arc([cx-8, cy-2, cx+2, cy+6], 90, 270, fill=active_color, width=1)
             draw.arc([cx-2, cy-4, cx+8, cy+6], 180, 0, fill=active_color, width=1)
             draw.line([(cx-8, cy+2), (cx+8, cy+2)], fill=active_color, width=1)
-
         elif n_type == "attack":
             draw.line([(cx, cy-9), (cx-3, cy-4)], fill=active_color, width=1)
             draw.line([(cx, cy-9), (cx+3, cy-4)], fill=active_color, width=1)
@@ -1959,83 +1969,63 @@ class NotificationManager:
             fire_color = (255, 165, 0) if frame_num == 0 else (255, 255, 0)
             draw.line([(cx-1, cy+4), (cx-1, cy+7)], fill=fire_color, width=1)
             draw.line([(cx+1, cy+4), (cx+1, cy+7)], fill=fire_color, width=1)
-
         elif n_type == "wifi":
             draw.point((cx, cy+6), fill=active_color)
-            if frame_num >= 1:
-                draw.arc([cx-4, cy, cx+4, cy+8], 225, 315, fill=active_color, width=1)
-            if frame_num >= 2:
-                draw.arc([cx-8, cy-4, cx+8, cy+4], 225, 315, fill=active_color, width=1)
-
+            if frame_num >= 1: draw.arc([cx-4, cy, cx+4, cy+8], 225, 315, fill=active_color, width=1)
+            if frame_num >= 2: draw.arc([cx-8, cy-4, cx+8, cy+4], 225, 315, fill=active_color, width=1)
         elif n_type in ["timer", "time"]:
             draw.ellipse([cx-9, cy-9, cx+9, cy+9], outline=active_color, width=1)
             angle = frame_num * 90
             rad = math.radians(angle - 90)
-            end_x = cx + 6 * math.cos(rad)
-            end_y = cy + 6 * math.sin(rad)
-            draw.line([(cx, cy), (end_x, end_y)], fill=active_color, width=1)
-        
+            draw.line([(cx, cy), (cx + 6 * math.cos(rad), cy + 6 * math.sin(rad))], fill=active_color, width=1)
         elif n_type == "boiler": 
             draw.rectangle([cx-5, cy-8, cx+5, cy+8], outline=active_color, width=1)
             draw.line([(cx+1, cy-4), (cx-2, cy), (cx+2, cy), (cx-1, cy+5)], fill=active_color, width=1)
             draw.point((cx, cy+6), fill=active_color)
-
         elif n_type == "shutter": 
             draw.rectangle([cx-8, cy-8, cx+8, cy+8], outline=active_color, width=1)
             for y_line in range(cy-5, cy+7, 3):
                 draw.line([(cx-6, y_line), (cx+6, y_line)], fill=active_color, width=1)
-
         elif n_type == "car": 
             draw.rectangle([cx-9, cy, cx+9, cy+6], outline=active_color, width=1)
             draw.line([(cx-9, cy), (cx-5, cy-5), (cx+5, cy-5), (cx+9, cy)], fill=active_color, width=1)
             draw.ellipse([cx-7, cy+5, cx-4, cy+8], fill=active_color)
             draw.ellipse([cx+4, cy+5, cx+7, cy+8], fill=active_color)
-
         elif n_type == "washer": 
             draw.rectangle([cx-8, cy-8, cx+8, cy+8], outline=active_color, width=1)
             draw.ellipse([cx-5, cy-5, cx+5, cy+5], outline=active_color, width=1)
             draw.point((cx+6, cy-6), fill=active_color) 
-
         elif n_type == "trash": 
             draw.line([(cx-5, cy+8), (cx+5, cy+8), (cx+7, cy-4), (cx-7, cy-4), (cx-5, cy+8)], fill=active_color, width=1)
             draw.line([(cx-8, cy-4), (cx+8, cy-4)], fill=active_color, width=1)
             draw.rectangle([cx-2, cy-6, cx+2, cy-4], fill=active_color)
-
         elif n_type == "door": 
             draw.rectangle([cx-6, cy-9, cx+6, cy+9], outline=active_color, width=1)
             draw.line([(cx-6, cy-9), (cx+2, cy-6)], fill=active_color, width=1)
             draw.line([(cx+2, cy-6), (cx+2, cy+9)], fill=active_color, width=1)
             draw.line([(cx+2, cy+9), (cx-6, cy+9)], fill=active_color, width=1)
-
         elif n_type == "lock": 
             draw.rectangle([cx-6, cy-2, cx+6, cy+7], fill=active_color)
             draw.arc([cx-5, cy-8, cx+5, cy-1], 180, 0, fill=active_color, width=1)
-
         elif n_type == "mail": 
             draw.rectangle([cx-9, cy-6, cx+9, cy+6], outline=active_color, width=1)
             draw.line([(cx-9, cy-6), (cx, cy+2), (cx+9, cy-6)], fill=active_color, width=1)
-
         elif n_type == "battery": 
             draw.rectangle([cx-8, cy-4, cx+6, cy+4], outline=active_color, width=1)
             draw.rectangle([cx-7, cy-3, cx-2, cy+3], fill=active_color) 
             draw.rectangle([cx+6, cy-2, cx+8, cy+2], fill=active_color) 
-
         elif n_type == "fire": 
             draw.polygon([(cx, cy-8), (cx+5, cy+2), (cx+3, cy+8), (cx-3, cy+8), (cx-5, cy+2)], outline=active_color, fill=None)
             draw.point((cx, cy+5), fill=active_color)
-
         elif n_type == "water": 
             draw.polygon([(cx, cy-8), (cx+5, cy+2), (cx, cy+8), (cx-5, cy+2)], outline=active_color, fill=active_color)
-
         elif n_type == "sleep": 
             draw.arc([cx-6, cy-6, cx+6, cy+6], 90, 270, fill=active_color, width=2)
             draw.line([(cx, cy-6), (cx, cy+6)], fill=active_color, width=1)
-            
         elif n_type == "phone":
             draw.arc([cx-8, cy-4, cx+8, cy+12], 0, 180, fill=active_color, width=2)
             draw.rectangle([cx-9, cy-4, cx-6, cy], fill=active_color)
             draw.rectangle([cx+6, cy-4, cx+9, cy], fill=active_color)
-
         elif n_type == "calendar":
             draw.rectangle([cx-8, cy-7, cx+8, cy+8], outline=active_color, width=1)
             draw.line([(cx-8, cy-3), (cx+8, cy-3)], fill=active_color, width=1)
@@ -2044,19 +2034,16 @@ class NotificationManager:
             draw.point((cx+4, cy+1), fill=active_color)
             draw.point((cx-4, cy+5), fill=active_color)
             draw.point((cx, cy+5), fill=active_color)
-
         elif n_type == "camera":
             draw.rectangle([cx-8, cy-5, cx+8, cy+6], outline=active_color, width=1)
             draw.rectangle([cx-2, cy-8, cx+2, cy-5], fill=active_color)
             draw.ellipse([cx-3, cy-2, cx+3, cy+4], outline=active_color, width=1)
-
         elif n_type == "music":
             draw.ellipse([cx-7, cy+3, cx-3, cy+7], fill=active_color)
             draw.ellipse([cx+3, cy+3, cx+7, cy+7], fill=active_color)
             draw.line([(cx-3, cy+5), (cx-3, cy-6)], fill=active_color, width=1)
             draw.line([(cx+7, cy+5), (cx+7, cy-6)], fill=active_color, width=1)
             draw.line([(cx-3, cy-6), (cx+7, cy-6)], fill=active_color, width=2)
-
         elif n_type == "sun":
             draw.ellipse([cx-4, cy-4, cx+4, cy+4], fill=active_color)
             s = 7
@@ -2064,7 +2051,10 @@ class NotificationManager:
             draw.line([(cx, cy+s), (cx, cy+s+2)], fill=active_color, width=1)
             draw.line([(cx-s, cy), (cx-s-2, cy)], fill=active_color, width=1)
             draw.line([(cx+s, cy), (cx+s+2, cy)], fill=active_color, width=1)
-
+            draw.point((cx-5, cy-5), fill=active_color)
+            draw.point((cx+5, cy-5), fill=active_color)
+            draw.point((cx-5, cy+5), fill=active_color)
+            draw.point((cx+5, cy+5), fill=active_color)
         elif n_type == "moon":
             draw.arc([cx-6, cy-6, cx+6, cy+6], 90, 270, fill=active_color, width=2)
             draw.line([(cx, cy-6), (cx, cy+6)], fill=active_color, width=1)
@@ -2073,13 +2063,16 @@ class NotificationManager:
 
     def _create_text_items(self, lines: list, color: str, start_y: int) -> list:
         items = []
-        ids_to_clear = [1, 2, 3, 4, 5, 6, 10, 11, 20, 21, 22, 25, 26, 27, 28, 29, 30] 
-        for tid in ids_to_clear:
-            items.append({
-                "TextId": tid, "type": 22, "x": 0, "y": 0, "dir": 0, "font": 190,
-                "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 1,
-                "TextString": "", "color": "#000000"
-            })
+        line_ids = set(25 + i for i in range(len(lines)))
+        all_possible_ids = [1, 2, 3, 4, 5, 6, 10, 11, 20, 21, 22, 25, 26, 27, 28, 29, 30]
+        
+        for tid in all_possible_ids:
+            if tid not in line_ids:
+                items.append({
+                    "TextId": tid, "type": 22, "x": 0, "y": 0, "dir": 0, "font": 190,
+                    "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 1,
+                    "TextString": "", "color": "#000000"
+                })
 
         line_height = 10 
         for i, line in enumerate(lines):

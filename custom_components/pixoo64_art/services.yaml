@@ -1,0 +1,130 @@
+send_notification:
+  name: Send Notification
+  description: Send a custom text or animated notification to the Pixoo64 display.
+  fields:
+    message:
+      name: Message
+      description: The text message to display on the screen.
+      required: true
+      example: "Someone is at the door!"
+      selector:
+        text:
+    type:
+      name: Notification Type (Icon/Animation)
+      description: Select the visual theme and animation for the notification.
+      required: false
+      default: text
+      selector:
+        select:
+          options:
+            - label: "Text Only"
+              value: "text"
+            - label: "Information (Blue)"
+              value: "info"
+            - label: "Success (Green)"
+              value: "success"
+            - label: "Warning (Orange)"
+              value: "warning"
+            - label: "Error (Red)"
+              value: "error"
+            - label: "Checkmark (V)"
+              value: "v"
+            - label: "Cancel (X)"
+              value: "x"
+            - label: "Alert (Wiggle)"
+              value: "alert"
+            - label: "Weather (Cloud & Sun)"
+              value: "weather"
+            - label: "Attack / Rocket"
+              value: "attack"
+            - label: "Smart Home: Boiler"
+              value: "boiler"
+            - label: "Smart Home: Shutter"
+              value: "shutter"
+            - label: "Smart Home: Car"
+              value: "car"
+            - label: "Smart Home: Door"
+              value: "door"
+            - label: "Smart Home: Lock"
+              value: "lock"
+            - label: "Smart Home: Washer"
+              value: "washer"
+            - label: "Smart Home: Trash"
+              value: "trash"
+            - label: "Smart Home: Mail"
+              value: "mail"
+            - label: "Smart Home: Fire/Smoke"
+              value: "fire"
+            - label: "Smart Home: Water/Leak"
+              value: "water"
+            - label: "Device: Battery"
+              value: "battery"
+            - label: "Device: WiFi"
+              value: "wifi"
+            - label: "Device: Phone"
+              value: "phone"
+            - label: "Device: Camera"
+              value: "camera"
+            - label: "Event: Calendar"
+              value: "calendar"
+            - label: "Event: Timer"
+              value: "timer"
+            - label: "Entertainment: Music"
+              value: "music"
+            - label: "Nature: Sun"
+              value: "sun"
+            - label: "Nature: Moon / Sleep"
+              value: "moon"
+    duration:
+      name: Duration (Seconds)
+      description: How long to display the notification before returning to the album art.
+      required: false
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: seconds
+    play_buzzer:
+      name: Play Buzzer
+      description: Sound the device buzzer when the notification appears.
+      required: false
+      default: false
+      selector:
+        boolean:
+    buzzer_active:
+      name: Buzzer Beep Time (ms)
+      description: Duration of the beep tone in milliseconds.
+      required: false
+      default: 500
+      selector:
+        number:
+          min: 100
+          max: 5000
+          unit_of_measurement: ms
+    buzzer_off:
+      name: Buzzer Silence Time (ms)
+      description: Duration of silence between beeps in milliseconds.
+      required: false
+      default: 500
+      selector:
+        number:
+          min: 100
+          max: 5000
+          unit_of_measurement: ms
+    buzzer_total:
+      name: Buzzer Total Time (ms)
+      description: Total time the buzzer cycle will play in milliseconds.
+      required: false
+      default: 3000
+      selector:
+        number:
+          min: 500
+          max: 10000
+          unit_of_measurement: ms
+    color:
+      name: Custom Color
+      description: Optional HEX color override (e.g. '#FFCC00').
+      required: false
+      selector:
+        text:

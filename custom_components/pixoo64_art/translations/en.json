@@ -1,0 +1,124 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Pixoo 64 - Device & Media Player",
+        "description": "Select your Pixoo 64 display and the media player you want to track.",
+        "data": {
+          "pixoo_ip": "Pixoo 64 Device",
+          "media_player": "Media Player Entity",
+          "temperature_entity": "Temperature Sensor (Optional)"
+        },
+        "data_description": {
+          "pixoo_ip": "Choose your auto-discovered Pixoo 64 or select manual entry.",
+          "media_player": "The media player entity to monitor for playback and track details.",
+          "temperature_entity": "Optional sensor entity to show ambient temperature on the display."
+        }
+      },
+      "manual": {
+        "title": "Manual IP Entry",
+        "description": "Enter the local IP address of your Pixoo 64 device (e.g. 192.168.1.150).",
+        "data": {
+          "pixoo_ip": "IP Address"
+        },
+        "data_description": {
+          "pixoo_ip": "Static local IP address assigned to your Pixoo 64."
+        }
+      },
+      "lights": {
+        "title": "Ambient Light & WLED Sync",
+        "description": "Extract dominant colors from album covers and sync them dynamically in real-time.",
+        "data": {
+          "light_entity": "Lights to Sync",
+          "wled_ip": "WLED Device IP",
+          "only_at_night": "Sync Lights Only at Night"
+        },
+        "data_description": {
+          "light_entity": "One or more RGB lights to match the album background color.",
+          "wled_ip": "IP address of your WLED strip (without http://) for multi-color gradient effects.",
+          "only_at_night": "Only activate light synchronization when the sun is below the horizon."
+        }
+      },
+      "apis": {
+        "title": "Music Services & AI Art APIs",
+        "description": "Configure external services for high-resolution album artwork and AI fallbacks. All services below are free to use.",
+        "data": {
+          "ai_model": "AI Model",
+          "pollinations_key": "Pollinations.ai API Key",
+          "musicbrainz_enabled": "Enable MusicBrainz",
+          "spotify_client_id": "Spotify Client ID",
+          "spotify_client_secret": "Spotify Client Secret",
+          "tidal_client_id": "TIDAL Client ID",
+          "tidal_client_secret": "TIDAL Client Secret",
+          "lastfm_key": "Last.fm API Key",
+          "discogs_token": "Discogs Personal Token"
+        },
+        "data_description": {
+          "ai_model": "AI model used to generate unique pixel art when no album cover is found.",
+          "pollinations_key": "Optional key from https://pollinations.ai for higher rate limits. Free tier works without a key.",
+          "musicbrainz_enabled": "Open-source community music database. Completely free with no API key required.",
+          "spotify_client_id": "Enables high-res artwork, slider mode & artist slides. Get credentials at https://developer.spotify.com/dashboard",
+          "spotify_client_secret": "Client Secret from your Spotify developer application (required if Client ID is provided).",
+          "tidal_client_id": "For Tidal subscribers. Create an app at https://developer.tidal.com/dashboard to get your credentials.",
+          "tidal_client_secret": "Client Secret from your Tidal developer app (required if Client ID is provided).",
+          "lastfm_key": "Reliable artwork fallback. Get a free API Key at https://www.last.fm/api/account/create",
+          "discogs_token": "Vinyl & rare album release fallback. Create a token at https://www.discogs.com/settings/developers"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Pixoo 64. Please ensure the device is powered on and the IP is correct.",
+      "spotify_secret_required": "Spotify Client Secret is required when Client ID is provided.",
+      "spotify_id_required": "Spotify Client ID is required when Client Secret is provided.",
+      "tidal_secret_required": "Tidal Client Secret is required when Client ID is provided.",
+      "tidal_id_required": "Tidal Client ID is required when Client Secret is provided."
+    },
+    "abort": {
+      "already_configured": "This Pixoo 64 device is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Pixoo 64 Options",
+        "description": "Adjust lighting, temperature sensors, and API credentials for album artwork.",
+        "data": {
+          "temperature_entity": "Temperature Sensor",
+          "light_entity": "Lights to Sync",
+          "wled_ip": "WLED IP Address",
+          "only_at_night": "Sync Lights Only at Night",
+          "ai_model": "AI Model",
+          "pollinations_key": "Pollinations.ai Key",
+          "musicbrainz_enabled": "Enable MusicBrainz",
+          "spotify_client_id": "Spotify Client ID",
+          "spotify_client_secret": "Spotify Client Secret",
+          "tidal_client_id": "Tidal Client ID",
+          "tidal_client_secret": "Tidal Client Secret",
+          "lastfm_key": "Last.fm API Key",
+          "discogs_token": "Discogs Token"
+        },
+        "data_description": {
+          "temperature_entity": "Temperature sensor to display overlay on screen.",
+          "light_entity": "Home Assistant RGB lights to sync with album colors.",
+          "wled_ip": "IP address of your WLED strip controller.",
+          "only_at_night": "Limit ambient light syncing to nighttime hours.",
+          "ai_model": "AI model used to generate album art when no cover exists.",
+          "pollinations_key": "Optional key from https://pollinations.ai for higher rate limits.",
+          "musicbrainz_enabled": "Open-source album art lookup (no key needed).",
+          "spotify_client_id": "Client ID from https://developer.spotify.com/dashboard",
+          "spotify_client_secret": "Client Secret from your Spotify developer application.",
+          "tidal_client_id": "Client ID from https://developer.tidal.com/dashboard",
+          "tidal_client_secret": "Client Secret from your Tidal developer app.",
+          "lastfm_key": "API Key from https://www.last.fm/api/account/create",
+          "discogs_token": "Personal token from https://www.discogs.com/settings/developers"
+        }
+      }
+    },
+    "error": {
+      "spotify_secret_required": "Spotify Client Secret is required when Client ID is provided.",
+      "spotify_id_required": "Spotify Client ID is required when Client Secret is provided.",
+      "tidal_secret_required": "Tidal Client Secret is required when Client ID is provided.",
+      "tidal_id_required": "Tidal Client ID is required when Client Secret is provided."
+    }
+  }
+}

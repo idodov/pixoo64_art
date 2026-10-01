@@ -16,7 +16,7 @@ class PixooLyricsSyncNumber(NumberEntity):
         self._attr_icon = "mdi:timer-sync"
         self._attr_native_min_value = -5.0
         self._attr_native_max_value = 5.0
-        self._attr_native_step = 0.5
+        self._attr_native_step = -1.0
         
         self._attr_native_value = self.hub.ui_state.get(self.key, 0.0)
         self.hub.ui_state[self.key] = self._attr_native_value

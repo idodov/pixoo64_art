@@ -17,14 +17,6 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-AI_MODELS = [
-    selector.SelectOptionDict(value="black-forest-labs/flux.1-schnell", label="Flux Schnell (Fast & Balanced)"),
-    selector.SelectOptionDict(value="recraft/recraft-v4.1-vector", label="Recraft Vector (Best for 64x64 LED)"),
-    selector.SelectOptionDict(value="inferenceport-ai/lightning-image-turbo", label="Lightning Turbo (Fastest)"),
-    selector.SelectOptionDict(value="openai/gpt-image-1-mini", label="OpenAI GPT Image Mini"),
-    selector.SelectOptionDict(value="google/gemini-3.1-flash-image", label="Google Gemini Flash"),
-]
-
 PASSWORD_SELECTOR = selector.TextSelector(
     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
 )
@@ -50,6 +42,73 @@ def _validate_api_credentials(user_input: dict) -> dict:
         errors[CONF_TIDAL_CLIENT_ID] = "tidal_id_required"
 
     return errors
+
+async def async_get_pollinations_models(hass) -> list:
+    """Fetch available image models from Pollinations.ai dynamically, sorted by cost."""
+    fallback_models = [
+        selector.SelectOptionDict(
+            value="qwen/qwen-image-2.1", 
+            label="Qwen Image 2.1 (Qwen)"
+        ),
+        selector.SelectOptionDict(
+            value="openai/gpt-image-1-mini", 
+            label="GPT Image 1 Mini (OpenAI)"
+        ),
+        selector.SelectOptionDict(
+            value="microsoft/mai-image-2.5-flash", 
+            label="MAI Image 2.5 Flash (Microsoft)"
+        ),
+        selector.SelectOptionDict(
+            value="black-forest-labs/flux.1-schnell", 
+            label="FLUX.1 Schnell (Black Forest Labs)"
+        ),
+    ]
+    
+    try:
+        session = async_get_clientsession(hass)
+        async with session.get("https://gen.pollinations.ai/models", timeout=4) as response:
+            if response.status == 200:
+                data = await response.json()
+                parsed_models = []
+                
+                for model in data:
+                    if model.get("category") == "image" or "image" in model.get("output_modalities", []):
+                        model_id = model.get("name")
+                        if not model_id:
+                            continue
+                        
+                        title = model.get("title", model_id)
+                        publisher = model.get("publisher", "Unknown")
+                        description = model.get("description", "")
+                        
+                        pricing = model.get("pricing", {})
+                        try:
+                            cost = float(pricing.get("completionImageTokens", 0))
+                        except (ValueError, TypeError):
+                            cost = 0.0
+                        
+                        if cost == 0:
+                            cost_display = "Free"
+                        else:
+                            cost_display = f"{cost:.8f}".rstrip('0').rstrip('.')
+                                                
+                        label = f"{title} ({publisher}) | 💰 {cost_display}"
+                        
+                        parsed_models.append({
+                            "id": model_id,
+                            "label": label,
+                            "cost": cost
+                        })
+                        
+                parsed_models.sort(key=lambda x: x["cost"])
+                
+                models = [selector.SelectOptionDict(value=m["id"], label=m["label"]) for m in parsed_models]
+                
+                return models if models else fallback_models
+    except Exception as e:
+        _LOGGER.warning("Failed to fetch dynamic AI models, using fallback: %s", e)
+        
+    return fallback_models
 
 
 class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -181,9 +240,11 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data=self._user_data
                 )
 
+        dynamic_ai_models = await async_get_pollinations_models(self.hass)
+
         schema = vol.Schema({
-            vol.Optional("ai_model", default="flux"): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=AI_MODELS, mode=selector.SelectSelectorMode.DROPDOWN)
+            vol.Optional("ai_model", default="black-forest-labs/flux.1-schnell"): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=dynamic_ai_models, mode=selector.SelectSelectorMode.DROPDOWN)
             ),
             vol.Optional(CONF_POLLINATIONS_KEY): PASSWORD_SELECTOR,
             vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=True): selector.BooleanSelector(),
@@ -239,6 +300,8 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
             if not errors:
                 return self.async_create_entry(title="", data=cleaned_input)
 
+        dynamic_ai_models = await async_get_pollinations_models(self.hass)
+
         base_schema = {
             # Media Player Selection
             vol.Optional(CONF_MEDIA_PLAYER, description={"suggested_value": get_val(CONF_MEDIA_PLAYER)}):
@@ -258,8 +321,8 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
             vol.Optional("only_at_night", default=get_val("only_at_night", True)): selector.BooleanSelector(),
 
             # AI
-            vol.Optional("ai_model", default=get_val("ai_model", "flux")):
-                selector.SelectSelector(selector.SelectSelectorConfig(options=AI_MODELS, mode=selector.SelectSelectorMode.DROPDOWN)),
+            vol.Optional("ai_model", default=get_val("ai_model", "black-forest-labs/flux.1-schnell")):
+                selector.SelectSelector(selector.SelectSelectorConfig(options=dynamic_ai_models, mode=selector.SelectSelectorMode.DROPDOWN)),
             vol.Optional(CONF_POLLINATIONS_KEY): PASSWORD_SELECTOR,
 
             # MusicBrainz

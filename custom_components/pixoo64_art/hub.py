@@ -206,7 +206,7 @@ class PixooHub:
         self.config.lyrics_sync = float(self.ui_state.get("lyrics_sync", 0.0))
 
         # Crop Mode
-        crop_mode = self.ui_state.get("crop_mode", "Default")
+        crop_mode = self.ui_state.get("crop_mode", "No Crop")
         self.config.crop_borders = crop_mode in ["Crop", "Extra Crop"]
         self.config.crop_extra = (crop_mode == "Extra Crop")
 
@@ -687,7 +687,11 @@ class PixooHub:
             
             t_val = getattr(self.media_data, 'temperature', None)
             t_type = 22 if t_val else 17
-            text_items.append({"TextId": 3, "type": t_type, "x": 48, "y": 1, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": str(t_val) if t_val else ""})
+            if t_type == 22:
+                text_items.append({"TextId": 3, "type": t_type, "x": 48, "y": 1, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": str(t_val)})
+            else:
+                text_items.append({"TextId": 3, "type": t_type, "x": 48, "y": 1, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color})
+
             
             show_http_text = getattr(self.config, 'show_text', True) and not getattr(self.media_data, 'playing_tv', False) and not is_burned
             
@@ -701,21 +705,19 @@ class PixooHub:
             if not getattr(self, 'lyrics_active_mode', False):
                 if getattr(self.config, 'show_text', True) and not getattr(self.media_data, 'playing_tv', False) and not is_burned and not getattr(self.config, 'spotify_slide', False):
                     text_items.append({"TextId": 4, "type": 22, "x": 0, "y": y_text, "dir": rtl, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(txt) if rtl else txt, "color": font_color})
-                else:
-                    text_items.append({"TextId": 4, "type": 22, "x": 0, "y": 0, "dir": 0, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 0, "align": 2, "TextString": "", "color": "#000000"})
-                
+                                
                 if show_clk:
                     text_items.append({"TextId": 2, "type": 5, "x": x_c, "y": y_info, "dir": 0, "font": 18, "TextWidth": 32, "Textheight": 16, "speed": 100, "align": 1, "color": font_color})
-                else:
-                    text_items.append({"TextId": 2, "type": 22, "x": 0, "y": 0, "dir": 0, "font": 18, "TextWidth": 32, "Textheight": 16, "speed": 0, "align": 1, "color": "#000000", "TextString": ""})
-
+                
                 if show_tmp:
                     t_val = getattr(self.media_data, 'temperature', None)
                     t_type = 22 if t_val else 17
-                    text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": str(t_val) if t_val else ""})
-                else:
-                    text_items.append({"TextId": 3, "type": 22, "x": 0, "y": 0, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 0, "align": 1, "color": "#000000", "TextString": ""})
-            
+                    if t_type == 22:
+                        text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": str(t_val)})
+                    else:
+                        text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color})
+
+                            
         return text_items
 
     def _stop_lyrics_scheduler(self):

@@ -17,7 +17,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         ("overlay_info", "Overlay Info", ["None", "Clock", "Temperature", "Clock + Temp"], "Clock", "mdi:information-outline"),
         ("overlay_position", "Overlay Vertical Position", ["Auto (Opposite of Text)", "Top", "Bottom"], "Auto (Opposite of Text)", "mdi:arrow-up-down"),
         ("overlay_align", "Overlay Alignment", ["Clock Right, Temp Left", "Clock Left, Temp Right", "Centered"], "Clock Right, Temp Left", "mdi:format-horizontal-align-center"),
-        ("crop_mode", "Crop Mode", ["Default", "No Crop", "Crop", "Extra Crop"], "Default", "mdi:crop"),
+        ("crop_mode", "Crop Mode", ["No Crop", "Crop", "Extra Crop"], "No Crop", "mdi:crop"),
     ]
 
     entities = [

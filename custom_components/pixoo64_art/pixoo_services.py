@@ -77,7 +77,7 @@ class Config:
         self.pixoo_ip = get_val("pixoo_ip")
         self.pixoo_url = f"http://{self.pixoo_ip}:80/post" if self.pixoo_ip else None
         self.pollinations = get_val("pollinations_key", "")
-        self.ai_fallback = get_val("ai_model", "flux")
+        self.ai_fallback = get_val("ai_model", "black-forest-labs/flux.1-schnell")
         self.spotify_client_id = get_val("spotify_client_id", "")
         self.spotify_client_secret = get_val("spotify_client_secret", "")
         self.musicbrainz = get_val("musicbrainz_enabled", True)
@@ -269,7 +269,6 @@ class ImageProcessor:
                 if getattr(self.config, 'special_mode', False):
                     img = self.special_mode(img)
 
-                # וידוא חובה: 64x64 בדיוק
                 img = img.resize((64, 64), Image.Resampling.BILINEAR)
 
                 vals = self.img_values(img)
@@ -1502,16 +1501,16 @@ class MediaData:
         clean_title = title.replace("/", " ").replace("\\", " ").strip()
         
         prompts = [
-            f"Minimalist vibrant vector album art for '{clean_title}' by {clean_artist}, bold geometric shapes, high contrast, clean graphics, flat color blocks, no text, no words",
-            f"Pop art colorful iconic album artwork representing '{clean_title}' by {clean_artist}, vivid neon palette, strong silhouette, Andy Warhol aesthetic, no letters, no typography",
-            f"Surreal symbolic dreamscape album cover for '{clean_title}' by {clean_artist}, dramatic rim lighting, vivid celestial palette, clean focal subject, no font, no text",
-            f"Retro synthwave album art for '{clean_title}' by {clean_artist}, deep black background, glowing magenta and cyan grid elements, high contrast, 1980s aesthetic, no words, no font",
-            f"16-bit arcade pixel art album cover representing '{clean_title}' by {clean_artist}, vibrant nostalgic color palette, iconic retro video game boss aesthetic, crisp sprites, no text, no characters",
-            f"Luminous stained glass mosaic album artwork depicting '{clean_title}' by {clean_artist}, thick black outlines, glowing saturated jewel tones, cathedral glass design, no letters, no words",
-            f"Moody graphic novel album cover for '{clean_title}' by {clean_artist}, heavy ink shadows, stark high contrast flat colors, bold dramatic silhouette, comic book art, no text, no speech bubbles",
-            f"Bauhaus modernist constructivism album art for '{clean_title}' by {clean_artist}, primary colors, stark geometric balance, abstract modernist icon, clean sharp edges, no text, no font",
-            f"Mystical symbolic Tarot card artwork for '{clean_title}' by {clean_artist}, bold central iconic talisman, deep gold and obsidian palette, sharp ornamental frame, flat mystical illustration, no typography, no words",
-            f"Modern Japanese woodblock ukiyo-e style album art for '{clean_title}' by {clean_artist}, bold black ink brushlines, vibrant flat color fills, iconic traditional wave and mountain aesthetic, no text, no kanji, no letters"
+            f"Vibrant pop art portrait of the musician {clean_artist} inspired by the song '{clean_title}', edge-to-edge full bleed, borderless, bold neon colors, high contrast flat colors for pixel display, strictly no text, no words, zero frames",           
+            f"Edge-to-edge vibrant surreal artwork literally depicting the concept of '{clean_title}' by {clean_artist}, vivid high contrast colors, thick outlines, borderless full bleed, strictly no text, no letters, no frames",
+            f"Retro synthwave portrait of {clean_artist} performing '{clean_title}', neon magenta and cyan, edge-to-edge borderless, pitch black background, high contrast lighting, absolutely no typography, no words, full bleed, no borders",
+            f"Borderless minimalist illustration of the literal meaning of '{clean_title}' (by {clean_artist}), flat bold vibrant colors, edge-to-edge composition, zero borders, clear focal point suited for low resolution display, strictly no text, no typography",
+            f"Moody graphic novel style portrait of the artist {clean_artist} singing '{clean_title}', vivid high contrast flat colors, edge-to-edge full bleed, borderless frame, strictly no text, no speech bubbles, zero typography",
+            f"Colorful 16-bit style crisp illustration literally showing '{clean_title}' by {clean_artist}, vivid nostalgic palette, edge-to-edge borderless composition, zero text, no borders, no frames, strictly no typography, perfectly cropped",
+            f"Luminous stained glass mosaic showing the literal meaning of '{clean_title}' by {clean_artist}, edge-to-edge borderless, saturated jewel tones, thick black outlines, full bleed, absolutely no text, no letters, zero frames",
+            f"Vibrant vector portrait of {clean_artist} with elements from '{clean_title}', flat bold geometric shapes, edge-to-edge borderless design, high contrast palette for LED displays, strictly no text, no words, no borders",
+            f"Japanese anime style vibrant scenery depicting '{clean_title}' by {clean_artist}, edge-to-edge borderless full bleed composition, highly saturated colors, high contrast, zero typography, no text, no borders, no letters",
+            f"Bold colorful representation of {clean_artist} and the vibe of '{clean_title}', edge-to-edge borderless canvas, thick lines, neon and primary colors, flat design for pixel grid, strictly no text, no frames, zero words"
         ]
         
         song_signature = f"{clean_artist}_{clean_title}".lower()
@@ -1521,7 +1520,8 @@ class MediaData:
         
         seed = abs(hash(song_signature)) % 2147483647
 
-        user_model = str(getattr(self.config, 'ai_fallback', 'flux') or 'flux').lower().strip()
+        user_model = str(getattr(self.config, 'ai_fallback', 'black-forest-labs/flux.1-schnell') or 'black-forest-labs/flux.1-schnell').lower().strip()
+        
         if user_model in ["turbo", "lightning"]:
             model = "inferenceport-ai/lightning-image-turbo"
         elif user_model in ["flux", "schnell"]:

@@ -2,18 +2,18 @@
 
 <p align="center">
 
-  <a href="https://www.home-assistant.io/"><img src="https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blueviolet.svg?style=for-the-badge&logo=home-assistant" alt="Home Assistant"></a>
-  <a href="https://hacs.xyz/"><img src="https://img.shields.io/badge/HACS-Custom%20Repo-orange.svg?style=for-the-badge&logo=hacs" alt="HACS"></a>
-  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT"></a>
-  <a href="https://github.com/idodov/pixoo64_art/issues"><img src="https://img.shields.io/github/issues/idodov/pixoo64_art?style=for-the-badge&color=red" alt="GitHub Issues"></a>
+  <a href="https://www.home-assistant.io/"><img src="https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blueviolet.svg?style=for-the-badge&logo=home-assistant" alt="Home Assistant"></a>
+  <a href="https://hacs.xyz/"><img src="https://img.shields.io/badge/HACS-Custom%20Repo-orange.svg?style=for-the-badge&logo=hacs" alt="HACS"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT"></a>
+  <a href="https://github.com/idodov/pixoo64_art/issues"><img src="https://img.shields.io/github/issues/idodov/pixoo64_art?style=for-the-badge&color=red" alt="GitHub Issues"></a>
 </p>
 
 <p align="center">
-  <strong>Transform your Divoom Pixoo64 into an intelligent, adaptive media display, live volume HUD, and smart home visual alert center.</strong>
+  <strong>Transform your Divoom Pixoo64 into an intelligent, adaptive media display, live volume HUD, and smart home visual alert center.</strong>
 </p>
 
 <p align="center">
-  <img src="https://github.com/idodov/pixoo64-media-album-art/assets/19820046/71348538-2422-47e3-ac3d-aa1d7329333c" alt="PIXOO_album_gallery" width="85%" style="border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.3);"/>
+  <img src="https://github.com/idodov/pixoo64-media-album-art/assets/19820046/71348538-2422-47e3-ac3d-aa1d7329333c" alt="PIXOO_album_gallery" width="85%" style="border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.3);"/>
 </p>
 
 ---
@@ -46,26 +46,26 @@ Originally developed as an AppDaemon application, this project has been complete
 
 ## 📺 Deep-Dive: Intelligent TV Mode
 
-Streaming devices and modern smart TVs connected via HDMI eARC often populate media players with metadata like `"TV"`, `"Audio Return Channel"`, or streaming app names rather than music tracks. 
+Streaming devices and modern smart TVs connected via HDMI eARC often populate media players with metadata like `"TV"`, `"Audio Return Channel"`, or streaming app names rather than music tracks. 
 
 The integration includes an intelligent **TV Mode engine**:
 
-1. **Automatic TV Detection:**  
-   Monitors `media_title`, `media_artist`, `app_name`, `source`, and `media_channel`. It immediately recognizes inputs such as:
-   * **HDMI Inputs:** eARC, ARC, Audio Return Channel, TV audio.
-   * **Streaming Platforms:** Netflix, YouTube, Disney+, Prime Video, Apple TV, Live TV.
-2. **Dedicated Visual Display (`TV_IS_ON_ICON`):**  
-   When TV Mode is active, music-specific features (progress bars, synced lyrics, and Spotify carousels) are automatically suspended. Instead, the screen renders an authentic **Retro Color-Bar Television**:
-   * A classic wood-grain rounded TV cabinet with top dual rabbit-ear antennas and screen reflections.
-   * A 7-bar SMPTE rainbow test screen (`Red`, `Orange`, `Yellow`, `Green`, `Blue`, `Indigo`, `Violet`).
-3. **Adaptive Mode:**  
-   Toggle TV Mode on or off in the integration options to match your setup.
+1. **Automatic TV Detection:**  
+   Monitors `media_title`, `media_artist`, `app_name`, `source`, and `media_channel`. It immediately recognizes inputs such as:
+   * **HDMI Inputs:** eARC, ARC, Audio Return Channel, TV audio.
+   * **Streaming Platforms:** Netflix, YouTube, Disney+, Prime Video, Apple TV, Live TV.
+2. **Dedicated Visual Display (`TV_IS_ON_ICON`):**  
+   When TV Mode is active, music-specific features (progress bars, synced lyrics, and Spotify carousels) are automatically suspended. Instead, the screen renders an authentic **Retro Color-Bar Television**:
+   * A classic wood-grain rounded TV cabinet with top dual rabbit-ear antennas and screen reflections.
+   * A 7-bar SMPTE rainbow test screen (`Red`, `Orange`, `Yellow`, `Green`, `Blue`, `Indigo`, `Violet`).
+3. **Adaptive Mode:**  
+   Toggle TV Mode on or off in the integration options to match your setup.
 
 ---
 
 ## 🔊 Deep-Dive: Dynamic Volume HUD Effect
 
-When you adjust the volume on your receiver, soundbar, or TV remote, looking at a small receiver display across the room can be difficult. 
+When you adjust the volume on your receiver, soundbar, or TV remote, looking at a small receiver display across the room can be difficult. 
 
 The integration tracks volume changes in real time:
 * **Instant Visual Feedback:** The moment the `volume_level` attribute changes on your tracked media player, the Pixoo temporarily displays a high-visibility volume level HUD overlay.
@@ -90,9 +90,9 @@ Pixoo's 64×64 LED resolution requires specialized image composition. The integr
 
 * **Standard Crop:** Trims outer black letterboxing, white scanner margins, and pillarbox bars while preserving full album sleeves and typography.
 * **Extra Crop (Subject Isolation):**
-  * **Nested Container Unwrapping:** Detects when an album has a colored vertical band or card (e.g. *Eurythmics - Sweet Dreams*) and extracts the inner photo without border bleed.
-  * **Subject Clustering:** Detects two or more adjacent subjects (e.g. *Pet Shop Boys - Please*) and groups them together into a unified square, preventing two-person shots from being sliced in half.
-  * **Typographic Framing:** Automatically detects minimalist covers (e.g. *Charli XCX - Brat*) and frames the text with balanced negative space rather than collapsing on hollow letter loops.
+  * **Nested Container Unwrapping:** Detects when an album has a colored vertical band or card (e.g. *Eurythmics - Sweet Dreams*) and extracts the inner photo without border bleed.
+  * **Subject Clustering:** Detects two or more adjacent subjects (e.g. *Pet Shop Boys - Please*) and groups them together into a unified square, preventing two-person shots from being sliced in half.
+  * **Typographic Framing:** Automatically detects minimalist covers (e.g. *Charli XCX - Brat*) and frames the text with balanced negative space rather than collapsing on hollow letter loops.
 
 ---
 
@@ -102,24 +102,24 @@ Never face an empty display when listening to streaming radio, Cast devices, or 
 
 ```
 [Media Player Playing]
-         │
-         ▼
- 1. Local HA Art Present? ─────(Yes)───► [Render Cover Art]
-         │ (No)
-         ▼
- 2. Spotify Search API ────────(Found)─► [Render 640x640 Art]
-         │ (Missing)
-         ▼
- 3. Discogs / Last.fm / TIDAL ─(Found)─► [Render Hi-Res Match]
-         │ (Missing)
-         ▼
- 4. MusicBrainz Archive ───────(Found)─► [Render CoverArtArchive]
-         │ (Missing)
-         ▼
- 5. Pollinations AI ───────────(Active)► [Generate Conceptual Art]
-         │ (Disabled / No Key)
-         ▼
- 6. Internal Geometric Canvas ─────────► [Minimalist Burned Slate]
+         │
+         ▼
+ 1. Local HA Art Present? ─────(Yes)───► [Render Cover Art]
+         │ (No)
+         ▼
+ 2. Spotify Search API ────────(Found)─► [Render 640x640 Art]
+         │ (Missing)
+         ▼
+ 3. Discogs / Last.fm / TIDAL ─(Found)─► [Render Hi-Res Match]
+         │ (Missing)
+         ▼
+ 4. MusicBrainz Archive ───────(Found)─► [Render CoverArtArchive]
+         │ (Missing)
+         ▼
+ 5. Pollinations AI ───────────(Active)► [Generate Conceptual Art]
+         │ (Disabled / No Key)
+         ▼
+ 6. Internal Geometric Canvas ─────────► [Minimalist Burned Slate]
 ```
 
 ---
@@ -140,9 +140,9 @@ Never face an empty display when listening to streaming radio, Cast devices, or 
 
 1. Download the latest release `.zip` from the [Releases Page](https://github.com/idodov/pixoo64_art/releases).
 2. Extract the folder into your Home Assistant directory:
-   ```
-   config/custom_components/pixoo64_art/
-   ```
+   ```
+   config/custom_components/pixoo64_art/
+   ```
 3. Restart Home Assistant.
 
 ---
@@ -186,13 +186,13 @@ The `pixoo64_art.send_notification` action allows Home Assistant automations to 
 ```yaml
 action: pixoo64_art.send_notification
 data:
-  message: "Washing cycle finished!"
-  type: "washer"
-  duration: 8
-  play_buzzer: true
-  buzzer_active: 400
-  buzzer_off: 200
-  buzzer_total: 2400
+  message: "Washing cycle finished!"
+  type: "washer"
+  duration: 8
+  play_buzzer: true
+  buzzer_active: 400
+  buzzer_off: 200
+  buzzer_total: 2400
 ```
 
 ### Parameters
@@ -223,58 +223,58 @@ data:
 ```yaml
 alias: "Pixoo - Front Doorbell Alert"
 trigger:
-  - platform: state
-    entity_id: binary_sensor.doorbell_ringing
-    to: "on"
+  - platform: state
+    entity_id: binary_sensor.doorbell_ringing
+    to: "on"
 action:
-  - action: pixoo64_art.send_notification
-    data:
-      message: "Visitor at Front Door"
-      type: "door"
-      duration: 6
-      play_buzzer: true
-      buzzer_active: 250
-      buzzer_off: 150
-      buzzer_total: 1200
+  - action: pixoo64_art.send_notification
+    data:
+      message: "Visitor at Front Door"
+      type: "door"
+      duration: 6
+      play_buzzer: true
+      buzzer_active: 250
+      buzzer_off: 150
+      buzzer_total: 1200
 ```
 
 ### 2. Washer / Dryer Cycle Complete
 ```yaml
 alias: "Pixoo - Laundry Alert"
 trigger:
-  - platform: state
-    entity_id: sensor.washing_machine_status
-    to: "finished"
+  - platform: state
+    entity_id: sensor.washing_machine_status
+    to: "finished"
 action:
-  - action: pixoo64_art.send_notification
-    data:
-      message: "Laundry is done!"
-      type: "washer"
-      duration: 10
-      play_buzzer: true
-      buzzer_active: 500
-      buzzer_off: 500
-      buzzer_total: 3000
+  - action: pixoo64_art.send_notification
+    data:
+      message: "Laundry is done!"
+      type: "washer"
+      duration: 10
+      play_buzzer: true
+      buzzer_active: 500
+      buzzer_off: 500
+      buzzer_total: 3000
 ```
 
 ### 3. Critical Leak / Flood Warning
 ```yaml
 alias: "Pixoo - Water Leak Alert"
 trigger:
-  - platform: state
-    entity_id: binary_sensor.kitchen_leak_sensor
-    to: "on"
+  - platform: state
+    entity_id: binary_sensor.kitchen_leak_sensor
+    to: "on"
 action:
-  - action: pixoo64_art.send_notification
-    data:
-      message: "Water leak detected in kitchen!"
-      type: "water"
-      color: "#FF0000"
-      duration: 15
-      play_buzzer: true
-      buzzer_active: 200
-      buzzer_off: 100
-      buzzer_total: 5000
+  - action: pixoo64_art.send_notification
+    data:
+      message: "Water leak detected in kitchen!"
+      type: "water"
+      color: "#FF0000"
+      duration: 15
+      play_buzzer: true
+      buzzer_active: 200
+      buzzer_off: 100
+      buzzer_total: 5000
 ```
 
 ---
@@ -286,36 +286,36 @@ action:
 
 Here are the direct links to obtain developer credentials for every supported metadata provider:
 
-* **Spotify (Client ID & Client Secret):**  
-  👉 [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)  
-  *Log in with your Spotify account, click "Create an App", set the Redirect URI to `https://localhost`, and copy your Client ID and Client Secret.*
+* **Spotify (Client ID & Client Secret):**  
+  👉 [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)  
+  *Log in with your Spotify account, click "Create an App", set the Redirect URI to `https://localhost`, and copy your Client ID and Client Secret.*
 
-* **Pollinations AI (API Key):**  
-  👉 [Pollinations.ai Dashboard](https://enter.pollinations.ai/)  
-  *Sign in to generate your API key for prompt-based conceptual artwork generation.*
+* **Pollinations AI (API Key):**  
+  👉 [Pollinations.ai Dashboard](https://enter.pollinations.ai/)  
+  *Sign in to generate your API key for prompt-based conceptual artwork generation.*
 
-* **Discogs (Personal Access Token):**  
-  👉 [Discogs Developer Settings](https://www.discogs.com/settings/developers)  
-  *Sign in, scroll to "User Tokens", and click "Generate new token".*
+* **Discogs (Personal Access Token):**  
+  👉 [Discogs Developer Settings](https://www.discogs.com/settings/developers)  
+  *Sign in, scroll to "User Tokens", and click "Generate new token".*
 
-* **Last.fm (API Key):**  
-  👉 [Last.fm API Account Creation](https://www.last.fm/api/account/create)  
-  *Fill in an application name and description to receive an instant 32-character API key.*
+* **Last.fm (API Key):**  
+  👉 [Last.fm API Account Creation](https://www.last.fm/api/account/create)  
+  *Fill in an application name and description to receive an instant 32-character API key.*
 
-* **TIDAL (Client ID & Client Secret):**  
-  👉 [TIDAL Developer Portal](https://developer.tidal.com/)  
-  *Log in with your TIDAL account to access your developer dashboard and create client-credentials keys.*
+* **TIDAL (Client ID & Client Secret):**  
+  👉 [TIDAL Developer Portal](https://developer.tidal.com/)  
+  *Log in with your TIDAL account to access your developer dashboard and create client-credentials keys.*
 
-* **MusicBrainz & Cover Art Archive:**  
-  👉 [MusicBrainz](https://musicbrainz.org/) & [Cover Art Archive](https://coverartarchive.org/)  
-  * **No key or token required!** Completely free and open-source. The integration handles compliant rate-limiting automatically.
+* **MusicBrainz & Cover Art Archive:**  
+  👉 [MusicBrainz](https://musicbrainz.org/) & [Cover Art Archive](https://coverartarchive.org/)  
+  * **No key or token required!** Completely free and open-source. The integration handles compliant rate-limiting automatically.
 </details>
 
 <details>
 <summary><strong>Q: Does this integration require an internet connection?</strong></summary>
 
-> **No, for local playback.** Communication between Home Assistant and the Pixoo64 happens entirely over your local area network (LAN HTTP POST). 
-> 
+> **No, for local playback.** Communication between Home Assistant and the Pixoo64 happens entirely over your local area network (LAN HTTP POST). 
+> 
 > Internet access is only required if you use online fallback providers (Spotify, MusicBrainz, TIDAL, LRCLIB lyrics, or Pollinations AI).
 </details>
 
@@ -357,12 +357,12 @@ Here are the direct links to obtain developer credentials for every supported me
 ## 🛠️ Diagnostics & Troubleshooting
 
 * **Logs:** If you encounter unexpected behavior, add the following to your `configuration.yaml` and restart Home Assistant:
-  ```yaml
-  logger:
-    default: info
-    logs:
-      custom_components.pixoo64_art: debug
-  ```
+  ```yaml
+  logger:
+    default: info
+    logs:
+      custom_components.pixoo64_art: debug
+  ```
 * **Network Timeouts:** Ensure your Pixoo64 is connected to a stable 2.4 GHz Wi-Fi network and that port `80` is not filtered between your Home Assistant instance and the Pixoo.
 
 ---
@@ -391,3 +391,6 @@ Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for more informa
 * [MusicBrainz](https://musicbrainz.org/) & [Cover Art Archive](https://coverartarchive.org/) for open metadata.
 * [Pollinations.ai](https://pollinations.ai/) for accessible generative AI art APIs.
 * The [Home Assistant Community](https://community.home-assistant.io/) for continuous testing and feedback.
+
+
+תריך להכין MARKDOWN עם כל התוספות והפיצ'רים שהוספנו

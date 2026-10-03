@@ -59,18 +59,20 @@
           "tidal_client_id": "TIDAL Client ID",
           "tidal_client_secret": "TIDAL Client Secret",
           "lastfm_key": "Last.fm API Key",
-          "discogs_token": "Discogs Personal Token"
+          "discogs_token": "Discogs Personal Token",
+          "playlist_prefetch_range": "Playlist Queue Pre-fetch (Fast Skip)"
         },
         "data_description": {
           "ai_model": "AI image model used to generate conceptual album art.",
-          "pollinations_key": "Secret key from [Pollinations.ai](https://pollinations.ai). Required to activate the 'Force AI Art' switch on your dashboard.",
+          "pollinations_key": "Secret key from [Pollinations.ai](https://pollinations.ai). Required to activate the 'Force AI Art' switch on your dashboard. Leave blank to keep existing key, or type 'clear' to remove.",
           "musicbrainz_enabled": "Query the free MusicBrainz database if cover art cannot be retrieved from your player.",
-          "spotify_client_id": "Client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Unlocks artist photos and the animated 'Spotify Slider' gallery mode.",
-          "spotify_client_secret": "Client Secret from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).",
-          "tidal_client_id": "Client ID from the [TIDAL Developer Platform](https://developer.tidal.com) for lossless cover art matching.",
-          "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com).",
-          "lastfm_key": "API Key from [Last.fm Accounts](https://www.last.fm/api/account/create) for fallback artwork.",
-          "discogs_token": "Personal token from [Discogs Developer Settings](https://www.discogs.com/settings/developers) for physical release lookups."
+          "spotify_client_id": "Client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Unlocks artist photos and the animated 'Spotify Slider' gallery mode. Clear this field to completely remove Spotify.",
+          "spotify_client_secret": "Client Secret from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Leave blank to keep existing secret.",
+          "tidal_client_id": "Client ID from the [TIDAL Developer Platform](https://developer.tidal.com) for lossless cover art matching. Clear this field to completely remove TIDAL.",
+          "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com). Leave blank to keep existing secret.",
+          "lastfm_key": "API Key from [Last.fm Accounts](https://www.last.fm/api/account/create) for fallback artwork. Leave blank to keep existing key, or type 'clear' to remove.",
+          "discogs_token": "Personal token from [Discogs Developer Settings](https://www.discogs.com/settings/developers) for physical release lookups. Leave blank to keep existing token, or type 'clear' to remove.",
+          "playlist_prefetch_range": "Pre-fetches artwork for upcoming and recent tracks in the playing queue (±5 or ±10 songs) into RAM for instant skip transitions. Requires streaming APIs (Spotify, TIDAL, or Discogs). Automatically bypassed during Spotify Slider mode to avoid network and RAM overload."
         }
       }
     },
@@ -105,7 +107,8 @@
           "tidal_client_id": "TIDAL Client ID",
           "tidal_client_secret": "TIDAL Client Secret",
           "lastfm_key": "Last.fm API Key",
-          "discogs_token": "Discogs Personal Token"
+          "discogs_token": "Discogs Personal Token",
+          "playlist_prefetch_range": "Playlist Queue Pre-fetch (Fast Skip)"
         },
         "data_description": {
           "media_player": "The speaker, soundbar, or media player to track and display album art from.",
@@ -118,14 +121,15 @@
           "wled_ip": "Optional local IP of a WLED controller to mirror album palettes.",
           "only_at_night": "Only activate room lighting sync when the sun is below the horizon.",
           "ai_model": "AI image model used to generate conceptual album art.",
-          "pollinations_key": "Secret key from [Pollinations.ai](https://pollinations.ai). Must be set for the 'Force AI Art' switch to become accessible in Home Assistant.",
+          "pollinations_key": "Secret key from [Pollinations.ai](https://pollinations.ai). Leave blank to keep existing key, or type 'clear' to remove.",
           "musicbrainz_enabled": "Query the free MusicBrainz database if cover art cannot be retrieved from your player.",
-          "spotify_client_id": "Client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Required for the animated 'Spotify Slider' display mode.",
-          "spotify_client_secret": "Client Secret from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).",
-          "tidal_client_id": "Client ID from the [TIDAL Developer Platform](https://developer.tidal.com) for fallback artwork.",
-          "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com).",
-          "lastfm_key": "API Key from [Last.fm](https://www.last.fm/api/account/create).",
-          "discogs_token": "Personal token from [Discogs](https://www.discogs.com/settings/developers)."
+          "spotify_client_id": "Client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Required for the animated 'Spotify Slider' display mode. Clear this field to completely remove Spotify.",
+          "spotify_client_secret": "Client Secret from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Leave blank to keep existing secret.",
+          "tidal_client_id": "Client ID from the [TIDAL Developer Platform](https://developer.tidal.com) for fallback artwork. Clear this field to completely remove TIDAL.",
+          "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com). Leave blank to keep existing secret.",
+          "lastfm_key": "API Key from [Last.fm](https://www.last.fm/api/account/create). Leave blank to keep existing key, or type 'clear' to remove.",
+          "discogs_token": "Personal token from [Discogs](https://www.discogs.com/settings/developers). Leave blank to keep existing token, or type 'clear' to remove.",
+          "playlist_prefetch_range": "Pre-fetches artwork for upcoming and recent tracks in the playing queue (±5 or ±10 songs) into RAM for instant skip transitions. Requires streaming APIs (Spotify, TIDAL, or Discogs). Automatically bypassed during Spotify Slider mode to avoid network and RAM overload."
         }
       }
     },

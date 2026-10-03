@@ -12,7 +12,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     hub = hass.data[DOMAIN][entry.entry_id]
 
     selects_config = [
-        ("display_mode", "Display Mode", ["Standard", "Lyrics", "Burned", "Special Mode"], "Standard", "mdi:monitor-dashboard"),
+        ("display_mode", "Display Mode", ["Standard", "Vinyl", "Cassette", "Lyrics", "Burned", "Special Mode"], "Standard", "mdi:monitor-dashboard"),
         ("image_filter", "Image Filter", ["None", "Vibrant", "Retro Arcade", "Crisp & Sharp", "Noir B&W", "Cyberpunk Neon"], "None", "mdi:image-filter-hdr"),
         ("text_position", "Artist & Track Text", ["Hidden", "Top", "Bottom"], "Bottom", "mdi:format-text"),
         ("overlay_info", "Overlay Info", ["None", "Clock", "Temperature", "Clock + Temp"], "Clock", "mdi:information-outline"),
@@ -31,7 +31,6 @@ class PixooRestoreSelect(SelectEntity, RestoreEntity):
     """Representation of a restored Pixoo64 select entity with dynamic options."""
 
     def __init__(self, hub, entry, key, name, options, default_val, icon):
-        """Initialize the select."""
         self.hub = hub
         self.entry = entry
         self.key = key
@@ -40,7 +39,6 @@ class PixooRestoreSelect(SelectEntity, RestoreEntity):
         self._base_options = options
         self._attr_icon = icon
         self._attr_current_option = default_val
-        
         self.hub.ui_state[self.key] = self._attr_current_option
 
     @property
@@ -54,9 +52,8 @@ class PixooRestoreSelect(SelectEntity, RestoreEntity):
 
     @property
     def options(self) -> list[str]:
-        """Return dynamic options (Hides dynamic modes if credentials are missing)."""
         if self.key == "display_mode":
-            modes = ["Standard", "Lyrics", "Burned", "Special Mode"]
+            modes = ["Standard", "Vinyl", "Cassette", "Lyrics", "Burned", "Special Mode"]
             if self.hub.is_spotify_available:
                 modes.append("Spotify Slider")
             if self.hub.is_ai_available:
@@ -66,7 +63,6 @@ class PixooRestoreSelect(SelectEntity, RestoreEntity):
 
     @property
     def current_option(self) -> str:
-        """Return current option, falling back to Standard if dynamic mode is unavailable."""
         if self.key == "display_mode":
             if self._attr_current_option == "Spotify Slider" and not self.hub.is_spotify_available:
                 return "Standard"
@@ -75,19 +71,15 @@ class PixooRestoreSelect(SelectEntity, RestoreEntity):
         return self._attr_current_option
 
     async def async_added_to_hass(self):
-        """Run when entity about to be added to hass."""
         await super().async_added_to_hass()
         last_state = await self.async_get_last_state()
-        
         if last_state is not None and last_state.state in self.options:
             self._attr_current_option = last_state.state
         else:
             self._attr_current_option = self.options[0]
-            
         self.hub.ui_state[self.key] = self._attr_current_option
 
     async def async_select_option(self, option: str):
-        """Change the selected option."""
         if option in self.options:
             self._attr_current_option = option
             self.async_write_ha_state()

@@ -29,6 +29,21 @@ try:
 except ImportError:
     bidi_support = False
 
+try:
+    from unidecode import unidecode
+except ImportError:
+    HEBREW_MAP = {
+        'א': 'A', 'ב': 'B', 'ג': 'G', 'ד': 'D', 'ה': 'H', 'ו': 'V', 'ז': 'Z',
+        'ח': 'Ch', 'ט': 'T', 'י': 'Y', 'כ': 'K', 'ך': 'K', 'ל': 'L', 'מ': 'M',
+        'ם': 'M', 'נ': 'N', 'ן': 'N', 'ס': 'S', 'ע': 'A', 'פ': 'P', 'ף': 'F',
+        'צ': 'Ts', 'ץ': 'Ts', 'ק': 'K', 'ר': 'R', 'ש': 'Sh', 'ת': 'T'
+    }
+    def unidecode(text: str) -> str:
+        res = []
+        for ch in text:
+            res.append(HEBREW_MAP.get(ch, ch))
+        return "".join(res)
+
 _LOGGER = logging.getLogger(__name__)
 
 HEBREW = r"\u0590-\u05FF"
@@ -93,6 +108,8 @@ class Config:
         self.light_entity = get_val("light_entity", [])
         self.only_at_night = get_val("only_at_night", True)
         self.tv_mode = get_val("tv_mode", False)
+        self.vinyl_mode = False
+        self.cassette_mode = False
         
         self.show_text = False
         self.clean_title = True
@@ -105,7 +122,7 @@ class Config:
         self.burned = False
         self.crop_borders = True
         self.crop_extra = False
-        self.images_cache = 40  # Strict cap to prevent memory bloat
+        self.images_cache = 40  # Strict cap of 40 images
         self.full_control = False
         self.contrast = False
         self.sharpness = False
@@ -130,6 +147,7 @@ class Config:
         self.progress_bar_y_offset = 64
         self.force_ai = False
         self.image_filter = "None"
+        self.playlist_prefetch_range = get_val("playlist_prefetch_range", "Disabled")
         self.default_font = ImageFont.load_default()
 
 # =========================================================================
@@ -203,7 +221,6 @@ class ImageFilterService:
 
     @staticmethod
     def apply_pre_scale(img: Image.Image, filter_mode: str) -> Image.Image:
-        """Applies filters that work best prior to downscaling to 64x64."""
         if not filter_mode or filter_mode == "None":
             return img
 
@@ -229,7 +246,6 @@ class ImageFilterService:
 
     @staticmethod
     def apply_post_scale(img: Image.Image, filter_mode: str) -> Image.Image:
-        """Applies pixel-level filters on the final 64x64 canvas."""
         if not filter_mode or filter_mode == "None":
             return img
 
@@ -712,6 +728,7 @@ class ImageProcessor:
         self.cropper = ImageCropper()
         self.color_analyzer = ColorAnalyzer()
         self.filter_service = ImageFilterService()
+        
 
     def shutdown(self):
         pass
@@ -818,7 +835,7 @@ class ImageProcessor:
 
                 img = self.fixed_size(img)
                 
-                # Apply pre-scale image enhancement filter
+                # Pre-scale filter application
                 filter_mode = getattr(self.config, 'image_filter', 'None')
                 img = self.filter_service.apply_pre_scale(img, filter_mode)
 
@@ -831,10 +848,9 @@ class ImageProcessor:
 
                 img = img.resize((64, 64), Image.Resampling.BILINEAR)
 
-                # Apply post-scale pixel filter
+                # Post-scale filter application
                 img = self.filter_service.apply_post_scale(img, filter_mode)
 
-                # Values extracted AFTER filters so that lights & text match the palette
                 vals = self.img_values(img)
                 return {
                     'pil_image': img, 
@@ -980,7 +996,7 @@ class ImageProcessor:
         if getattr(self.config, 'special_mode', False):
             return img
 
-        if getattr(self.config, 'show_lyrics', False) and not getattr(media_data, 'playing_tv', False):
+        if getattr(self.config, 'show_lyrics', False) and len(media_data.lyrics) > 0 and not getattr(media_data, 'playing_tv', False):
             if getattr(self.config, 'text_bg', False) and not getattr(media_data, 'playing_radio', False):
                 stat = ImageStat.Stat(img.convert("L"))
                 mean_lum = stat.mean[0] if stat.mean else 100.0
@@ -1078,6 +1094,256 @@ class ImageProcessor:
                 return self.gbase64(img)
         except Exception:
             return None
+
+    def generate_vinyl_frames(self, pil_image: Image.Image, media_data: "MediaData") -> List[str]:
+        return VinylRenderer.render_frames(pil_image, self, media_data)
+
+    def generate_cassette_frames(self, pil_image: Image.Image, media_data: "MediaData") -> List[str]:
+        return CassetteRenderer.render_frames(pil_image, self, media_data)
+
+# =========================================================================
+# VINTAGE CASSETTE TAPE ANIMATION RENDERER (MICRO-PIXEL FONT & TRANSLIT)
+# =========================================================================
+
+class MicroPixelFont:
+    """Ultra-compact 3x5 pixel font bitmap engine (3px wide, 5px high).
+    Fits perfectly on retro cassette labels allowing multiple crisp text lines."""
+
+    GLYPHS = {
+        ' ': [0, 0, 0],
+        'A': [0x1E, 0x05, 0x1E], 'B': [0x1F, 0x15, 0x0A], 'C': [0x0E, 0x11, 0x11],
+        'D': [0x1F, 0x11, 0x0E], 'E': [0x1F, 0x15, 0x11], 'F': [0x1F, 0x05, 0x01],
+        'G': [0x0E, 0x11, 0x1D], 'H': [0x1F, 0x04, 0x1F], 'I': [0x11, 0x1F, 0x11],
+        'J': [0x08, 0x10, 0x0F], 'K': [0x1F, 0x04, 0x1B], 'L': [0x1F, 0x10, 0x10],
+        'M': [0x1F, 0x02, 0x1F], 'N': [0x1F, 0x06, 0x1F], 'O': [0x0E, 0x11, 0x0E],
+        'P': [0x1F, 0x05, 0x02], 'Q': [0x0E, 0x11, 0x1E], 'R': [0x1F, 0x05, 0x1A],
+        'S': [0x12, 0x15, 0x09], 'T': [0x01, 0x1F, 0x01], 'U': [0x0F, 0x10, 0x0F],
+        'V': [0x07, 0x18, 0x07], 'W': [0x1F, 0x08, 0x1F], 'X': [0x1B, 0x04, 0x1B],
+        'Y': [0x03, 0x1C, 0x03], 'Z': [0x19, 0x15, 0x13],
+        '0': [0x0E, 0x15, 0x0E], '1': [0x08, 0x1F, 0x00], '2': [0x19, 0x15, 0x12],
+        '3': [0x11, 0x15, 0x0A], '4': [0x07, 0x04, 0x1F], '5': [0x17, 0x15, 0x09],
+        '6': [0x0E, 0x15, 0x09], '7': [0x01, 0x1D, 0x03], '8': [0x0A, 0x15, 0x0A],
+        '9': [0x02, 0x15, 0x0E],
+        '-': [0x04, 0x04, 0x04], '.': [0x00, 0x10, 0x00], "'": [0x00, 0x03, 0x00],
+        '&': [0x0A, 0x15, 0x12], '/': [0x10, 0x0C, 0x03], ':': [0x00, 0x0A, 0x00],
+        '(': [0x0E, 0x11, 0x00], ')': [0x00, 0x11, 0x0E], '!': [0x00, 0x17, 0x00],
+        '?': [0x01, 0x15, 0x02]
+    }
+
+    @classmethod
+    def get_text_width(cls, text: str) -> int:
+        if not text:
+            return 0
+        return len(text) * 4 - 1
+
+    @classmethod
+    def draw_text(cls, draw: ImageDraw.ImageDraw, x: int, y: int, text: str, color: tuple):
+        cur_x = x
+        for ch in text.upper():
+            glyph = cls.GLYPHS.get(ch, cls.GLYPHS.get('?'))
+            if glyph:
+                for col_idx, col_bits in enumerate(glyph):
+                    for row_idx in range(5):
+                        if (col_bits >> row_idx) & 1:
+                            draw.point((cur_x + col_idx, y + row_idx), fill=color)
+            cur_x += 4
+
+
+class CassetteRenderer:
+    """Generates an authentic 6-frame looping vintage audio cassette animation
+    utilizing full-width micro-pixel text and album color science for the cassette accents."""
+
+    @classmethod
+    def render_frames(cls, base_img: Image.Image, image_processor: "ImageProcessor", media_data: "MediaData") -> List[str]:
+        frames_b64 = []
+        try:
+            # 1. Extract dominant color palette from album art for cassette styling
+            palette = image_processor.get_image_palette(base_img)
+            accent_color = palette[0] if palette else (185, 148, 62)
+
+            shell_color = (20, 20, 22)
+            label_bg = (242, 240, 232)
+            window_bg = (14, 14, 16)
+            spool_outer = (225, 225, 225)
+
+            left_cx, right_cx = 22, 33
+            spool_cy = 32
+            r_spool = 6
+            total_frames = 6
+
+            # Max text width across the full label width (columns 6 to 57 = 52 pixels width)
+            max_px = 52
+            title_text = cls._prepare_text(media_data.title, max_px)
+            artist_text = cls._prepare_text(media_data.artist, max_px)
+
+            for f in range(total_frames):
+                canvas = Image.new("RGB", (64, 64), (6, 6, 8))
+                draw = ImageDraw.Draw(canvas)
+
+                # Cassette body & corner screws
+                draw.rectangle([1, 1, 62, 62], fill=shell_color)
+                for sx, sy in [(3, 3), (60, 3), (3, 60), (60, 60)]:
+                    draw.point((sx, sy), fill=(160, 160, 170))
+                    draw.point((sx + 1, sy), fill=(100, 100, 110))
+
+                # Top Label Area (Full width from x: 4 to 59)
+                draw.rectangle([4, 3, 59, 18], fill=label_bg)
+                draw.line([(4, 10), (59, 10)], fill=(210, 45, 45), width=1) # Red stripe
+
+                # Full-width micro text lines centered or left-aligned on the label
+                MicroPixelFont.draw_text(draw, 6, 4, title_text, (20, 45, 110))
+                MicroPixelFont.draw_text(draw, 6, 12, artist_text, (35, 35, 40))
+
+                # Center Acrylic Window & Tape
+                draw.rectangle([13, 21, 50, 42], fill=window_bg)
+                draw.rectangle([13, 21, 50, 42], outline=(40, 40, 45), width=1)
+                for mx in [29, 31, 33, 35]:
+                    draw.line([(mx, 26), (mx, 37)], fill=(75, 75, 80), width=1)
+
+                # Rotating Spools / Cogs (6-tooth drive hubs)
+                rot_deg = f * 10.0
+                rad = math.radians(rot_deg)
+
+                for scx in [left_cx, right_cx + 9]:
+                    draw.ellipse([scx - r_spool, spool_cy - r_spool, scx + r_spool, spool_cy + r_spool], fill=spool_outer)
+                    draw.ellipse([scx - 3, spool_cy - 3, scx + 3, spool_cy + 3], fill=(8, 8, 10))
+
+                    for tooth_idx in range(6):
+                        t_angle = rad + (tooth_idx * math.pi / 3.0)
+                        tx = scx + int(round(math.cos(t_angle) * 4.5))
+                        ty = spool_cy + int(round(math.sin(t_angle) * 4.5))
+                        draw.point((tx, ty), fill=(30, 30, 35))
+
+                # Bottom Accent Bar tinted with album color palette
+                draw.rectangle([4, 45, 59, 49], fill=accent_color)
+                MicroPixelFont.draw_text(draw, 6, 45, "MIX", (255, 255, 255))
+                MicroPixelFont.draw_text(draw, 49, 45, "90", (255, 255, 255))
+
+                # Bottom tape head well
+                draw.polygon([(11, 62), (18, 52), (45, 52), (52, 62)], fill=(28, 28, 32))
+                draw.line([(18, 52), (45, 52)], fill=(45, 45, 50), width=1)
+                draw.ellipse([23, 55, 27, 59], fill=(6, 6, 8))
+                draw.ellipse([36, 55, 40, 59], fill=(6, 6, 8))
+                draw.point((32, 57), fill=(120, 120, 125))
+
+                # Filters & text overlays
+                filter_mode = getattr(image_processor.config, 'image_filter', 'None')
+                canvas = image_processor.filter_service.apply_post_scale(canvas, filter_mode)
+                canvas = image_processor.text_clock_img(canvas, {}, media_data)
+
+                b64 = image_processor.gbase64(canvas)
+                if b64:
+                    frames_b64.append(b64)
+
+        except Exception as e:
+            _LOGGER.error("Error generating vintage cassette animation frames: %s", e)
+
+        return frames_b64
+
+    @staticmethod
+    def _prepare_text(raw_text: str, max_px: int) -> str:
+        if not raw_text:
+            return ""
+        translit = unidecode(str(raw_text)).strip()
+        translit = re.sub(r'[^a-zA-Z0-9\s\-\.\'\&\/\:\(\)\!\?]', '', translit)
+        max_chars = max(3, (max_px + 1) / 4)
+        if len(translit) > max_chars:
+            return f"{translit[:int(max_chars) - 2].strip()}.."
+        return translit
+       
+# =========================================================================
+# VINYL RECORD ANIMATION RENDERER 
+# =========================================================================
+
+class VinylRenderer:
+    """Generates an ultra-smooth 16-frame spinning vinyl turntable animation
+    with dynamic light sheen gloss and realistic tonearm micro-tracking wobble."""
+
+    @classmethod
+    def render_frames(cls, base_img: Image.Image, image_processor: "ImageProcessor", media_data: "MediaData") -> List[str]:
+        frames_b64 = []
+        try:
+            cx, cy = 30, 32
+            record_radius = 27
+            label_radius = 12
+            label_diam = label_radius * 2
+
+            # Extract circular center label from album artwork
+            center_crop = base_img.resize((label_diam, label_diam), Image.Resampling.BILINEAR)
+            label_mask = Image.new("L", (label_diam, label_diam), 0)
+            ImageDraw.Draw(label_mask).ellipse([0, 0, label_diam - 1, label_diam - 1], fill=255)
+
+            deck_bg = (14, 14, 16)
+            total_frames = 16
+
+            for i in range(total_frames):
+                angle = i * (360.0 / total_frames)
+                canvas = Image.new("RGB", (64, 64), deck_bg)
+                draw = ImageDraw.Draw(canvas)
+
+                # 1. Turntable Platter Outer Ring & Rubber Rim
+                draw.ellipse([cx - record_radius - 1, cy - record_radius - 1, cx + record_radius + 1, cy + record_radius + 1], fill=(28, 28, 32))
+                # 2. Vinyl Disc Body
+                draw.ellipse([cx - record_radius, cy - record_radius, cx + record_radius, cy + record_radius], fill=(16, 16, 18))
+
+                # 3. Concentric Vinyl Grooves
+                for r in [26, 24, 22, 20, 18, 16, 14]:
+                    draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=(25, 25, 28), width=1)
+
+                # 4. Dynamic Specular Sheen (Breathing gloss effect that shimmers as the disc spins)
+                sheen_wobble = math.sin(i * 2.0 * math.pi / total_frames) * 6.0
+                sheen_brightness = int(50 + math.sin(i * math.pi / (total_frames / 2.0)) * 12)
+                sheen_color_main = (sheen_brightness, sheen_brightness, sheen_brightness + 8)
+                sheen_color_sub = (sheen_brightness - 12, sheen_brightness - 12, sheen_brightness - 6)
+
+                # Top-Left to Bottom-Right Anisotropic Sheen Arcs
+                draw.arc([cx - 25, cy - 25, cx + 25, cy + 25], int(118 + sheen_wobble), int(152 + sheen_wobble), fill=sheen_color_main, width=2)
+                draw.arc([cx - 25, cy - 25, cx + 25, cy + 25], int(298 + sheen_wobble), int(332 + sheen_wobble), fill=sheen_color_main, width=2)
+                draw.arc([cx - 19, cy - 19, cx + 19, cy + 19], int(124 - sheen_wobble), int(146 - sheen_wobble), fill=sheen_color_sub, width=2)
+                draw.arc([cx - 19, cy - 19, cx + 19, cy + 19], int(304 - sheen_wobble), int(326 - sheen_wobble), fill=sheen_color_sub, width=2)
+
+                # 5. Rotating Center Label (Album Artwork)
+                rotated_label = center_crop.rotate(-angle, resample=Image.Resampling.BILINEAR)
+                canvas.paste(rotated_label, (cx - label_radius, cy - label_radius), label_mask)
+
+                # 6. Spindle Pin
+                draw.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=(10, 10, 12), outline=(180, 180, 190))
+
+                # 7. Tonearm / Needle with realistic micro-tracking wobble
+                # Needle rides the groove with sub-pixel oscillation
+                arm_wobble_x = int(round(math.sin(i * 2.0 * math.pi / (total_frames / 2.0)) * 0.75))
+                arm_wobble_y = int(round(math.cos(i * 2.0 * math.pi / (total_frames / 2.0)) * 0.5))
+
+                needle_x = 42 + arm_wobble_x
+                needle_y = 32 + arm_wobble_y
+
+                # Pivot Base (Top-right corner)
+                draw.ellipse([55, 6, 61, 12], fill=(80, 80, 90), outline=(160, 160, 170))
+                draw.point((58, 9), fill=(220, 220, 230))
+                
+                # Tonearm Rod (Bending towards stylus)
+                joint_x = 52 + (arm_wobble_x // 2)
+                joint_y = 22
+                draw.line([(57, 11), (joint_x, joint_y)], fill=(170, 170, 180), width=1)
+                draw.line([(joint_x, joint_y), (needle_x + 1, needle_y - 1)], fill=(190, 190, 200), width=1)
+
+                # Headshell Cartridge (Stylus with illuminated red tracking dot)
+                draw.rectangle([needle_x - 1, needle_y - 2, needle_x + 2, needle_y + 2], fill=(210, 210, 220))
+                draw.point((needle_x, needle_y + 1), fill=(235, 45, 45))
+
+                # 8. Filter & Text Clock Integration
+                filter_mode = getattr(image_processor.config, 'image_filter', 'None')
+                canvas = image_processor.filter_service.apply_post_scale(canvas, filter_mode)
+                canvas = image_processor.text_clock_img(canvas, {}, media_data)
+
+                b64 = image_processor.gbase64(canvas)
+                if b64:
+                    frames_b64.append(b64)
+
+        except Exception as e:
+            _LOGGER.error("Error generating enhanced vinyl animation frames: %s", e)
+
+        return frames_b64
 
 # =========================================================================
 # STANDALONE PROVIDERS
@@ -2301,7 +2567,7 @@ class LyricsProvider:
                                 fetched_lyrics = self._parse_lrc(best_candidate['syncedLyrics'])
             except Exception: pass
 
-        if len(self.lyrics_cache) >= 50: 
+        if len(self.lyrics_cache) >= 40: 
             self.lyrics_cache.popitem(last=False)
         self.lyrics_cache[new_key] = fetched_lyrics
         self._build_visual_timeline(fetched_lyrics)
@@ -2476,6 +2742,8 @@ class MediaData:
         self.lyrics_provider = LyricsProvider(self.config, self.session)
         self.title_cleaner = TitleCleaner()
         self.ai_provider = AiArtProvider(self.config)
+        self.vinyl_frames_b64: list = []
+        self.cassette_frames_b64: list = []
         
         self.prev_title: str = ""
         self.prev_artist: str = ""
@@ -2500,6 +2768,7 @@ class MediaData:
         self.media_position_updated_at: Optional[datetime] = None
         self.temperature: Optional[str] = None
         
+        # Dedicated Isolated Slider State
         self.spotify_slide_pass: bool = False
         self.slider_frames: int = 0
         self.slider_album_urls: list[str] = []

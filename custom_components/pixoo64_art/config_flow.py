@@ -214,13 +214,22 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         })
         return self.async_show_form(step_id="manual", data_schema=data_schema, errors=errors)
 
-    # --- STEP 2: LIGHTING SYNC ---
+    # --- STEP 2: PREFERENCES & LIGHTING SYNC ---
     async def async_step_lights(self, user_input=None):
         if user_input is not None:
             self._user_data.update(user_input)
             return await self.async_step_apis()
 
         schema = vol.Schema({
+            vol.Optional("osd_overlay", default="Enabled"): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=["Enabled", "Disabled"], mode=selector.SelectSelectorMode.DROPDOWN)
+            ),
+            vol.Optional("pause_timeout", default="15s"): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=["5s", "15s", "30s", "60s", "Never"], mode=selector.SelectSelectorMode.DROPDOWN)
+            ),
+            vol.Optional("volume_osd_duration", default="2s"): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=["1s", "2s", "3s", "5s"], mode=selector.SelectSelectorMode.DROPDOWN)
+            ),
             vol.Optional(CONF_LIGHT_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="light", multiple=True)),
             vol.Optional(CONF_WLED_IP): TEXT_SELECTOR,
             vol.Optional("only_at_night", default=True): selector.BooleanSelector(),
@@ -313,6 +322,14 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
 
             # TV Watching Mode (Toggle)
             vol.Optional(CONF_TV_MODE, default=get_val(CONF_TV_MODE, False)): selector.BooleanSelector(),
+
+            # OSD Overlay Configurations
+            vol.Optional("osd_overlay", default=get_val("osd_overlay", "Enabled")):
+                selector.SelectSelector(selector.SelectSelectorConfig(options=["Enabled", "Disabled"], mode=selector.SelectSelectorMode.DROPDOWN)),
+            vol.Optional("pause_timeout", default=get_val("pause_timeout", "15s")):
+                selector.SelectSelector(selector.SelectSelectorConfig(options=["5s", "15s", "30s", "60s", "Never"], mode=selector.SelectSelectorMode.DROPDOWN)),
+            vol.Optional("volume_osd_duration", default=get_val("volume_osd_duration", "2s")):
+                selector.SelectSelector(selector.SelectSelectorConfig(options=["1s", "2s", "3s", "5s"], mode=selector.SelectSelectorMode.DROPDOWN)),
 
             # Lights
             vol.Optional(CONF_LIGHT_ENTITY, description={"suggested_value": get_val(CONF_LIGHT_ENTITY, [])}):

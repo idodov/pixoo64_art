@@ -56,7 +56,6 @@ class PixooRestoreSelect(SelectEntity, RestoreEntity):
         """Return dynamic options (Hides 'Spotify Slider' if Spotify credentials are missing)."""
         if self.key == "display_mode":
             modes = ["Standard", "Lyrics", "Burned", "Special Mode"]
-            # מוסיפים את האפשרות אך ורק אם מוגדרים מפתחות ספוטיפיי תקינים
             if self.hub.is_spotify_available:
                 modes.append("Spotify Slider")
             return modes

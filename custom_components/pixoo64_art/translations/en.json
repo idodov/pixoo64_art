@@ -28,14 +28,20 @@
         }
       },
       "lights": {
-        "title": "Ambient Room Lighting",
-        "description": "Synchronize your lights or WLED strip with dominant colors extracted from the album cover.",
+        "title": "Preferences & Ambient Lighting",
+        "description": "Customize smart on-screen overlays and synchronize your lights with dominant album colors.",
         "data": {
+          "osd_overlay": "Smart OSD Overlays (Volume/Pause)",
+          "pause_timeout": "Pause Screen Timeout",
+          "volume_osd_duration": "Volume Alert Duration",
           "light_entity": "Lights to Sync",
           "wled_ip": "WLED Device IP Address",
           "only_at_night": "Sync Lights Only at Night"
         },
         "data_description": {
+          "osd_overlay": "Pop up sleek, non-intrusive on-screen alerts when you tweak the volume or hit pause.",
+          "pause_timeout": "How long the 'PAUSED' screen chills before the display turns off or returns to your clock.",
+          "volume_osd_duration": "How many seconds the volume bar stays visible before jumping back to your epic album art.",
           "light_entity": "One or more RGB lights that will dynamically match album art colors in real time.",
           "wled_ip": "Optional IP of a WLED controller to mirror album palettes and dynamic effects.",
           "only_at_night": "Only activate room lighting sync when the sun is below the horizon."
@@ -57,14 +63,14 @@
         },
         "data_description": {
           "ai_model": "AI image model used to generate conceptual album art.",
-          "pollinations_key": "Secret key from enter.pollinations.ai. Required to activate the 'Force AI Art' switch on your dashboard.",
+          "pollinations_key": "Secret key from [Pollinations.ai](https://pollinations.ai). Required to activate the 'Force AI Art' switch on your dashboard.",
           "musicbrainz_enabled": "Query the free MusicBrainz database if cover art cannot be retrieved from your player.",
-          "spotify_client_id": "Spotify Developer Client ID. Unlocks artist photos and the animated 'Spotify Slider' gallery mode.",
-          "spotify_client_secret": "Spotify Developer Client Secret.",
-          "tidal_client_id": "TIDAL Developer Client ID for lossless cover art matching.",
-          "tidal_client_secret": "TIDAL Developer Client Secret.",
-          "lastfm_key": "Last.fm API Key for fallback artwork.",
-          "discogs_token": "Personal token from Discogs for physical release lookups."
+          "spotify_client_id": "Client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Unlocks artist photos and the animated 'Spotify Slider' gallery mode.",
+          "spotify_client_secret": "Client Secret from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).",
+          "tidal_client_id": "Client ID from the [TIDAL Developer Platform](https://developer.tidal.com) for lossless cover art matching.",
+          "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com).",
+          "lastfm_key": "API Key from [Last.fm Accounts](https://www.last.fm/api/account/create) for fallback artwork.",
+          "discogs_token": "Personal token from [Discogs Developer Settings](https://www.discogs.com/settings/developers) for physical release lookups."
         }
       }
     },
@@ -80,11 +86,14 @@
     "step": {
       "init": {
         "title": "Pixoo 64 Options",
-        "description": "Adjust media tracking, TV watching mode, ambient lighting, and API credentials.",
+        "description": "Adjust media tracking, smart overlays, ambient lighting, and API credentials.",
         "data": {
           "media_player": "Primary Media Player",
           "temperature_entity": "Temperature Sensor",
           "tv_mode": "TV Watching Mode",
+          "osd_overlay": "Smart OSD Overlays (Volume/Pause)",
+          "pause_timeout": "Pause Screen Timeout",
+          "volume_osd_duration": "Volume Alert Duration",
           "light_entity": "Lights to Sync",
           "wled_ip": "WLED Strip IP Address",
           "only_at_night": "Sync Lights Only at Night",
@@ -102,18 +111,21 @@
           "media_player": "The speaker, soundbar, or media player to track and display album art from.",
           "temperature_entity": "Sensor to display live room or outdoor temperature on the screen overlay.",
           "tv_mode": "When ON: Displays a retro TV graphic with color bars during video playback. When OFF: Turns screen off (Full Control) or reverts to your clock channel.",
+          "osd_overlay": "Pop up sleek, non-intrusive on-screen alerts when you tweak the volume or hit pause.",
+          "pause_timeout": "How long the 'PAUSED' screen chills before the display turns off or returns to your clock.",
+          "volume_osd_duration": "How many seconds the volume bar stays visible before jumping back to your epic album art.",
           "light_entity": "Home Assistant RGB lights that will dynamically match live album art colors.",
           "wled_ip": "Optional local IP of a WLED controller to mirror album palettes.",
           "only_at_night": "Only activate room lighting sync when the sun is below the horizon.",
           "ai_model": "AI image model used to generate conceptual album art.",
-          "pollinations_key": "Secret key from enter.pollinations.ai. Must be set for the 'Force AI Art' switch to become accessible in Home Assistant.",
+          "pollinations_key": "Secret key from [Pollinations.ai](https://pollinations.ai). Must be set for the 'Force AI Art' switch to become accessible in Home Assistant.",
           "musicbrainz_enabled": "Query the free MusicBrainz database if cover art cannot be retrieved from your player.",
-          "spotify_client_id": "Spotify Developer Client ID. Required for the animated 'Spotify Slider' display mode.",
-          "spotify_client_secret": "Spotify Developer Client Secret.",
-          "tidal_client_id": "TIDAL API ID for fallback artwork.",
-          "tidal_client_secret": "TIDAL API Secret.",
-          "lastfm_key": "Last.fm API Key.",
-          "discogs_token": "Discogs Personal Token."
+          "spotify_client_id": "Client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Required for the animated 'Spotify Slider' display mode.",
+          "spotify_client_secret": "Client Secret from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).",
+          "tidal_client_id": "Client ID from the [TIDAL Developer Platform](https://developer.tidal.com) for fallback artwork.",
+          "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com).",
+          "lastfm_key": "API Key from [Last.fm](https://www.last.fm/api/account/create).",
+          "discogs_token": "Personal token from [Discogs](https://www.discogs.com/settings/developers)."
         }
       }
     },

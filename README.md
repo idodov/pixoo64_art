@@ -1,7 +1,7 @@
 # 🎨 Pixoo64 Media Album Art for Home Assistant
 
 <p align="center">
-  <a href="https://github.com/idodov/pixoo64_art/releases"><img src="https://img.shields.io/github/v/release/idodov/pixoo64_art?style=for-the-badge&color=blue" alt="Latest Release"></a>
+
   <a href="https://www.home-assistant.io/"><img src="https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blueviolet.svg?style=for-the-badge&logo=home-assistant" alt="Home Assistant"></a>
   <a href="https://hacs.xyz/"><img src="https://img.shields.io/badge/HACS-Custom%20Repo-orange.svg?style=for-the-badge&logo=hacs" alt="HACS"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT"></a>

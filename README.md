@@ -392,5 +392,3 @@ Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for more informa
 * [Pollinations.ai](https://pollinations.ai/) for accessible generative AI art APIs.
 * The [Home Assistant Community](https://community.home-assistant.io/) for continuous testing and feedback.
 
-
-תריך להכין MARKDOWN עם כל התוספות והפיצ'רים שהוספנו

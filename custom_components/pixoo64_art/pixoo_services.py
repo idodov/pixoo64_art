@@ -17,7 +17,7 @@ import difflib
 from collections import Counter, OrderedDict
 from datetime import datetime, timezone
 from io import BytesIO
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter, ImageStat, ImageChops, ImageOps, UnidentifiedImageError
 from homeassistant.core import HomeAssistant
@@ -64,6 +64,10 @@ def _resize_image_sync(image_data: bytes) -> Optional[Image.Image]:
     except Exception:
         return None
 
+# =========================================================================
+# CONFIGURATION
+# =========================================================================
+
 class Config:
     def __init__(self, entry):
         data = entry.data
@@ -101,7 +105,7 @@ class Config:
         self.burned = False
         self.crop_borders = True
         self.crop_extra = False
-        self.images_cache = 25
+        self.images_cache = 40  # Strict cap to prevent memory bloat
         self.full_control = False
         self.contrast = False
         self.sharpness = False
@@ -125,7 +129,12 @@ class Config:
         self.progress_bar_color = "match"
         self.progress_bar_y_offset = 64
         self.force_ai = False
+        self.image_filter = "None"
         self.default_font = ImageFont.load_default()
+
+# =========================================================================
+# PIXOO HARDWARE DEVICE
+# =========================================================================
 
 class PixooDevice:
     def __init__(self, config: "Config", session: aiohttp.ClientSession): 
@@ -135,26 +144,30 @@ class PixooDevice:
         self.headers = {"Content-Type": "application/json", "Accept": "*/*", "Connection": "keep-alive", "User-Agent": "PixooClient/1.0"}
         self._last_payload_str: Optional[str] = None
         self._last_send_time: float = 0.0
+        self._send_lock = asyncio.Lock()
 
     async def send_command(self, payload_command: dict, retries: int = 3) -> bool: 
         if self.session.closed or not self.config.pixoo_url: return False
-        try:
-            current_payload_str = json.dumps(payload_command, sort_keys=True)
-            now = time.monotonic()
-            if (current_payload_str == self._last_payload_str) and (now - self._last_send_time < 1.0): return True
-            self._last_payload_str = current_payload_str
-            self._last_send_time = now
-        except Exception: pass 
-
-        for attempt in range(1, retries + 1):
+        
+        async with self._send_lock:
             try:
-                async with self.session.post(self.config.pixoo_url, headers=self.headers, json=payload_command, timeout=5) as response:
-                    if response.status == 200:
-                        await asyncio.sleep(0.1)
-                        return True
-            except Exception:
-                if attempt < retries: await asyncio.sleep(0.2 * attempt)
-        return False
+                current_payload_str = json.dumps(payload_command, sort_keys=True)
+                now = time.monotonic()
+                if (current_payload_str == self._last_payload_str) and (now - self._last_send_time < 0.5): 
+                    return True
+                self._last_payload_str = current_payload_str
+                self._last_send_time = now
+            except Exception: pass 
+
+            for attempt in range(1, retries + 1):
+                try:
+                    async with self.session.post(self.config.pixoo_url, headers=self.headers, json=payload_command, timeout=5) as response:
+                        if response.status == 200:
+                            await asyncio.sleep(0.08)
+                            return True
+                except Exception:
+                    if attempt < retries: await asyncio.sleep(0.15 * attempt)
+            return False
 
     async def get_current_channel_index(self) -> int: 
         if self.session.closed or not self.config.pixoo_url: return 0
@@ -181,165 +194,67 @@ class PixooDevice:
             pass
         return True
 
-class ImageProcessor:
-    def __init__(self, hass: HomeAssistant, config: "Config", session: aiohttp.ClientSession):
-        self.hass = hass
-        self.config = config
-        self.session = session
-        self.image_cache: OrderedDict[str, dict] = OrderedDict()
-        self.raw_image_cache: OrderedDict[str, bytes] = OrderedDict()
-        self._prefetch_tasks: dict = {}
-        self.cache_size: int = config.images_cache
+# =========================================================================
+# IMAGE FILTER SERVICE
+# =========================================================================
 
-    def shutdown(self):
-        pass
+class ImageFilterService:
+    """Applies artistic pre-scale and post-scale pixel filters using PIL."""
 
-    async def async_prefetch_url(self, picture: str, media_data: "MediaData" = None):
-        if not picture: return
-        if picture.startswith('http'): url = picture
-        else:
-            try: base_url = get_url(self.hass)
-            except Exception: base_url = "http://127.0.0.1:8123"
-            url = f"{base_url}{picture}"
-            
-        if url in self.raw_image_cache or url in self._prefetch_tasks:
-            return
-
-        task = asyncio.create_task(self.get_raw_image_data(url))
-        self._prefetch_tasks[url] = task
-        try:
-            await task
-        finally:
-            self._prefetch_tasks.pop(url, None)
-
-    async def get_raw_image_data(self, url: str) -> Optional[bytes]:
-        if not url: return None
-        if not url.startswith('http'):
-            try: base_url = get_url(self.hass)
-            except Exception: base_url = "http://127.0.0.1:8123"
-            url = f"{base_url}{url}"
-
-        if url in self._prefetch_tasks:
-            try: await self._prefetch_tasks[url]
-            except Exception: pass
-
-        if url in self.raw_image_cache:
-            self.raw_image_cache.move_to_end(url)
-            return self.raw_image_cache[url]
+    @staticmethod
+    def apply_pre_scale(img: Image.Image, filter_mode: str) -> Image.Image:
+        """Applies filters that work best prior to downscaling to 64x64."""
+        if not filter_mode or filter_mode == "None":
+            return img
 
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            api_key = getattr(self.config, 'pollinations', "")
-            if "pollinations.ai" in url and api_key:
-                headers["Authorization"] = f"Bearer {str(api_key).strip()}"
-
-            async with self.session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                if response.status == 200:
-                    image_data = await response.read()
-                    if len(self.raw_image_cache) >= self.cache_size:
-                        self.raw_image_cache.popitem(last=False)
-                    self.raw_image_cache[url] = image_data
-                    return image_data
+            if filter_mode == "Vibrant":
+                img = ImageEnhance.Color(img).enhance(1.45)
+                img = ImageEnhance.Contrast(img).enhance(1.15)
+            elif filter_mode == "Retro Arcade":
+                img = ImageEnhance.Color(img).enhance(1.25)
+                img = ImageEnhance.Contrast(img).enhance(1.20)
+            elif filter_mode == "Crisp & Sharp":
+                img = ImageEnhance.Contrast(img).enhance(1.10)
+            elif filter_mode == "Noir B&W":
+                img = ImageOps.grayscale(img).convert("RGB")
+                img = ImageEnhance.Contrast(img).enhance(1.35)
+            elif filter_mode == "Cyberpunk Neon":
+                img = ImageOps.autocontrast(img, cutoff=2)
+                img = ImageEnhance.Color(img).enhance(1.80)
+                img = ImageEnhance.Contrast(img).enhance(1.30)
         except Exception as e:
-            _LOGGER.debug("Failed to download raw image data for %s: %s", url, e)
-        return None
+            _LOGGER.debug("Pre-scale filter error: %s", e)
+        return img
 
-    async def get_image(self, picture: Optional[str], media_data: "MediaData", spotify_slide: bool = False) -> Optional[dict]:
-        if not picture: return None
-        cache_key = f"{picture}_{media_data.artist}_{media_data.title}" if getattr(self.config, 'burned', False) else picture
-        use_cache = not spotify_slide and not getattr(media_data, 'playing_tv', False)
-        cached_data = None
+    @staticmethod
+    def apply_post_scale(img: Image.Image, filter_mode: str) -> Image.Image:
+        """Applies pixel-level filters on the final 64x64 canvas."""
+        if not filter_mode or filter_mode == "None":
+            return img
 
-        if use_cache and cache_key in self.image_cache:
-            self.image_cache.move_to_end(cache_key)
-            cached_data = self.image_cache[cache_key]
-        else:
-            image_data = await self.get_raw_image_data(picture)
-            if image_data:
-                cached_data = await self.process_image_data(image_data, media_data)
-                if cached_data and not spotify_slide:
-                    if len(self.image_cache) >= self.cache_size: self.image_cache.popitem(last=False)
-                    self.image_cache[cache_key] = cached_data
-
-        if not cached_data: return None
-        
-        final_img = cached_data['pil_image'].copy()
-        final_img = self.text_clock_img(final_img, cached_data, media_data)
-        
-        return {'base64_image': self.gbase64(final_img), **cached_data}
-
-    async def process_image_data(self, image_data: bytes, media_data: "MediaData") -> Optional[dict]:
         try:
-            return await self.hass.async_add_executor_job(
-                self._process_image, image_data, media_data
-            )
+            if filter_mode == "Vibrant":
+                img = ImageEnhance.Sharpness(img).enhance(1.25)
+            elif filter_mode == "Retro Arcade":
+                img = ImageOps.posterize(img, bits=3)
+            elif filter_mode == "Crisp & Sharp":
+                img = img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=170, threshold=2))
+            elif filter_mode == "Noir B&W":
+                img = ImageEnhance.Sharpness(img).enhance(1.20)
+            elif filter_mode == "Cyberpunk Neon":
+                img = img.filter(ImageFilter.EDGE_ENHANCE)
         except Exception as e:
-            _LOGGER.error("Error executing image process job: %s", e)
-            return None
+            _LOGGER.debug("Post-scale filter error: %s", e)
+        return img
 
-    def _process_image(self, image_data: bytes, media_data: "MediaData") -> Optional[dict]:
-        try:
-            with Image.open(BytesIO(image_data)) as img:
-                img.load() 
-                img = ensure_rgb(img)
-                if not img: return None
-                
-                max_dimension = 320
-                if max(img.size) > max_dimension:
-                    scale_factor = max_dimension / max(img.size)
-                    img = img.resize((int(img.width * scale_factor), int(img.height * scale_factor)), Image.Resampling.BILINEAR)
+# =========================================================================
+# COLOR SCIENCE & PALETTE ANALYZER
+# =========================================================================
 
-                if (getattr(self.config, 'crop_borders', False) or getattr(self.config, 'special_mode', False)) and not media_data.radio_logo:
-                    img = self.crop_image_borders(img, media_data.radio_logo)
-
-                img = self.fixed_size(img)
-                
-                if getattr(self.config, 'burned', False) and not media_data.radio_logo:
-                    img = img.resize((64, 64), Image.Resampling.BILINEAR)
-                    img = self._draw_burned_text(img, media_data.artist, media_data.title)
-                
-                if getattr(self.config, 'special_mode', False):
-                    img = self.special_mode(img)
-
-                img = img.resize((64, 64), Image.Resampling.BILINEAR)
-
-                vals = self.img_values(img)
-                return {
-                    'pil_image': img, 
-                    'font_color': vals['font_color'], 
-                    'brightness_lower_part': vals['brightness_lower_part'], 
-                    'background_color_rgb': vals['background_color_rgb'],
-                    'background_color': vals['background_color']
-                }
-        except Exception:
-            return None
-
-    def img_values(self, img: Image.Image) -> dict:
-        analysis_img = img.resize((50, 50), Image.Resampling.NEAREST)
-        palette = self.get_image_palette(analysis_img) 
-        
-        if getattr(self.config, 'text_bg', False):
-             prime_color = palette[0] if palette else (255, 255, 0)
-             h, s, v = colorsys.rgb_to_hsv(prime_color[0]/255, prime_color[1]/255, prime_color[2]/255)
-             r, g, b = colorsys.hsv_to_rgb(h, max(0.5, s), 1.0)
-             hex_color = f'#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}'
-             most_common_color_alternative_rgb = prime_color
-        else:
-             most_common_color_alternative_rgb = palette[0] if palette else (0,0,0)
-             hex_color = '#ffffff'
-
-        brightness = int(sum(most_common_color_alternative_rgb) / 3)
-        brightness_lower_part = round(1 - brightness / 255, 2) if 0 <= brightness <= 255 else 0
-        font_color = self.get_optimal_font_color(analysis_img)
-
-        return {
-            'font_color': font_color, 
-            'brightness_lower_part': brightness_lower_part, 
-            'background_color_rgb': most_common_color_alternative_rgb,
-            'background_color': hex_color
-        }
-
-    def get_image_palette(self, img: Image.Image) -> list:
+class ColorAnalyzer:
+    @staticmethod
+    def get_image_palette(img: Image.Image) -> list:
         quantized = img.quantize(colors=16, method=2)
         palette = quantized.getpalette()
         candidates = []
@@ -349,11 +264,15 @@ class ImageProcessor:
                 r, g, b = rgb
                 h, s, v = colorsys.rgb_to_hsv(r/255.0, g/255.0, b/255.0)
                 if s > 0.2 and v > 0.15: candidates.append(rgb)
-        if len(candidates) < 3: candidates.extend([(0, 255, 255), (255, 0, 255), (50, 255, 50), (255, 255, 0), (255, 140, 0)])
+        if len(candidates) < 3: 
+            candidates.extend([(0, 255, 255), (255, 0, 255), (50, 255, 50), (255, 255, 0), (255, 140, 0)])
         return candidates
 
-    def get_optimal_font_color(self, img: Image.Image) -> str:
-        if getattr(self.config, 'force_font_color', None): return self.config.force_font_color
+    @classmethod
+    def get_optimal_font_color(cls, img: Image.Image, config: "Config") -> str:
+        if getattr(config, 'force_font_color', None): 
+            return config.force_font_color
+            
         small_thumb = img.resize((25, 25), Image.Resampling.NEAREST)
         colors_raw = small_thumb.getcolors(maxcolors=625) or []
         
@@ -378,7 +297,7 @@ class ImageProcessor:
                     chosen_dominant_color = color[:3]
                     break
 
-        if getattr(self.config, 'text_bg', False):
+        if getattr(config, 'text_bg', False):
             if chosen_dominant_color:
                 r, g, b = chosen_dominant_color
                 h, s, v = colorsys.rgb_to_hsv(r/255, g/255, b/255)
@@ -388,54 +307,49 @@ class ImageProcessor:
         else:
             return "#ffffff"
 
-    def special_mode(self, img: Image.Image) -> Image.Image:
-        if img is None: return None
-        output_size = (64, 64)
-        album_size = (34, 34) if getattr(self.config, 'show_text', False) else (56, 56)
+    @classmethod
+    def extract_image_values(cls, img: Image.Image, config: "Config") -> dict:
+        analysis_img = img.resize((50, 50), Image.Resampling.NEAREST)
+        palette = cls.get_image_palette(analysis_img) 
         
-        album_art = img.resize(album_size, Image.Resampling.BILINEAR)
-
-        try:
-            left_color = album_art.getpixel((0, album_size[1] // 2))
-            right_color = album_art.getpixel((album_size[0] - 1, album_size[1] // 2))
-        except Exception:
-            left_color = (100, 100, 100)
-            right_color = (150, 150, 150)
-
-        if album_size == (34, 34):
-            gradient_source = Image.new("RGB", (2, 1))
-            gradient_source.putpixel((0, 0), left_color)
-            gradient_source.putpixel((1, 0), right_color)
-            background = gradient_source.resize(output_size, Image.Resampling.BILINEAR)
+        if getattr(config, 'text_bg', False):
+             prime_color = palette[0] if palette else (255, 255, 0)
+             h, s, v = colorsys.rgb_to_hsv(prime_color[0]/255, prime_color[1]/255, prime_color[2]/255)
+             r, g, b = colorsys.hsv_to_rgb(h, max(0.5, s), 1.0)
+             hex_color = f'#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}'
+             most_common_color_alternative_rgb = prime_color
         else:
-            dark_background_color = (
-                min(left_color[0], right_color[0]) // 2,
-                min(left_color[1], right_color[1]) // 2,
-                min(left_color[2], right_color[2]) // 2
-            )
-            background = Image.new('RGB', output_size, dark_background_color)
+             most_common_color_alternative_rgb = palette[0] if palette else (0,0,0)
+             hex_color = '#ffffff'
 
-        x = (output_size[0] - album_size[0]) // 2
-        y = 8 
-        background.paste(album_art, (x, y))
-        return background
+        brightness = int(sum(most_common_color_alternative_rgb) / 3)
+        brightness_lower_part = round(1 - brightness / 255, 2) if 0 <= brightness <= 255 else 0
+        font_color = cls.get_optimal_font_color(analysis_img, config)
 
-    def crop_image_borders(self, img: Image.Image, radio_logo: bool) -> Image.Image:
-        """Main entry for border cropping: handles standard, extra, and special mode."""
-        if radio_logo or not getattr(self.config, 'crop_borders', False):
+        return {
+            'font_color': font_color, 
+            'brightness_lower_part': brightness_lower_part, 
+            'background_color_rgb': most_common_color_alternative_rgb,
+            'background_color': hex_color
+        }
+
+# =========================================================================
+# IMAGE CROPPER
+# =========================================================================
+
+class ImageCropper:
+    @classmethod
+    def crop_image_borders(cls, img: Image.Image, config: "Config", radio_logo: bool) -> Image.Image:
+        if radio_logo or not getattr(config, 'crop_borders', False):
             return img
 
-        if getattr(self.config, 'crop_extra', False) or getattr(self.config, 'special_mode', False): 
-            return self._perform_extra_subject_crop(img)
+        if getattr(config, 'crop_extra', False) or getattr(config, 'special_mode', False): 
+            return cls._perform_extra_subject_crop(img)
 
-        return self._perform_standard_crop(img)
+        return cls._perform_standard_crop(img)
 
-    def _perform_standard_crop(self, img: Image.Image) -> Image.Image:
-        """
-        STANDARD CROP:
-        Trims outer blank margins, letterbox/pillarbox bars, but PRESERVES the full
-        album artwork design including typography, titles, and artist names.
-        """
+    @classmethod
+    def _perform_standard_crop(cls, img: Image.Image) -> Image.Image:
         orig_w, orig_h = img.size
         if orig_w < 20 or orig_h < 20:
             return img
@@ -479,7 +393,6 @@ class ImageProcessor:
         w = max_x - min_x
         h = max_y - min_y
 
-        # If content already fills 98% of both axes, no crop needed
         if w >= orig_w * 0.98 and h >= orig_h * 0.98:
             return img
 
@@ -499,11 +412,8 @@ class ImageProcessor:
 
         return img.crop((left, top, left + crop_dim, top + crop_dim))
 
-    def _refine_box_to_photo_edges(self, img: Image.Image, rough_box: Tuple[int, int, int, int], bg_color: Tuple[int, int, int]) -> Tuple[int, int, int, int]:
-        """
-        Snaps the rough proxy coordinates to the exact pixel edges of the inner photo
-        on the full-resolution image.
-        """
+    @classmethod
+    def _refine_box_to_photo_edges(cls, img: Image.Image, rough_box: Tuple[int, int, int, int], bg_color: Tuple[int, int, int]) -> Tuple[int, int, int, int]:
         orig_w, orig_h = img.size
         rx1, ry1, rx2, ry2 = rough_box
         pixels = img.load()
@@ -516,7 +426,6 @@ class ImageProcessor:
         x_end = int(rx2 - (rx2 - rx1) * 0.25)
         x_len = max(1, x_end - x_start)
 
-        # 1. Exact Top Edge
         exact_y1 = ry1
         search_limit_top = max(0, ry1 - int(orig_h * 0.1))
         for y in range(cy, search_limit_top, -1):
@@ -528,7 +437,6 @@ class ImageProcessor:
                 exact_y1 = y + 1
                 break
 
-        # 2. Exact Bottom Edge
         exact_y2 = ry2
         search_limit_bot = min(orig_h, ry2 + int(orig_h * 0.1))
         for y in range(cy, search_limit_bot):
@@ -544,7 +452,6 @@ class ImageProcessor:
         y_end = int(ry2 - (ry2 - ry1) * 0.25)
         y_len = max(1, y_end - y_start)
 
-        # 3. Exact Left Edge
         exact_x1 = rx1
         search_limit_left = max(0, rx1 - int(orig_w * 0.1))
         for x in range(cx, search_limit_left, -1):
@@ -556,7 +463,6 @@ class ImageProcessor:
                 exact_x1 = x + 1
                 break
 
-        # 4. Exact Right Edge
         exact_x2 = rx2
         search_limit_right = min(orig_w, rx2 + int(orig_w * 0.1))
         for x in range(cx, search_limit_right):
@@ -570,52 +476,8 @@ class ImageProcessor:
 
         return exact_x1, exact_y1, exact_x2, exact_y2
 
-    def _score_component(self, comp: dict, proxy: Image.Image, pw: int, ph: int) -> float:
-        """Scores a component to identify the real photographic artwork over text, lines, or containers."""
-        w, h, area = comp['w'], comp['h'], comp['area']
-        if w <= 0 or h <= 0 or area <= 0:
-            return 0.0
-
-        solidity = area / float(w * h)
-        aspect = min(w, h) / float(max(w, h))
-
-        # Measure color variance (stddev) of the component's pixels
-        pixels = proxy.load()
-        r_vals, g_vals, b_vals = [], [], []
-        for cx, cy in comp['pixels']:
-            r, g, b = pixels[cx, cy]
-            r_vals.append(r)
-            g_vals.append(g)
-            b_vals.append(b)
-
-        n = len(r_vals)
-        if n > 1:
-            mean_r = sum(r_vals) / n
-            mean_g = sum(g_vals) / n
-            mean_b = sum(b_vals) / n
-            var_rgb = (
-                sum((x - mean_r) ** 2 for x in r_vals) +
-                sum((x - mean_g) ** 2 for x in g_vals) +
-                sum((x - mean_b) ** 2 for x in b_vals)
-            ) / (3.0 * n)
-            std_dev = math.sqrt(var_rgb)
-        else:
-            std_dev = 0.0
-
-        center_x = (comp['min_x'] + comp['max_x']) / 2.0
-        center_y = (comp['min_y'] + comp['max_y']) / 2.0
-        dist_from_center = math.hypot(center_x - (pw / 2.0), center_y - (ph / 2.0)) / (pw / 2.0)
-
-        # Real photos/album artwork have high solidity, balanced aspect ratio, rich color variance, and are centered
-        variance_bonus = 1.0 + min(std_dev, 50.0) / 20.0
-        score = area * (solidity ** 1.5) * (aspect ** 1.0) * variance_bonus / (1.0 + dist_from_center * 0.6)
-        return score
-
-    def _inspect_and_unwrap_container(self, comp: dict, proxy: Image.Image, pw: int, ph: int) -> Optional[Tuple[Tuple[int, int, int], list]]:
-        """
-        Detects if a component is a spanning container stripe/banner (like Sweet Dreams)
-        and extracts the inner objects. Small centered photos (like Pet Shop Boys) are skipped.
-        """
+    @classmethod
+    def _inspect_and_unwrap_container(cls, comp: dict, proxy: Image.Image, pw: int, ph: int) -> Optional[Tuple[Tuple[int, int, int], list]]:
         is_spanning_stripe = (comp['h'] > ph * 0.70 and comp['w'] < pw * 0.40) or (comp['w'] > pw * 0.70 and comp['h'] < ph * 0.40)
         is_large_box = comp['area'] > int((pw * ph) * 0.15)
         
@@ -683,11 +545,8 @@ class ImageProcessor:
 
         return None
 
-    def _find_subject_box(self, comps: list, pw: int, ph: int) -> Tuple[int, int, int, int]:
-        """
-        Finds the primary subject and merges immediately adjacent companion parts
-        (e.g., two people side-by-side) while excluding distant text or decorative lines.
-        """
+    @classmethod
+    def _find_subject_box(cls, comps: list, pw: int, ph: int) -> Tuple[int, int, int, int]:
         def comp_score(c):
             w, h, area = c['w'], c['h'], c['area']
             solidity = area / float(w * h)
@@ -704,16 +563,13 @@ class ImageProcessor:
         cur_min_y, cur_max_y = primary['min_y'], primary['max_y']
 
         for other in scored_comps[1:]:
-            # Ignore tiny specks/text (area < 15% of primary)
             if other['area'] < primary['area'] * 0.15:
                 continue
 
-            # Distance between component bounding boxes
             dx = max(0, max(cur_min_x - other['max_x'], other['min_x'] - cur_max_x))
             dy = max(0, max(cur_min_y - other['max_y'], other['min_y'] - cur_max_y))
             dist = max(dx, dy)
 
-            # Only merge if components are closely touching/adjacent (gap <= 6 pixels)
             if dist <= 6:
                 new_min_x = min(cur_min_x, other['min_x'])
                 new_max_x = max(cur_max_x, other['max_x'])
@@ -723,19 +579,14 @@ class ImageProcessor:
                 new_h = new_max_y - new_min_y + 1
                 new_aspect = min(new_w, new_h) / float(max(new_w, new_h))
 
-                # Ensure merging preserves a balanced rectangular/square shape
                 if new_aspect >= 0.45:
                     cur_min_x, cur_max_x = new_min_x, new_max_x
                     cur_min_y, cur_max_y = new_min_y, new_max_y
 
         return cur_min_x, cur_min_y, cur_max_x, cur_max_y
 
-    def _perform_extra_subject_crop(self, img: Image.Image) -> Image.Image:
-        """
-        EXTRA CROP:
-        Strictly isolates the central primary photo, handles nested stripes/containers,
-        unites multi-person subjects, and guarantees 0% outer border bleed.
-        """
+    @classmethod
+    def _perform_extra_subject_crop(cls, img: Image.Image) -> Image.Image:
         orig_w, orig_h = img.size
         if orig_w < 20 or orig_h < 20:
             return img
@@ -795,7 +646,6 @@ class ImageProcessor:
                     w = max(xs) - min(xs) + 1
                     h = max(ys) - min(ys) + 1
                     area = len(comp_pixels)
-
                     density = area / float(w * h)
                     is_outer_frame = (w > pw * 0.75 and h > ph * 0.75 and density < 0.25)
 
@@ -809,19 +659,17 @@ class ImageProcessor:
                         })
 
         if not comps:
-            return self._perform_standard_crop(img)
+            return cls._perform_standard_crop(img)
 
-        # Check if the primary component is a container stripe/banner (like Sweet Dreams)
         comps.sort(key=lambda c: c['area'], reverse=True)
-        container_result = self._inspect_and_unwrap_container(comps[0], proxy, pw, ph)
+        container_result = cls._inspect_and_unwrap_container(comps[0], proxy, pw, ph)
 
         if container_result:
             target_bg_color, candidate_comps = container_result
         else:
             target_bg_color, candidate_comps = bg_ref, comps
 
-        # Find the subject bounding box (merges side-by-side persons, rejects distant text)
-        sub_min_x, sub_min_y, sub_max_x, sub_max_y = self._find_subject_box(candidate_comps, pw, ph)
+        sub_min_x, sub_min_y, sub_max_x, sub_max_y = cls._find_subject_box(candidate_comps, pw, ph)
 
         scale_to_orig = 1.0 / scale
         rough_box = (
@@ -831,9 +679,7 @@ class ImageProcessor:
             int(round(sub_max_y * scale_to_orig))
         )
 
-        # Refine boundaries directly against the immediate surrounding background
-        x1, y1, x2, y2 = self._refine_box_to_photo_edges(img, rough_box, target_bg_color)
-
+        x1, y1, x2, y2 = cls._refine_box_to_photo_edges(img, rough_box, target_bg_color)
         sub_w = x2 - x1
         sub_h = y2 - y1
 
@@ -850,87 +696,217 @@ class ImageProcessor:
 
         return img.crop((left, top, left + crop_dim, top + crop_dim))
 
- 
-    
-    def _perform_extra_crop(self, img: Image.Image) -> Image.Image:
-        """Crops out borders and aggressively zooms in by 15% on the subject."""
-        orig_w, orig_h = img.size
-        top_b, bottom_b, left_b, right_b = self._detect_borders(img, tolerance=32)
-        
-        min_x = max(0, left_b)
-        min_y = max(0, top_b)
-        max_x = min(orig_w, orig_w - right_b)
-        max_y = min(orig_h, orig_h - bottom_b)
-        
-        content_w = max_x - min_x
-        content_h = max_y - min_y
-        
-        if content_w < 10 or content_h < 10:
-            content_w, content_h = orig_w, orig_h
-            min_x, min_y, max_x, max_y = 0, 0, orig_w, orig_h
+# =========================================================================
+# IMAGE PROCESSOR (ORCHESTRATOR & CACHING)
+# =========================================================================
 
-        # Zoom in 15% deeper to eliminate any thin inner borders, text, or margins
-        crop_dim = int(min(content_w, content_h) * 0.85)
-        crop_dim = max(10, min(crop_dim, min(orig_w, orig_h)))
-        
-        center_x = (min_x + max_x) / 2.0
-        center_y = (min_y + max_y) / 2.0
-        
-        half = crop_dim / 2.0
-        left = int(max(0, min(center_x - half, orig_w - crop_dim)))
-        top = int(max(0, min(center_y - half, orig_h - crop_dim)))
-        
-        return img.crop((left, top, left + crop_dim, top + crop_dim))
+class ImageProcessor:
+    def __init__(self, hass: HomeAssistant, config: "Config", session: aiohttp.ClientSession):
+        self.hass = hass
+        self.config = config
+        self.session = session
+        self.image_cache: OrderedDict[str, dict] = OrderedDict()
+        self.raw_image_cache: OrderedDict[str, bytes] = OrderedDict()
+        self._prefetch_tasks: dict = {}
+        self.cache_size: int = min(getattr(config, 'images_cache', 40), 40)
+        self.cropper = ImageCropper()
+        self.color_analyzer = ColorAnalyzer()
+        self.filter_service = ImageFilterService()
 
-    def _perform_border_crop(self, img_to_crop: Image.Image) -> Optional[Image.Image]:
+    def shutdown(self):
+        pass
+
+    async def async_prefetch_url(self, picture: str, media_data: "MediaData" = None):
+        if not picture: return
+        if picture.startswith('http'): url = picture
+        else:
+            try: base_url = get_url(self.hass)
+            except Exception: base_url = "http://127.0.0.1:8123"
+            url = f"{base_url}{picture}"
+            
+        if url in self.raw_image_cache or url in self._prefetch_tasks:
+            return
+
+        task = asyncio.create_task(self.get_raw_image_data(url))
+        self._prefetch_tasks[url] = task
         try:
-            orig_w, orig_h = img_to_crop.size
-            scale = 128 / max(orig_w, orig_h)
-            proxy_w = int(orig_w * scale)
-            proxy_h = int(orig_h * scale)
-            
-            proxy = img_to_crop.resize((proxy_w, proxy_h), Image.Resampling.BILINEAR)
+            await task
+        finally:
+            self._prefetch_tasks.pop(url, None)
 
-            border_color = self.get_dominant_border_color(proxy)
-            bbox = self._find_content_bounding_box(proxy, border_color, threshold=20)
-            
-            if not bbox:
-                return img_to_crop 
+    async def get_raw_image_data(self, url: str) -> Optional[bytes]:
+        if not url: return None
+        if not url.startswith('http'):
+            try: base_url = get_url(self.hass)
+            except Exception: base_url = "http://127.0.0.1:8123"
+            url = f"{base_url}{url}"
 
-            min_x, min_y, max_x, max_y = bbox
-            content_w = max_x - min_x
-            content_h = max_y - min_y
-            
-            crop_size = min(content_w, content_h)
-            
-            center_x = min_x + content_w // 2
-            center_y = min_y + content_h // 2
-            
-            real_size = int(crop_size / scale)
-            real_cx = int(center_x / scale)
-            real_cy = int(center_y / scale)
-            
-            real_left = real_cx - (real_size // 2)
-            real_top = real_cy - (real_size // 2)
-            
-            return self._balance_border(img_to_crop, img_to_crop, real_left, real_top, real_size, border_color, 40)
+        if url in self._prefetch_tasks:
+            try: await self._prefetch_tasks[url]
+            except Exception: pass
 
+        if url in self.raw_image_cache:
+            self.raw_image_cache.move_to_end(url)
+            return self.raw_image_cache[url]
+
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            api_key = getattr(self.config, 'pollinations', "")
+            if "pollinations.ai" in url and api_key:
+                headers["Authorization"] = f"Bearer {str(api_key).strip()}"
+
+            async with self.session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                if response.status == 200:
+                    image_data = await response.read()
+                    if len(self.raw_image_cache) >= self.cache_size:
+                        self.raw_image_cache.popitem(last=False)
+                    self.raw_image_cache[url] = image_data
+                    return image_data
         except Exception as e:
-            _LOGGER.error("Error in normal crop: %s", e)
-            return img_to_crop
+            _LOGGER.debug("Failed to download raw image data for %s: %s", url, e)
+        return None
 
-    def _draw_text_with_shadow(self, draw: ImageDraw.ImageDraw, xy: tuple, text: str, font: ImageFont.FreeTypeFont, text_color: tuple, shadow_color: tuple):
-        x, y = xy
-        draw.text((x + 1, y + 1), text, font=font, fill=shadow_color)
-        draw.text((x, y + 1), text, font=font, fill=shadow_color)
-        if shadow_color == (255, 255, 255, 128):
-            draw.text((x + 1, y - 1), text, font=font, fill=shadow_color)
-            draw.text((x - 1, y), text, font=font, fill=shadow_color)
-        draw.text((x, y), text, font=font, fill=text_color)
-    
+    async def get_image(self, picture: Optional[str], media_data: "MediaData", spotify_slide: bool = False) -> Optional[dict]:
+        if not picture: return None
+        current_filter = getattr(self.config, 'image_filter', 'None')
+        cache_key = f"{picture}_{media_data.artist}_{media_data.title}_{current_filter}" if getattr(self.config, 'burned', False) else f"{picture}_{current_filter}"
+        use_cache = not spotify_slide and not getattr(media_data, 'playing_tv', False)
+        cached_data = None
+
+        if use_cache and cache_key in self.image_cache:
+            self.image_cache.move_to_end(cache_key)
+            cached_data = self.image_cache[cache_key]
+        else:
+            image_data = await self.get_raw_image_data(picture)
+            if image_data:
+                cached_data = await self.process_image_data(image_data, media_data)
+                if cached_data and not spotify_slide:
+                    if len(self.image_cache) >= self.cache_size: 
+                        self.image_cache.popitem(last=False)
+                    self.image_cache[cache_key] = cached_data
+
+        if not cached_data: return None
+        
+        final_img = cached_data['pil_image'].copy()
+        final_img = self.text_clock_img(final_img, cached_data, media_data)
+        
+        return {'base64_image': self.gbase64(final_img), **cached_data}
+
+    async def process_image_data(self, image_data: bytes, media_data: "MediaData") -> Optional[dict]:
+        try:
+            return await self.hass.async_add_executor_job(
+                self._process_image, image_data, media_data
+            )
+        except Exception as e:
+            _LOGGER.error("Error executing image process job: %s", e)
+            return None
+
+    def _process_image(self, image_data: bytes, media_data: "MediaData") -> Optional[dict]:
+        try:
+            with Image.open(BytesIO(image_data)) as img:
+                img.load() 
+                img = ensure_rgb(img)
+                if not img: return None
+                
+                max_dimension = 320
+                if max(img.size) > max_dimension:
+                    scale_factor = max_dimension / max(img.size)
+                    img = img.resize((int(img.width * scale_factor), int(img.height * scale_factor)), Image.Resampling.BILINEAR)
+
+                if (getattr(self.config, 'crop_borders', False) or getattr(self.config, 'special_mode', False)) and not media_data.radio_logo:
+                    img = self.crop_image_borders(img, media_data.radio_logo)
+
+                img = self.fixed_size(img)
+                
+                # Apply pre-scale image enhancement filter
+                filter_mode = getattr(self.config, 'image_filter', 'None')
+                img = self.filter_service.apply_pre_scale(img, filter_mode)
+
+                if getattr(self.config, 'burned', False) and not media_data.radio_logo:
+                    img = img.resize((64, 64), Image.Resampling.BILINEAR)
+                    img = self._draw_burned_text(img, media_data.artist, media_data.title)
+                
+                if getattr(self.config, 'special_mode', False):
+                    img = self.special_mode(img)
+
+                img = img.resize((64, 64), Image.Resampling.BILINEAR)
+
+                # Apply post-scale pixel filter
+                img = self.filter_service.apply_post_scale(img, filter_mode)
+
+                # Values extracted AFTER filters so that lights & text match the palette
+                vals = self.img_values(img)
+                return {
+                    'pil_image': img, 
+                    'font_color': vals['font_color'], 
+                    'brightness_lower_part': vals['brightness_lower_part'], 
+                    'background_color_rgb': vals['background_color_rgb'],
+                    'background_color': vals['background_color']
+                }
+        except Exception:
+            return None
+
+    def crop_image_borders(self, img: Image.Image, radio_logo: bool) -> Image.Image:
+        return self.cropper.crop_image_borders(img, self.config, radio_logo)
+
+    def img_values(self, img: Image.Image) -> dict:
+        return self.color_analyzer.extract_image_values(img, self.config)
+
+    def get_image_palette(self, img: Image.Image) -> list:
+        return self.color_analyzer.get_image_palette(img)
+
+    def get_optimal_font_color(self, img: Image.Image) -> str:
+        return self.color_analyzer.get_optimal_font_color(img, self.config)
+
+    def special_mode(self, img: Image.Image) -> Image.Image:
+        if img is None: return None
+        output_size = (64, 64)
+        album_size = (34, 34) if getattr(self.config, 'show_text', False) else (56, 56)
+        album_art = img.resize(album_size, Image.Resampling.BILINEAR)
+
+        try:
+            left_color = album_art.getpixel((0, album_size[1] // 2))
+            right_color = album_art.getpixel((album_size[0] - 1, album_size[1] // 2))
+        except Exception:
+            left_color = (100, 100, 100)
+            right_color = (150, 150, 150)
+
+        if album_size == (34, 34):
+            gradient_source = Image.new("RGB", (2, 1))
+            gradient_source.putpixel((0, 0), left_color)
+            gradient_source.putpixel((1, 0), right_color)
+            background = gradient_source.resize(output_size, Image.Resampling.BILINEAR)
+        else:
+            dark_background_color = (
+                min(left_color[0], right_color[0]) // 2,
+                min(left_color[1], right_color[1]) // 2,
+                min(left_color[2], right_color[2]) // 2
+            )
+            background = Image.new('RGB', output_size, dark_background_color)
+
+        x = (output_size[0] - album_size[0]) // 2
+        y = 8 
+        background.paste(album_art, (x, y))
+        return background
+
+    def fixed_size(self, img: Image.Image) -> Image.Image:
+        width, height = img.size
+        if width == height: return img
+        elif height < width:
+            border_size = (width - height) // 2
+            try: background_color = img.getpixel((0, 0))
+            except Exception: background_color = (0, 0, 0)
+            new_img = Image.new("RGB", (width, width), background_color)
+            new_img.paste(img, (0, border_size))
+            return new_img
+        else:
+            new_size = min(width, height)
+            left = (width - new_size) // 2
+            top = (height - new_size) // 2
+            return img.crop((left, top, left + new_size, top + new_size))
+
     def _draw_burned_text(self, img: Image.Image, artist: str, title: str) -> Image.Image:
         if not (artist or title): return img
-        
         thumb = img.resize((16, 16), Image.Resampling.BICUBIC)
         pixels = list(thumb.getdata())
         bg = tuple(sum(ch) // len(pixels) for ch in zip(*pixels))  
@@ -987,43 +963,37 @@ class ImageProcessor:
         for line in artist_lines:
             w = layer.textbbox((0,0), line, font=font)[2]
             x = (img.width - w) // 2
-            self._draw_text_with_shadow(layer, (x, y), line, font, (*artist_rgb, 255), artist_shadow)
+            layer.text((x + 1, y + 1), line, font=font, fill=artist_shadow)
+            layer.text((x, y), line, font=font, fill=(*artist_rgb, 255))
             y += 11
         if artist_lines and title_lines: y += 4
         for line in title_lines:
             w = layer.textbbox((0,0), line, font=font)[2]
             x = (img.width - w) // 2
-            self._draw_text_with_shadow(layer, (x, y), line, font, (*title_rgb, 255), title_shadow)
+            layer.text((x + 1, y + 1), line, font=font, fill=title_shadow)
+            layer.text((x, y), line, font=font, fill=(*title_rgb, 255))
             y += 11
 
         return img_copy.convert("RGB")
 
-    def fixed_size(self, img: Image.Image) -> Image.Image:
-        width, height = img.size
-        if width == height: return img
-        elif height < width:
-            border_size = (width - height) // 2
-            try: background_color = img.getpixel((0, 0))
-            except Exception: background_color = (0, 0, 0)
-            new_img = Image.new("RGB", (width, width), background_color)
-            new_img.paste(img, (0, border_size))
-            img = new_img
-        elif width != height:
-            new_size = min(width, height)
-            left = (width - new_size) // 2
-            top = (height - new_size) // 2
-            img = img.crop((left, top, left + new_size, top + new_size))
-        return img
-
     def text_clock_img(self, img: Image.Image, cached_data: dict, media_data: "MediaData") -> Image.Image:
         if getattr(self.config, 'special_mode', False):
+            return img
+
+        if getattr(self.config, 'show_lyrics', False) and not getattr(media_data, 'playing_tv', False):
+            if getattr(self.config, 'text_bg', False) and not getattr(media_data, 'playing_radio', False):
+                stat = ImageStat.Stat(img.convert("L"))
+                mean_lum = stat.mean[0] if stat.mean else 100.0
+                factor = max(0.25, min(0.55, 1.0 - (mean_lum / 220.0)))
+                img = ImageEnhance.Brightness(img).enhance(factor)
+                img = ImageEnhance.Contrast(img).enhance(0.65)
             return img
 
         is_top = getattr(self.config, 'overlay_top', True)
         y_start, y_end = (2, 9) if is_top else (55, 62)
         align_mode = getattr(self.config, 'overlay_align', 'Clock Right, Temp Left')
 
-        if bool(getattr(self.config, 'show_clock', False) and getattr(self.config, 'text_bg', False)) and not getattr(self.config, 'show_lyrics', False):
+        if bool(getattr(self.config, 'show_clock', False) and getattr(self.config, 'text_bg', False)):
             if align_mode == "Clock Left, Temp Right":
                 lpc_clock = (2, y_start, 21, y_end)
             elif align_mode == "Centered" and not getattr(self.config, 'temperature', False):
@@ -1038,7 +1008,7 @@ class ImageProcessor:
             factor = max(0.2, 1.0 - (stat.mean[0] / 200.0))
             img.paste(ImageEnhance.Brightness(clock_crop).enhance(factor), lpc_clock)
 
-        if bool(getattr(self.config, 'temperature', False) and getattr(self.config, 'text_bg', False)) and not getattr(self.config, 'show_lyrics', False):
+        if bool(getattr(self.config, 'temperature', False) and getattr(self.config, 'text_bg', False)):
             if align_mode == "Clock Left, Temp Right":
                 lpc_temp = (47, y_start, 63, y_end)
             elif align_mode == "Centered" and not getattr(self.config, 'show_clock', False):
@@ -1051,7 +1021,7 @@ class ImageProcessor:
             factor = max(0.2, 1.0 - (stat.mean[0] / 200.0))
             img.paste(ImageEnhance.Brightness(temp_crop).enhance(factor), lpc_temp)
 
-        if getattr(self.config, 'text_bg', False) and getattr(self.config, 'show_text', False) and not getattr(self.config, 'show_lyrics', False) and not getattr(media_data, 'playing_tv', False):
+        if getattr(self.config, 'text_bg', False) and getattr(self.config, 'show_text', False) and not getattr(media_data, 'playing_tv', False):
             lpc = (0, 0, 64, 16) if getattr(self.config, 'top_text', False) else (0, 48, 64, 64)
             lower_part_img = img.crop(lpc)
             stat = ImageStat.Stat(lower_part_img.convert("L"))
@@ -1090,14 +1060,17 @@ class ImageProcessor:
             with Image.open(BytesIO(image_data)) as img:
                 img = ensure_rgb(img)
                 img = self.fixed_size(img)
+                
+                # Apply filter to slides
+                filter_mode = getattr(self.config, 'image_filter', 'None')
+                img = self.filter_service.apply_pre_scale(img, filter_mode)
+                
                 img = img.resize((64, 64), Image.Resampling.BILINEAR)
 
                 if getattr(self.config, 'special_mode', False):
                     img = self.special_mode(img)
 
-                if getattr(self.config, 'show_lyrics', False) and not getattr(media_data, 'playing_radio', False) and not getattr(self.config, 'special_mode', False):
-                    img = ImageEnhance.Brightness(img).enhance(0.55)
-                    img = ImageEnhance.Contrast(img).enhance(0.5)
+                img = self.filter_service.apply_post_scale(img, filter_mode)
 
                 cached_data = {}
                 img = self.text_clock_img(img, cached_data, media_data)
@@ -1105,6 +1078,714 @@ class ImageProcessor:
                 return self.gbase64(img)
         except Exception:
             return None
+
+# =========================================================================
+# STANDALONE PROVIDERS
+# =========================================================================
+
+class MusicBrainzProvider:
+    def __init__(self, session: aiohttp.ClientSession):
+        self.session = session
+        self._last_query_time: float = 0.0
+
+    async def get_album_art_url(self, artist: str, title: str) -> Optional[str]:
+        now = time.monotonic()
+        elapsed = now - self._last_query_time
+        if elapsed < 1.1:
+            await asyncio.sleep(1.1 - elapsed)
+        self._last_query_time = time.monotonic()
+
+        search_url = "https://musicbrainz.org/ws/2/release/"
+        headers = { 
+            "Accept": "application/json", 
+            "User-Agent": "Pixoo64MediaArt/1.0 (https://github.com/idodov/pixoo64_art)" 
+        }
+        clean_artist = str(artist or "").replace('"', '').strip()
+        clean_title = str(title or "").replace('"', '').strip()
+        params = { "query": f'artist:"{clean_artist}" AND recording:"{clean_title}"', "fmt": "json" }
+        
+        try:
+            async with self.session.get(search_url, params=params, headers=headers, timeout=10) as response: 
+                if response.status != 200: return None
+                data = await response.json()
+                if not data.get("releases"): return None
+                release_id = data["releases"][0]["id"]
+                cover_art_url = f"https://coverartarchive.org/release/{release_id}"
+                try: 
+                    async with self.session.get(cover_art_url, headers=headers, timeout=15) as art_response: 
+                        if art_response.status != 200: return None
+                        art_data = await art_response.json()
+                        for image in art_data.get("images", []):
+                            if image.get("front", False):
+                                return image.get("thumbnails", {}).get("250")
+                        return None
+                except Exception: return None
+        except Exception: return None
+
+
+class DiscogsProvider:
+    def __init__(self, config: "Config", session: aiohttp.ClientSession):
+        self.config = config
+        self.session = session
+
+    async def search_album_art(self, artist: str, title: str) -> Optional[str]:
+        token = getattr(self.config, 'discogs', None)
+        if not token: return None
+
+        base_url = "https://api.discogs.com/database/search"
+        headers = { "User-Agent": "AlbumArtSearchApp/1.0", "Authorization": f"Discogs token={token}" }
+        params = { "artist": artist, "track": title, "type": "release", "format": "album", "per_page": 5 }
+        try:
+            async with self.session.get(base_url, headers=headers, params=params, timeout=10) as response: 
+                if response.status != 200: 
+                    _LOGGER.warning("Discogs API returned status %s", response.status)
+                    return None
+                data = await response.json()
+                results = data.get("results", [])
+                if not results: return None
+                return results[0].get("cover_image")
+        except Exception as e: 
+            _LOGGER.error("Discogs search exception: %s", e)
+            return None
+
+
+class LastFmProvider:
+    def __init__(self, config: "Config", session: aiohttp.ClientSession):
+        self.config = config
+        self.session = session
+
+    def _is_valid_image(self, url: Optional[str]) -> bool:
+        if not url or not isinstance(url, str): return False
+        url = url.strip()
+        if not url.startswith("http"): return False
+        if "2a96cbd8b46e442fc41c2b86b821562f" in url or "default_album" in url: return False
+        return True
+
+    def _optimize_url(self, url: str) -> str:
+        if url and "fastly.net" in url:
+            return re.sub(r'/i/u/(?:\d+s|\d+x\d+)/', '/i/u/300x300/', url)
+        return url
+
+    def _extract_image_url(self, image_list: list) -> Optional[str]:
+        if not isinstance(image_list, list): return None
+        preferred_sizes = ["mega", "extralarge", "large", "medium"]
+        for size in preferred_sizes:
+            for item in image_list:
+                if isinstance(item, dict) and item.get("size") == size:
+                    img_url = item.get("#text", "")
+                    if self._is_valid_image(img_url):
+                        return self._optimize_url(img_url)
+
+        for item in reversed(image_list):
+            if isinstance(item, dict):
+                img_url = item.get("#text", "")
+                if self._is_valid_image(img_url):
+                    return self._optimize_url(img_url)
+
+        return None
+
+    async def search_album_art(self, artist: str, title: str, album: Optional[str] = None) -> Optional[str]:
+        clean_artist = str(artist or "").strip()
+        clean_title = str(title or "").strip()
+        clean_album = str(album or "").strip()
+        api_key = str(getattr(self.config, 'lastfm', "") or "").strip()
+
+        if not clean_artist or clean_artist == "Unknown Artist" or not api_key:
+            return None
+
+        base_url = "https://ws.audioscrobbler.com/2.0/"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json"
+        }
+
+        if clean_album and clean_album != "Unknown Album":
+            params = {
+                "method": "album.getInfo", "api_key": api_key, "artist": clean_artist,
+                "album": clean_album, "autocorrect": 1, "format": "json"
+            }
+            try:
+                async with self.session.get(base_url, headers=headers, params=params, timeout=8) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        images = data.get("album", {}).get("image", [])
+                        valid_url = self._extract_image_url(images)
+                        if valid_url: return valid_url
+            except Exception as e:
+                _LOGGER.debug("Last.fm album.getInfo query error: %s", e)
+
+        if clean_title and clean_title != "Unknown Track":
+            params = {
+                "method": "track.getInfo", "api_key": api_key, "artist": clean_artist,
+                "track": clean_title, "autocorrect": 1, "format": "json"
+            }
+            try:
+                async with self.session.get(base_url, headers=headers, params=params, timeout=8) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        track_data = data.get("track", {})
+                        album_obj = track_data.get("album", {})
+                        images = album_obj.get("image", [])
+                        valid_url = self._extract_image_url(images)
+                        if valid_url: return valid_url
+                        
+                        discovered_album = album_obj.get("title")
+                        if discovered_album and discovered_album != clean_album:
+                            alb_params = {
+                                "method": "album.getInfo", "api_key": api_key, "artist": clean_artist,
+                                "album": discovered_album, "autocorrect": 1, "format": "json"
+                            }
+                            async with self.session.get(base_url, headers=headers, params=alb_params, timeout=8) as alb_response:
+                                if alb_response.status == 200:
+                                    alb_data = await alb_response.json()
+                                    alb_images = alb_data.get("album", {}).get("image", [])
+                                    valid_url = self._extract_image_url(alb_images)
+                                    if valid_url: return valid_url
+            except Exception as e:
+                _LOGGER.error("Last.fm search exception: %s", e)
+
+        return None
+
+
+class TidalProvider:
+    def __init__(self, config: "Config", session: aiohttp.ClientSession):
+        self.config = config
+        self.session = session
+        self.token_cache: dict[str, Any] = {'token': None, 'expires': 0}
+
+    def _format_uuid(self, val: Any) -> Optional[str]:
+        if not val or not isinstance(val, str): return None
+        cleaned = val.strip().replace("-", "").replace("/", "")
+        if len(cleaned) == 32 and all(c in "0123456789abcdefABCDEF" for c in cleaned):
+            return f"{cleaned[:8]}/{cleaned[8:12]}/{cleaned[12:16]}/{cleaned[16:20]}/{cleaned[20:]}"
+        return None
+
+    def _ensure_320_resolution(self, url: str) -> str:
+        if url and "resources.tidal.com" in url:
+            return re.sub(r'\d+x\d+', '320x320', url)
+        return url
+
+    def _extract_image(self, item: dict) -> Optional[str]:
+        if not isinstance(item, dict): return None
+        attrs = item.get("attributes", {})
+
+        for key in ["files", "imageLinks", "images"]:
+            links = attrs.get(key)
+            if isinstance(links, list) and links:
+                for candidate in links:
+                    if isinstance(candidate, dict):
+                        href = candidate.get("href") or candidate.get("url")
+                        meta = candidate.get("meta", {})
+                        if (meta.get("width") == 320) or (href and "320x320" in href):
+                            return self._ensure_320_resolution(href)
+                for candidate in reversed(links):
+                    if isinstance(candidate, dict):
+                        href = candidate.get("href") or candidate.get("url")
+                        if href and isinstance(href, str) and href.startswith("http"):
+                            return self._ensure_320_resolution(href)
+
+        for key in ["href", "url", "image", "picture"]:
+            val = attrs.get(key)
+            if isinstance(val, str) and val.startswith("http"):
+                return self._ensure_320_resolution(val)
+
+        item_type = str(item.get("type", "")).lower()
+        if item_type in ["artworks", "artwork", "coverart"]:
+            uuid_path = self._format_uuid(item.get("id"))
+            if uuid_path:
+                return f"https://resources.tidal.com/images/{uuid_path}/320x320.jpg"
+
+        for cover_key in ["cover", "coverArt", "imageCover"]:
+            uuid_path = self._format_uuid(attrs.get(cover_key))
+            if uuid_path:
+                return f"https://resources.tidal.com/images/{uuid_path}/320x320.jpg"
+
+        cover_data = item.get("relationships", {}).get("coverArt", {}).get("data")
+        if isinstance(cover_data, dict):
+            uuid_path = self._format_uuid(cover_data.get("id"))
+            if uuid_path:
+                return f"https://resources.tidal.com/images/{uuid_path}/320x320.jpg"
+        elif isinstance(cover_data, list):
+            for entry in cover_data:
+                if isinstance(entry, dict):
+                    uuid_path = self._format_uuid(entry.get("id"))
+                    if uuid_path:
+                        return f"https://resources.tidal.com/images/{uuid_path}/320x320.jpg"
+
+        return None
+
+    async def get_access_token(self) -> Optional[str]:
+        if self.token_cache['token'] and time.time() < self.token_cache['expires']:
+            return self.token_cache['token']
+            
+        client_id = str(self.config.tidal_client_id).strip()
+        client_secret = str(self.config.tidal_client_secret).strip()
+        if not client_id or not client_secret: return None
+
+        url = "https://auth.tidal.com/v1/oauth2/token"
+        auth_str = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        tidal_headers = { 
+            "Authorization": f"Basic {auth_str}",
+            "Content-Type": "application/x-www-form-urlencoded" 
+        }
+        payload = { "grant_type": "client_credentials" }
+        
+        try:
+            async with self.session.post(url, headers=tidal_headers, data=payload, timeout=10) as response: 
+                if response.status != 200: 
+                    _LOGGER.error("TIDAL Token Auth failed: %s", response.status)
+                    return None
+                response_json = await response.json()
+                access_token = response_json["access_token"]
+                expiry_time = time.time() + response_json.get("expires_in", 3600) - 60 
+                self.token_cache = { 'token': access_token, 'expires': expiry_time }
+                return access_token
+        except Exception as e: 
+            _LOGGER.error("TIDAL token exception: %s", e)
+            return None
+
+    async def get_album_art_url(self, artist: str, title: str) -> Optional[str]:
+        access_token = await self.get_access_token()
+        if not access_token: return None
+        
+        clean_artist = str(artist).strip() if artist and artist != "Unknown Artist" else ""
+        clean_title = str(title).strip() if title and title != "Unknown Track" else ""
+        query = f"{clean_artist} {clean_title}".strip()
+        if len(query) < 2 or query == "-": return None
+            
+        headers = { 
+            "Authorization": f"Bearer {access_token}", 
+            "Accept": "application/vnd.api+json" 
+        }
+        search_url = "https://openapi.tidal.com/v2/searchResults"
+        search_params = { 
+            "countryCode": "US", 
+            "filter[query]": query,
+            "include": "tracks.albums.coverArt,albums.coverArt" 
+        }
+        
+        try:
+            async with self.session.get(search_url, headers=headers, params=search_params, timeout=10) as response: 
+                if response.status != 200: return None
+                search_data = await response.json()
+                included_items = search_data.get("included", [])
+                
+                for inc in included_items:
+                    if str(inc.get("type", "")).lower() in ["artworks", "artwork", "coverart"]:
+                        img_url = self._extract_image(inc)
+                        if img_url: return img_url
+
+                for inc in included_items:
+                    if str(inc.get("type", "")).lower() == "albums":
+                        img_url = self._extract_image(inc)
+                        if img_url: return img_url
+
+                for inc in included_items:
+                    img_url = self._extract_image(inc)
+                    if img_url: return img_url
+
+                text_response = json.dumps(search_data)
+                url_match = re.search(r'https?://(?:resources|images)\.tidal\.com/images/[a-zA-Z0-9/_-]+(?:\.jpg|\.png)', text_response)
+                if url_match:
+                    return self._ensure_320_resolution(url_match.group(0))
+
+                uuid_matches = re.findall(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', text_response)
+                for u in uuid_matches:
+                    formatted = self._format_uuid(u)
+                    if formatted:
+                        return f"https://resources.tidal.com/images/{formatted}/320x320.jpg"
+
+                return None
+        except Exception as e: 
+            _LOGGER.warning("TIDAL search exception: %s", e)
+            return None
+
+
+class AiArtProvider:
+    def __init__(self, config: "Config"):
+        self.config = config
+
+    def format_prompt_url(self, artist: Optional[str], title: str) -> Optional[str]:
+        api_key = getattr(self.config, 'pollinations', "")
+        if not api_key or not isinstance(api_key, str) or len(api_key.strip()) <= 5:
+            _LOGGER.warning("Skipping AI Art generation: 'pollinations_key' is missing or invalid.")
+            return None
+
+        artist_name = artist if artist else 'Music' 
+        clean_artist = artist_name.replace("/", " ").replace("\\", " ").strip()
+        clean_title = title.replace("/", " ").replace("\\", " ").strip()
+        
+        prompts = [
+            f"Vibrant pop art portrait of the musician {clean_artist} inspired by the song '{clean_title}', edge-to-edge full bleed, borderless, bold neon colors, high contrast flat colors for pixel display, strictly no text, no words, zero frames",           
+            f"Edge-to-edge vibrant surreal artwork literally depicting the concept of '{clean_title}' by {clean_artist}, vivid high contrast colors, thick outlines, borderless full bleed, strictly no text, no letters, no frames",
+            f"Retro synthwave portrait of {clean_artist} performing '{clean_title}', neon magenta and cyan, edge-to-edge borderless, pitch black background, high contrast lighting, absolutely no typography, no words, full bleed, no borders",
+            f"Borderless minimalist illustration of the literal meaning of '{clean_title}' (by {clean_artist}), flat bold vibrant colors, edge-to-edge composition, zero borders, clear focal point suited for low resolution display, strictly no text, no typography",
+            f"Moody graphic novel style portrait of the artist {clean_artist} singing '{clean_title}', vivid high contrast flat colors, edge-to-edge full bleed, borderless frame, strictly no text, no speech bubbles, zero typography",
+            f"Colorful 16-bit style crisp illustration literally showing '{clean_title}' by {clean_artist}, vivid nostalgic palette, edge-to-edge borderless composition, zero text, no borders, no frames, strictly no typography, perfectly cropped",
+            f"Luminous stained glass mosaic showing the literal meaning of '{clean_title}' by {clean_artist}, edge-to-edge borderless, saturated jewel tones, thick black outlines, full bleed, absolutely no text, no letters, zero frames",
+            f"Vibrant vector portrait of {clean_artist} with elements from '{clean_title}', flat bold geometric shapes, edge-to-edge borderless design, high contrast palette for LED displays, strictly no text, no words, no borders",
+            f"Japanese anime style vibrant scenery depicting '{clean_title}' by {clean_artist}, edge-to-edge borderless full bleed composition, highly saturated colors, high contrast, zero typography, no text, no borders, no letters",
+            f"Bold colorful representation of {clean_artist} and the vibe of '{clean_title}', edge-to-edge borderless canvas, thick lines, neon and primary colors, flat design for pixel grid, strictly no text, no frames, zero words"
+        ]
+        
+        song_signature = f"{clean_artist}_{clean_title}".lower()
+        prompt_index = abs(hash(song_signature)) % len(prompts)
+        selected_prompt = prompts[prompt_index]
+        encoded_prompt = urllib.parse.quote(selected_prompt, safe='')
+        
+        seed = abs(hash(song_signature)) % 2147483647
+        user_model = str(getattr(self.config, 'ai_fallback', 'black-forest-labs/flux.1-schnell') or 'black-forest-labs/flux.1-schnell').lower().strip()
+        
+        if user_model in ["turbo", "lightning"]:
+            model = "inferenceport-ai/lightning-image-turbo"
+        elif user_model in ["flux", "schnell"]:
+            model = "black-forest-labs/flux.1-schnell"
+        elif user_model == "vector":
+            model = "recraft/recraft-v4.1-vector"
+        else:
+            model = user_model
+
+        url_params = f"?model={model}&width=512&height=512&seed={seed}&nologo=true&key={api_key.strip()}"
+        return f"https://gen.pollinations.ai/image/{encoded_prompt}{url_params}"
+
+# =========================================================================
+# FALLBACK COORDINATOR SERVICE
+# =========================================================================
+
+class FallbackService:
+    def __init__(self, config: "Config", image_processor: "ImageProcessor", session: aiohttp.ClientSession, spotify_service: "SpotifyService", pixoo_device: "PixooDevice"): 
+        self.config = config
+        self.image_processor = image_processor
+        self.session = session
+        self.spotify_service = spotify_service
+        self.pixoo_device = pixoo_device
+        self.fail_txt = False
+        self.fallback = False
+        self._artwork_cache: OrderedDict[str, dict] = OrderedDict()
+        
+        # Modularized Providers
+        self.mb_provider = MusicBrainzProvider(session)
+        self.discogs_provider = DiscogsProvider(config, session)
+        self.lastfm_provider = LastFmProvider(config, session)
+        self.tidal_provider = TidalProvider(config, session)
+        self.ai_provider = AiArtProvider(config)
+
+    async def get_musicbrainz_album_art_url(self, artist: str, title: str):
+        return await self.mb_provider.get_album_art_url(artist, title)
+
+    async def search_discogs_album_art(self, artist: str, title: str):
+        return await self.discogs_provider.search_album_art(artist, title)
+
+    async def search_lastfm_album_art(self, artist: str, title: str, album: Optional[str] = None):
+        return await self.lastfm_provider.search_album_art(artist, title, album)
+
+    async def get_tidal_album_art_url(self, artist: str, title: str):
+        return await self.tidal_provider.get_album_art_url(artist, title)
+
+    async def get_tidal_access_token(self):
+        return await self.tidal_provider.get_access_token()
+
+    async def prefetch_next_track(self, url: Optional[str], media_data: "MediaData"):
+        await self.get_final_url(url, media_data)
+        frames = 0
+        if getattr(self.config, 'spotify_slide', False) and not getattr(media_data, 'radio_logo', False):
+            frames = await self.spotify_service.prefetch_slider_data(media_data)
+        media_data.slider_frames = frames
+
+    async def get_final_url(self, picture: Optional[str], media_data: "MediaData") -> Optional[dict]: 
+        self.fail_txt = False
+        self.fallback = False
+        media_data.pic_url = None 
+        
+        if getattr(self.config, 'burned', False) or not media_data.album:
+            song_cache_key = f"{media_data.artist}_{media_data.title}".strip().lower()
+        else:
+            song_cache_key = f"{media_data.artist}_{media_data.album}".strip().lower()
+
+        is_spotify_slider = (
+            getattr(self.config, 'spotify_slide', False) 
+            and not getattr(media_data, 'radio_logo', False) 
+            and not getattr(media_data, 'playing_tv', False)
+        )
+        
+        if not is_spotify_slider and getattr(self.config, 'force_ai', False) and getattr(self.config, 'pollinations', None) and not getattr(media_data, 'radio_logo', False) and not getattr(media_data, 'playing_tv', False):
+            ai_res = await self._try_ai_generation(media_data)
+            if ai_res:
+                return ai_res
+            _LOGGER.warning("Force AI generation failed; falling back to standard artwork.")
+
+        if picture == "TV_IS_ON_ICON":
+            media_data.pic_source = "Internal"
+            media_data.pic_url = "TV Icon"
+            tv_icon_img = self.create_tv_icon_image()
+            tv_icon_base64 = self.image_processor.gbase64(tv_icon_img)
+            return { 
+                'base64_image': tv_icon_base64,
+                'font_color': '#FF00FF',
+                'brightness': 0.67,
+                'brightness_lower_part': 0.5,
+                'background_color': '#000000',
+                'background_color_rgb': (0, 0, 0),
+                'color1': '#000000',
+                'color2': '#000000',
+                'color3': '#000000'
+            }
+
+        if not getattr(self.config, 'force_ai', False) and song_cache_key in self._artwork_cache:
+            cached = self._artwork_cache[song_cache_key]
+            if not is_spotify_slider or cached.get('source') in ["Spotify", "Spotify Artist", "Spotify (Artist Profile Image)", "Original"]:
+                media_data.pic_url = cached['url']
+                media_data.pic_source = cached['source']
+                _LOGGER.debug("Reusing resolved artwork for '%s' from %s", song_cache_key, cached['source'])
+                return cached['data']
+
+        try:
+            if picture and not (getattr(media_data, 'playing_radio', False) and not getattr(media_data, 'radio_logo', False)):
+                result = await self.image_processor.get_image(picture, media_data, getattr(media_data, 'spotify_slide_pass', False))
+                if result:
+                    self._save_to_artwork_cache(song_cache_key, result, picture, "Original")
+                    media_data.pic_source = "Original"
+                    media_data.pic_url = picture
+                    return result
+        except Exception as e: 
+            _LOGGER.error("Original picture processing failed: %s", e) 
+
+        self.spotify_first_album = None
+        self.spotify_artist_pic = None
+
+        if getattr(self.config, 'spotify_client_id', None) and getattr(self.config, 'spotify_client_secret', None):
+            try:
+                album_id, first_album = await self.spotify_service.get_spotify_album_id(media_data)
+                if first_album:
+                    self.spotify_first_album = await self.spotify_service.get_spotify_album_image_url(first_album)
+                if album_id:
+                    image_url = await self.spotify_service.get_spotify_album_image_url(album_id)
+                    if image_url:
+                        proc_res = await self.image_processor.get_image(image_url, media_data, getattr(media_data, 'spotify_slide_pass', False))
+                        if proc_res:
+                            self._save_to_artwork_cache(song_cache_key, proc_res, image_url, "Spotify")
+                            media_data.pic_url = image_url
+                            media_data.pic_source = "Spotify"
+                            return proc_res
+                self.spotify_artist_pic = await self.spotify_service.get_spotify_artist_image_url_by_name(media_data.artist)
+            except Exception as e: 
+                _LOGGER.error("Spotify fallback failed: %s", e) 
+
+        if self.spotify_artist_pic:
+            result = await self.image_processor.get_image(self.spotify_artist_pic, media_data, getattr(media_data, 'spotify_slide_pass', False))
+            if result:
+                self._save_to_artwork_cache(song_cache_key, result, self.spotify_artist_pic, "Spotify Artist")
+                media_data.pic_source = "Spotify Artist"
+                return result
+
+        if self.spotify_first_album:
+            result = await self.image_processor.get_image(self.spotify_first_album, media_data, getattr(media_data, 'spotify_slide_pass', False))
+            if result:
+                self._save_to_artwork_cache(song_cache_key, result, self.spotify_first_album, "Spotify (Artist Profile Image)")
+                media_data.pic_url = self.spotify_first_album
+                media_data.pic_source = "Spotify (Artist Profile Image)"
+                return result
+
+        if is_spotify_slider:
+            media_data.pic_url = "Fallback Image"
+            media_data.pic_source = "Internal"
+            return self._get_fallback_black_image_data(media_data)
+
+        tasks, providers = [], []
+        if getattr(self.config, 'discogs', None):
+            tasks.append(self.discogs_provider.search_album_art(media_data.artist, media_data.title))
+            providers.append("Discogs")
+
+        if getattr(self.config, 'lastfm', None):
+            tasks.append(self.lastfm_provider.search_album_art(media_data.artist, media_data.title, media_data.album))
+            providers.append("Last.FM")
+            
+        tidal_id = getattr(self.config, 'tidal_client_id', None)
+        tidal_secret = getattr(self.config, 'tidal_client_secret', None)
+        if tidal_id and tidal_secret:
+            tasks.append(self.tidal_provider.get_album_art_url(media_data.artist, media_data.title))
+            providers.append("TIDAL")
+            
+        if getattr(self.config, 'musicbrainz', False):
+            tasks.append(self.mb_provider.get_album_art_url(media_data.artist, media_data.title))
+            providers.append("MusicBrainz")
+
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception) or not result: continue
+                provider_name = providers[i]
+                proc_result = await self.image_processor.get_image(result, media_data, getattr(media_data, 'spotify_slide_pass', False))
+                if proc_result:
+                    self._save_to_artwork_cache(song_cache_key, proc_result, result, provider_name)
+                    media_data.pic_url = result
+                    media_data.pic_source = provider_name
+                    return proc_result
+
+        if not getattr(self.config, 'force_ai', False) and getattr(self.config, 'pollinations', None):
+            result = await self._try_ai_generation(media_data)
+            if result: 
+                if media_data.pic_url:
+                    self._save_to_artwork_cache(song_cache_key, result, media_data.pic_url, "AI")
+                media_data.pic_source = "AI"
+                return result
+
+        media_data.pic_url = "Fallback Image"
+        media_data.pic_source = "Internal"
+        return self._get_fallback_black_image_data(media_data)
+
+    def _save_to_artwork_cache(self, key: str, data: dict, url: str, source: str):
+        # Strict cap of 40 artwork resolutions in cache
+        if len(self._artwork_cache) >= 40:
+            self._artwork_cache.popitem(last=False)
+        self._artwork_cache[key] = {
+            'data': data,
+            'url': url,
+            'source': source
+        }
+
+    async def _try_ai_generation(self, media_data):
+        ai_url = self.ai_provider.format_prompt_url(media_data.artist, media_data.title)
+        if not ai_url: return None
+        
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                result = await asyncio.wait_for(
+                    self.image_processor.get_image(ai_url, media_data, getattr(media_data, 'spotify_slide_pass', False)),
+                    timeout=25
+                )
+                
+                if result: 
+                    _LOGGER.info("Successfully generated AI album art on attempt %s", attempt + 1)
+                    media_data.pic_url = ai_url
+                    media_data.pic_source = "AI"
+                    return result
+                    
+            except asyncio.TimeoutError:
+                _LOGGER.warning("AI generation timed out (Attempt %s/%s)", attempt + 1, max_retries + 1)
+            except Exception as e:
+                _LOGGER.warning("AI generation failed: %s (Attempt %s/%s)", e, attempt + 1, max_retries + 1)
+            
+            if attempt < max_retries: 
+                await asyncio.sleep(1.5)
+                
+        return None
+
+    def _get_fallback_black_image_data(self, media_data: Optional["MediaData"] = None) -> dict: 
+        self.fail_txt = True
+        self.fallback = True
+        
+        img = Image.new("RGB", (64, 64), (25, 25, 30)) 
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([0, 0, 63, 63], outline=(50, 50, 60), width=1)
+        
+        if media_data:
+            artist = getattr(media_data, 'artist', 'Unknown Artist')
+            title = getattr(media_data, 'title', 'Unknown Track')
+            
+            if artist == "Unknown Artist" and title == "Unknown Track":
+                draw.ellipse([24, 34, 32, 42], fill=(150, 150, 150))
+                draw.ellipse([38, 30, 46, 38], fill=(150, 150, 150))
+                draw.line([(32, 38), (32, 18)], fill=(150, 150, 150), width=2)
+                draw.line([(46, 34), (46, 14)], fill=(150, 150, 150), width=2)
+                draw.line([(32, 18), (46, 14)], fill=(150, 150, 150), width=2)
+                draw.line([(32, 19), (46, 15)], fill=(150, 150, 150), width=2)
+            else:
+                img = self.image_processor._draw_burned_text(img, artist, title)
+                
+        return { 
+            'base64_image': self.image_processor.gbase64(img),
+            'font_color': '#FFFFFF', 
+            'brightness_lower_part': 0.5,
+            'background_color': '#19191E', 
+            'background_color_rgb': (25, 25, 30),
+            'color1': '#19191E',
+            'color2': '#19191E',
+            'color3': '#19191E'
+        }
+
+    def create_tv_icon_image(self) -> Image.Image: 
+        image_width = 300
+        image_height = 300
+        final_width = 64
+        final_height = 64
+        vertical_offset = 10
+        black = (0, 0, 0)
+        brown = (139, 69, 19)  
+        screen_bg = (240, 240, 240) 
+        white = (255, 255, 255)
+        gray = (150, 150, 150)
+        rainbow_colors = [
+            (255, 0, 0),     
+            (255, 165, 0),   
+            (255, 255, 0),   
+            (0, 255, 0),     
+            (0, 0, 255),     
+            (75, 0, 130),    
+            (238, 130, 238)  
+        ]
+        image = Image.new("RGB", (image_width, image_height), black)
+        draw = ImageDraw.Draw(image)
+        tv_body_padding = 60 + vertical_offset  
+        tv_body_rect = [
+            tv_body_padding,
+            tv_body_padding,
+            image_width - tv_body_padding,
+            image_height - tv_body_padding - 40
+        ]
+        tv_body_radius = 20
+        draw.rounded_rectangle(tv_body_rect, tv_body_radius, fill=brown)
+        screen_padding = tv_body_padding + 15 
+        screen_rect = [
+            screen_padding,
+            screen_padding,
+            image_width - screen_padding,
+            tv_body_rect[3] - 15
+        ]
+        draw.rectangle(screen_rect, fill=screen_bg)
+        num_bars = len(rainbow_colors)
+        bar_width = (screen_rect[2] - screen_rect[0]) // num_bars
+        start_x = screen_rect[0]
+        for color in rainbow_colors:
+            bar_rect = [
+                start_x,
+                screen_rect[1],
+                start_x + bar_width,
+                screen_rect[3]
+            ]
+            draw.rectangle(bar_rect, fill=color)
+            start_x += bar_width
+        antenna_color = gray
+        antenna_thickness = 3
+        antenna_length = 50
+        antenna_base_x1 = image_width // 2 - 30
+        antenna_base_x2 = image_width // 2 + 30
+        antenna_base_y = tv_body_padding  
+        draw.line(
+            (antenna_base_x1, antenna_base_y, antenna_base_x1 - 20, antenna_base_y - antenna_length),
+            fill=antenna_color, width=antenna_thickness
+        )
+        draw.line(
+            (antenna_base_x2, antenna_base_y, antenna_base_x2 + 20, antenna_base_y - antenna_length),
+            fill=antenna_color, width=antenna_thickness
+        )
+        highlight_color = white
+        highlight_thickness = 4
+        draw.line(
+            (tv_body_rect[0], tv_body_rect[1], tv_body_rect[0] + 20, tv_body_rect[1]),
+            fill=highlight_color, width=highlight_thickness
+        )
+        draw.line(
+            (tv_body_rect[0], tv_body_rect[1], tv_body_rect[0], tv_body_rect[1] + 20),
+            fill=highlight_color, width=highlight_thickness
+        )
+        image = image.resize((final_width, final_height), Image.Resampling.BILINEAR)
+        return image
+
+# =========================================================================
+# SPOTIFY SERVICE
+# =========================================================================
 
 class SpotifyService:
     def __init__(self, config: "Config", session: aiohttp.ClientSession, image_processor: "ImageProcessor"): 
@@ -1135,7 +1816,6 @@ class SpotifyService:
                 response_json = await response.json()
                 access_token = response_json["access_token"]
                 
-                # Cache the token and set expiration 60 seconds early to be safe
                 self.spotify_token_cache = {
                     'token': access_token, 
                     'expires': time.time() + response_json.get("expires_in", 3600) - 60
@@ -1149,7 +1829,6 @@ class SpotifyService:
         return None
 
     async def _async_spotify_request(self, endpoint: str, params: dict = None) -> Optional[dict]:
-        """Generic wrapper for Spotify API requests handling tokens and errors."""
         token = await self.get_spotify_access_token()
         if not token: 
             return None
@@ -1162,8 +1841,10 @@ class SpotifyService:
         
         try:
             async with self.session.get(url, headers=headers, params=params, timeout=10) as response: 
-                response.raise_for_status()
-                return await response.json()
+                if response.status == 200:
+                    return await response.json()
+                elif response.status == 401:
+                    self.spotify_token_cache = {'token': None, 'expires': 0}
         except aiohttp.ClientError as e:
             _LOGGER.error("Spotify API request failed for endpoint '%s': %s", endpoint, e)
         except Exception as e:
@@ -1172,19 +1853,32 @@ class SpotifyService:
         return None
 
     async def get_spotify_json(self, artist: str, title: str) -> Optional[dict]: 
+        clean_title = re.sub(r'[\'\"()]', '', str(title or '')).strip()
+        clean_artist = re.sub(r'[\'\"()]', '', str(artist or '')).strip()
+        
         params = {
-            "q": f"track: {title} artist: {artist}", 
+            "q": f'track:"{clean_title}" artist:"{clean_artist}"', 
             "type": "track", 
             "limit": 50
         }
-        return await self._async_spotify_request("search", params=params)
+        data = await self._async_spotify_request("search", params=params)
+        if data and data.get('tracks', {}).get('items'):
+            return data
+
+        params_loose = {
+            "q": f"{clean_artist} {clean_title}", 
+            "type": "track", 
+            "limit": 50
+        }
+        return await self._async_spotify_request("search", params=params_loose)
 
     async def get_spotify_artist_image_url_by_name(self, artist_name: str) -> Optional[str]: 
         if not artist_name: 
             return None
             
+        primary_artist = re.split(r'[,&/]|(?:\s+feat\.?\s+)|\s+ft\.?\s+|\s+and\s+', artist_name, flags=re.IGNORECASE)[0].strip()
         params = {
-            "q": f"artist:{artist_name}", 
+            "q": f"artist:{primary_artist}", 
             "type": "artist", 
             "limit": 1
         }
@@ -1200,42 +1894,70 @@ class SpotifyService:
                 
         return None
 
-    async def get_album_list(self, media_data: "MediaData", returntype: str) -> list[str]: 
-        if not self.spotify_data or getattr(media_data, 'playing_tv', False): 
-            return []
-            
-        try:
-            tracks = self.spotify_data.get('tracks', {}).get('items', [])
-            albums = {} 
-            
-            for track in tracks:
-                album = track.get('album', {})
-                album_id = album.get('id')
-                artists = album.get('artists', [])
-                
-                # Skip various artists and ensure primary artist matches
-                if any(artist.get('name', '').lower() == 'various artists' for artist in artists): 
-                    continue
-                if media_data.artist.lower() not in [artist.get('name', '').lower() for artist in artists]: 
-                    continue
-                if album_id not in albums: 
-                    albums[album_id] = album
+    async def prepare_slider_for_media(self, media_data: "MediaData") -> list[str]:
+        if getattr(media_data, 'slider_album_urls', None):
+            return media_data.slider_album_urls
 
-            # Sort singles vs albums and slice the top 10
-            sorted_albums = sorted(
-                albums.values(), 
-                key=lambda x: (x.get("album_type") == "single", x.get("album_type") == "album"), 
-                reverse=True
-            )[:10]
-            
-            album_urls = [album.get("images", [])[0]["url"] for album in sorted_albums if album.get("images")]
-            media_data.pic_url = album_urls
-            media_data.pic_source = "Spotify (Slide)"
-            
-            return album_urls
-        except Exception as e: 
-            _LOGGER.error("Failed to parse Spotify album list: %s", e)
+        media_data.slider_error = None
+        spotify_json = await self.get_spotify_json(media_data.artist, media_data.title)
+        if not spotify_json:
+            media_data.slider_error = "Track not found on Spotify"
             return []
+
+        self.spotify_data = spotify_json 
+
+        artist_pic = await self.get_spotify_artist_image_url_by_name(media_data.artist)
+        media_data.slider_artist_pic_url = artist_pic
+
+        tracks = spotify_json.get('tracks', {}).get('items', [])
+        albums = {}
+        
+        raw_artists = [
+            a.strip().lower() 
+            for a in re.split(r'[,&/]|(?:\s+feat\.?\s+)|\s+ft\.?\s+|\s+and\s+', media_data.artist, flags=re.IGNORECASE) 
+            if a.strip()
+        ]
+
+        for track in tracks:
+            album = track.get('album', {})
+            album_id = album.get('id')
+            album_artists = [a.get('name', '').strip().lower() for a in album.get('artists', [])]
+            
+            if any('various artists' in a for a in album_artists): 
+                continue
+                
+            is_match = any(
+                ra in aa or aa in ra
+                for ra in raw_artists
+                for aa in album_artists
+            )
+            if not is_match and len(raw_artists) > 0:
+                continue
+                
+            if album_id and album_id not in albums: 
+                albums[album_id] = album
+
+        sorted_albums = sorted(
+            albums.values(), 
+            key=lambda x: (x.get("album_type") == "single", x.get("album_type") == "album"), 
+            reverse=True
+        )[:10]
+        
+        album_urls = [alb.get("images", [])[0]["url"] for alb in sorted_albums if alb.get("images")]
+        media_data.slider_album_urls = album_urls
+        media_data.slider_frames = len(album_urls)
+        media_data.pic_url = album_urls
+        media_data.pic_source = "Spotify (Slide)"
+        
+        if len(album_urls) < 2:
+            media_data.slider_error = f"Found only {len(album_urls)} albums (minimum 2 needed)"
+            
+        return album_urls
+
+    async def get_album_list(self, media_data: "MediaData", returntype: str = "url") -> list[str]: 
+        if getattr(media_data, 'playing_tv', False): 
+            return []
+        return await self.prepare_slider_for_media(media_data)
 
     async def get_slide_img(self, picture: str, media_data: "MediaData") -> Optional[str]: 
         try:
@@ -1247,40 +1969,12 @@ class SpotifyService:
         return None
 
     async def prefetch_slider_data(self, media_data: "MediaData") -> int:
-        response_json = await self.get_spotify_json(media_data.artist, media_data.title)
-        if not response_json: 
-            return 0
-        
-        artist_pic_url = await self.get_spotify_artist_image_url_by_name(media_data.artist)
-        if artist_pic_url:
-            await self.image_processor.async_prefetch_url(artist_pic_url, media_data)
-            
-        tracks = response_json.get('tracks', {}).get('items', [])
-        albums = {}
-        for track in tracks:
-            album = track.get('album', {})
-            album_id = album.get('id')
-            artists = album.get('artists', [])
-            
-            if any(artist.get('name', '').lower() == 'various artists' for artist in artists): 
-                continue
-            if media_data.artist.lower() not in [artist.get('name', '').lower() for artist in artists]: 
-                continue
-            if album_id not in albums: 
-                albums[album_id] = album
-            
-        sorted_albums = sorted(
-            albums.values(), 
-            key=lambda x: (x.get("album_type") == "single", x.get("album_type") == "album"), 
-            reverse=True
-        )[:10]
-        
-        album_urls = [album.get("images", [])[0]["url"] for album in sorted_albums if album.get("images")]
-        
-        for url in album_urls:
+        urls = await self.prepare_slider_for_media(media_data)
+        if media_data.slider_artist_pic_url:
+            await self.image_processor.async_prefetch_url(media_data.slider_artist_pic_url, media_data)
+        for url in urls:
             await self.image_processor.async_prefetch_url(url, media_data)
-            
-        return len(album_urls)
+        return len(urls)
 
     async def send_pixoo_animation_frame(
         self, pixoo_device: "PixooDevice", command: str, pic_num: int, 
@@ -1299,7 +1993,11 @@ class SpotifyService:
     async def spotify_albums_slide(self, pixoo_device: "PixooDevice", media_data: "MediaData", prev_channel: int) -> None: 
         media_data.spotify_slide_pass = False 
         try:
-            artist_pic_url = await self.get_spotify_artist_image_url_by_name(media_data.artist)
+            album_urls = getattr(media_data, 'slider_album_urls', None) or await self.prepare_slider_for_media(media_data)
+            if not album_urls or len(album_urls) < 2: 
+                return
+
+            artist_pic_url = getattr(media_data, 'slider_artist_pic_url', None) or await self.get_spotify_artist_image_url_by_name(media_data.artist)
             if artist_pic_url:
                 preview_b64 = await self.get_slide_img(artist_pic_url, media_data)
                 if preview_b64:
@@ -1310,10 +2008,6 @@ class SpotifyService:
                             {"Command": "Draw/SendHttpGif", "PicNum": 1, "PicWidth": 64, "PicOffset": 0, "PicID": 0, "PicSpeed": 1000, "PicData": preview_b64}
                         ]
                     })
-
-            album_urls = await self.get_album_list(media_data, returntype="url")
-            if not album_urls: 
-                return
 
             async def process_pipeline(url):
                 async with self._semaphore:
@@ -1331,9 +2025,11 @@ class SpotifyService:
 
             frames = len(album_urls_b64)
             if frames < 2: 
+                media_data.slider_error = "Insufficient valid frames processed"
                 return
 
             media_data.spotify_slide_pass = True
+            media_data.slider_frames = frames
             
             await pixoo_device.send_command({
                 "Command": "Draw/CommandList", 
@@ -1344,10 +2040,10 @@ class SpotifyService:
                 await self.send_pixoo_animation_frame(pixoo_device, "Draw/SendHttpGif", frames, 64, pic_offset, 0, 5000, b64_frame)
                 
         except Exception as e: 
+            media_data.slider_error = str(e)
             _LOGGER.error("Spotify Albums Slide Animation Error: %s", e)
 
     def _build_preview_frame_sync(self, artist_img: Image.Image, media_data: "MediaData") -> Optional[str]:
-        """Synchronous method to generate the preview frame without blocking the event loop."""
         try:
             preview_canvas = Image.new("RGB", (64, 64), (0, 0, 0))
             preview_canvas.paste(artist_img, (16, 8)) 
@@ -1361,7 +2057,6 @@ class SpotifyService:
             return None
 
     def _build_animation_frames_sync(self, prepared_albums: list, media_data: "MediaData") -> list:
-        """Synchronous method to stitch together album frames without blocking the event loop."""
         try:
             pixoo_frames = []
             total_frames = min(len(prepared_albums), 10)
@@ -1396,8 +2091,12 @@ class SpotifyService:
         media_data.spotify_slide_pass = False
         
         try:
+            album_urls = getattr(media_data, 'slider_album_urls', None) or await self.prepare_slider_for_media(media_data)
+            if not album_urls or len(album_urls) < 2: 
+                return
+
             artist_img = None
-            artist_pic_url = await self.get_spotify_artist_image_url_by_name(media_data.artist)
+            artist_pic_url = getattr(media_data, 'slider_artist_pic_url', None) or await self.get_spotify_artist_image_url_by_name(media_data.artist)
             
             if artist_pic_url:
                 raw_data = await self.image_processor.get_raw_image_data(artist_pic_url)
@@ -1417,10 +2116,6 @@ class SpotifyService:
                                     {"Command": "Draw/SendHttpGif", "PicNum": 1, "PicWidth": 64, "PicOffset": 0, "PicID": 0, "PicSpeed": 1000, "PicData": preview_b64}
                                 ]
                             })
-
-            album_urls = await self.get_album_list(media_data, returntype="url")
-            if not album_urls: 
-                return
 
             def prepare_album_variants(raw_data):
                 try:
@@ -1464,7 +2159,6 @@ class SpotifyService:
             if len(prepared_albums) < 3: 
                 return
 
-            # Offload heavy stitching logic to executor
             pixoo_frames = await self.image_processor.hass.async_add_executor_job(
                 self._build_animation_frames_sync, prepared_albums, media_data
             )
@@ -1473,6 +2167,7 @@ class SpotifyService:
                 return
 
             media_data.spotify_slide_pass = True 
+            media_data.slider_frames = len(pixoo_frames)
             
             await pixoo_device.send_command({
                 "Command": "Draw/CommandList", 
@@ -1483,6 +2178,7 @@ class SpotifyService:
                 await self.send_pixoo_animation_frame(pixoo_device, "Draw/SendHttpGif", len(pixoo_frames), 64, offset, 0, 5000, frame)
             
         except Exception as e:
+            media_data.slider_error = str(e)
             _LOGGER.error("Spotify Animation Error: %s", e)
 
     async def spotify_best_album(self, tracks: list[dict], artist: str) -> tuple[Optional[str], Optional[str]]: 
@@ -1545,6 +2241,10 @@ class SpotifyService:
             
         return None
 
+# =========================================================================
+# LYRICS PROVIDER
+# =========================================================================
+
 class LyricsProvider:
     def __init__(self, config: "Config", session: aiohttp.ClientSession):
         self.config = config
@@ -1601,7 +2301,8 @@ class LyricsProvider:
                                 fetched_lyrics = self._parse_lrc(best_candidate['syncedLyrics'])
             except Exception: pass
 
-        if len(self.lyrics_cache) >= 100: self.lyrics_cache.popitem(last=False)
+        if len(self.lyrics_cache) >= 50: 
+            self.lyrics_cache.popitem(last=False)
         self.lyrics_cache[new_key] = fetched_lyrics
         self._build_visual_timeline(fetched_lyrics)
         return fetched_lyrics
@@ -1743,8 +2444,11 @@ class LyricsProvider:
         if next_event_time != -1: return [], max(0.1, next_event_time - current_pos)
         return [], None
 
+# =========================================================================
+# MEDIA DATA MODEL
+# =========================================================================
+
 class TitleCleaner:
-    """Utility class to sanitize track titles by removing unnecessary tags."""
     def __init__(self):
         self._patterns = [
             re.compile(r'[\(\[][^)\]]*remaster(?:ed)?[^)\]]*[\)\]]', re.IGNORECASE),
@@ -1764,7 +2468,6 @@ class TitleCleaner:
 
 
 class MediaData:
-    """Holds media state and handles fetching/parsing updates from Home Assistant."""
     def __init__(self, hass: HomeAssistant, config: "Config", image_processor: "ImageProcessor", session: aiohttp.ClientSession):
         self.hass = hass
         self.config = config
@@ -1772,13 +2475,12 @@ class MediaData:
         self.session = session
         self.lyrics_provider = LyricsProvider(self.config, self.session)
         self.title_cleaner = TitleCleaner()
+        self.ai_provider = AiArtProvider(self.config)
         
-        # Internal State Tracking
         self.prev_title: str = ""
         self.prev_artist: str = ""
         self.track_changed: bool = False 
         
-        # Media DTO Attributes
         self.artist: str = ""
         self.title: str = ""
         self.title_original: str = ""
@@ -1797,11 +2499,18 @@ class MediaData:
         self.media_duration: float = 0.0
         self.media_position_updated_at: Optional[datetime] = None
         self.temperature: Optional[str] = None
+        
         self.spotify_slide_pass: bool = False
         self.slider_frames: int = 0
+        self.slider_album_urls: list[str] = []
+        self.slider_artist_pic_url: Optional[str] = None
+        self.slider_error: Optional[str] = None
 
     def clean_title(self, title: str) -> str: 
         return self.title_cleaner.clean(title)
+
+    def format_ai_image_prompt(self, artist: Optional[str], title: str) -> Optional[str]:
+        return self.ai_provider.format_prompt_url(artist, title)
 
     async def update(self) -> Optional["MediaData"]:
         try:
@@ -1815,12 +2524,10 @@ class MediaData:
             raw_artist = attributes.get('media_artist')
             app_name = attributes.get('app_name')
 
-            # 1. Check TV Mode
             if self._is_tv_playing(raw_title, raw_artist, app_name, attributes):
                 self._set_tv_state()
                 return self
 
-            # 2. Validate valid Title / Artist (Fallback if missing)
             if not raw_title or str(raw_title).strip() == "":
                 if app_name and str(app_name).strip() != "": 
                     raw_title = app_name
@@ -1833,19 +2540,19 @@ class MediaData:
                 else: 
                     raw_artist = "Unknown Artist"
 
-            # 3. Parse and set general media state
             self._set_media_state(raw_title, raw_artist, attributes)
-            
-            # 4. Check Radio Mode
             self._evaluate_radio_mode(raw_title, raw_artist, attributes)
-
-            # 5. Fetch Lyrics if applicable
             await self._fetch_lyrics()
 
-            # 6. Update track change status
             self.track_changed = (self.title != self.prev_title or self.artist != self.prev_artist)
+            if self.track_changed:
+                self.slider_album_urls = []
+                self.slider_artist_pic_url = None
+                self.slider_frames = 0
+                self.spotify_slide_pass = False
+                self.slider_error = None
+
             self.prev_title, self.prev_artist = self.title, self.artist
-            
             return self
             
         except Exception as e:
@@ -1939,756 +2646,222 @@ class MediaData:
         else:
             self.lyrics = []
 
-    def format_ai_image_prompt(self, artist: Optional[str], title: str) -> Optional[str]: 
-        api_key = getattr(self.config, 'pollinations', "")
-        
-        if not api_key or not isinstance(api_key, str) or len(api_key.strip()) <= 5:
-            _LOGGER.warning("Skipping AI Art generation: 'pollinations_key' is missing or invalid.")
-            return None
+# =========================================================================
+# NOTIFICATION ICON RENDERER
+# =========================================================================
 
-        artist_name = artist if artist else 'Music' 
-        clean_artist = artist_name.replace("/", " ").replace("\\", " ").strip()
-        clean_title = title.replace("/", " ").replace("\\", " ").strip()
-        
-        prompts = [
-            f"Vibrant pop art portrait of the musician {clean_artist} inspired by the song '{clean_title}', edge-to-edge full bleed, borderless, bold neon colors, high contrast flat colors for pixel display, strictly no text, no words, zero frames",           
-            f"Edge-to-edge vibrant surreal artwork literally depicting the concept of '{clean_title}' by {clean_artist}, vivid high contrast colors, thick outlines, borderless full bleed, strictly no text, no letters, no frames",
-            f"Retro synthwave portrait of {clean_artist} performing '{clean_title}', neon magenta and cyan, edge-to-edge borderless, pitch black background, high contrast lighting, absolutely no typography, no words, full bleed, no borders",
-            f"Borderless minimalist illustration of the literal meaning of '{clean_title}' (by {clean_artist}), flat bold vibrant colors, edge-to-edge composition, zero borders, clear focal point suited for low resolution display, strictly no text, no typography",
-            f"Moody graphic novel style portrait of the artist {clean_artist} singing '{clean_title}', vivid high contrast flat colors, edge-to-edge full bleed, borderless frame, strictly no text, no speech bubbles, zero typography",
-            f"Colorful 16-bit style crisp illustration literally showing '{clean_title}' by {clean_artist}, vivid nostalgic palette, edge-to-edge borderless composition, zero text, no borders, no frames, strictly no typography, perfectly cropped",
-            f"Luminous stained glass mosaic showing the literal meaning of '{clean_title}' by {clean_artist}, edge-to-edge borderless, saturated jewel tones, thick black outlines, full bleed, absolutely no text, no letters, zero frames",
-            f"Vibrant vector portrait of {clean_artist} with elements from '{clean_title}', flat bold geometric shapes, edge-to-edge borderless design, high contrast palette for LED displays, strictly no text, no words, no borders",
-            f"Japanese anime style vibrant scenery depicting '{clean_title}' by {clean_artist}, edge-to-edge borderless full bleed composition, highly saturated colors, high contrast, zero typography, no text, no borders, no letters",
-            f"Bold colorful representation of {clean_artist} and the vibe of '{clean_title}', edge-to-edge borderless canvas, thick lines, neon and primary colors, flat design for pixel grid, strictly no text, no frames, zero words"
-        ]
-        
-        song_signature = f"{clean_artist}_{clean_title}".lower()
-        prompt_index = abs(hash(song_signature)) % len(prompts)
-        selected_prompt = prompts[prompt_index]
-        encoded_prompt = urllib.parse.quote(selected_prompt, safe='')
-        
-        seed = abs(hash(song_signature)) % 2147483647
+class NotificationIconRenderer:
+    @staticmethod
+    def draw_v(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.line([(cx-8, cy), (cx-2, cy+8), (cx+10, cy-8)], fill=color, width=3)
 
-        user_model = str(getattr(self.config, 'ai_fallback', 'black-forest-labs/flux.1-schnell') or 'black-forest-labs/flux.1-schnell').lower().strip()
-        
-        if user_model in ["turbo", "lightning"]:
-            model = "inferenceport-ai/lightning-image-turbo"
-        elif user_model in ["flux", "schnell"]:
-            model = "black-forest-labs/flux.1-schnell"
-        elif user_model == "vector":
-            model = "recraft/recraft-v4.1-vector"
-        else:
-            model = user_model
+    @staticmethod
+    def draw_x(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        s = 7
+        draw.line([(cx-s, cy-s), (cx+s, cy+s)], fill=color, width=3)
+        draw.line([(cx+s, cy-s), (cx-s, cy+s)], fill=color, width=3)
 
-        url_params = f"?model={model}&width=512&height=512&seed={seed}&nologo=true&key={api_key.strip()}"
-            
-        return f"https://gen.pollinations.ai/image/{encoded_prompt}{url_params}"
+    @staticmethod
+    def draw_info(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.ellipse([cx-9, cy-9, cx+9, cy+9], outline=color, width=1)
+        draw.rectangle([cx-1, cy-2, cx+1, cy+5], fill=color) 
+        draw.rectangle([cx-1, cy-5, cx+1, cy-4], fill=color)
 
+    @staticmethod
+    def draw_success(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.line([(cx-6, cy), (cx-2, cy+6), (cx+7, cy-5)], fill=color, width=2)
 
-class FallbackService:
-    def __init__(self, config: "Config", image_processor: "ImageProcessor", session: aiohttp.ClientSession, spotify_service: "SpotifyService", pixoo_device: "PixooDevice"): 
-        self.config = config
-        self.image_processor = image_processor
-        self.session = session
-        self.spotify_service = spotify_service
-        self.pixoo_device = pixoo_device
-        self.tidal_token_cache: dict[str, Any] = {'token': None, 'expires': 0}
-        self.fail_txt = False
-        self.fallback = False
-        self._artwork_cache: OrderedDict[str, dict] = OrderedDict()
-        self._last_mb_query: float = 0.0
+    @staticmethod
+    def draw_alert(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.arc([cx-6, cy-5, cx+6, cy+5], 180, 0, fill=color, width=1)
+        draw.line([(cx-6, cy), (cx-8, cy+6)], fill=color, width=1)
+        draw.line([(cx+6, cy), (cx+8, cy+6)], fill=color, width=1)
+        draw.line([(cx-8, cy+6), (cx+8, cy+6)], fill=color, width=1)
+        clapper_x = cx + (2 if frame_num == 1 else 0)
+        draw.line([(clapper_x-1, cy+6), (clapper_x+1, cy+6)], fill=color, width=1)
+        draw.point((clapper_x, cy+8), fill=color)
 
-    async def prefetch_next_track(self, url: Optional[str], media_data: "MediaData"):
-        await self.get_final_url(url, media_data)
-        frames = 0
-        if getattr(self.config, 'spotify_slide', False) and not getattr(media_data, 'radio_logo', False):
-            frames = await self.spotify_service.prefetch_slider_data(media_data)
-        media_data.slider_frames = frames
+    @staticmethod
+    def draw_warning(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.polygon([(cx, cy-9), (cx-10, cy+8), (cx+10, cy+8)], outline=color, fill=None)
+        draw.line([(cx, cy-3), (cx, cy+3)], fill=color, width=1)
+        draw.point((cx, cy+5), fill=color)
 
-    async def get_final_url(self, picture: Optional[str], media_data: "MediaData") -> Optional[dict]: 
-        self.fail_txt = False
-        self.fallback = False
-        media_data.pic_url = None 
-        
-        if getattr(self.config, 'burned', False) or not media_data.album:
-            song_cache_key = f"{media_data.artist}_{media_data.title}".strip().lower()
-        else:
-            song_cache_key = f"{media_data.artist}_{media_data.album}".strip().lower()
-        
-        if getattr(self.config, 'force_ai', False) and getattr(self.config, 'pollinations', None) and not getattr(media_data, 'radio_logo', False) and not getattr(media_data, 'playing_tv', False):
-            ai_res = await self._try_ai_generation(media_data)
-            if ai_res:
-                return ai_res
-            _LOGGER.warning("Force AI generation failed; falling back to standard artwork.")
+    @staticmethod
+    def draw_error(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        s = 5
+        draw.line([(cx-s, cy-s), (cx+s, cy+s)], fill=color, width=2)
+        draw.line([(cx+s, cy-s), (cx-s, cy+s)], fill=color, width=2)
 
-        if picture == "TV_IS_ON_ICON":
-            media_data.pic_source = "Internal"
-            media_data.pic_url = "TV Icon"
-            tv_icon_img = self.create_tv_icon_image()
-            tv_icon_base64 = self.image_processor.gbase64(tv_icon_img)
-            return { 
-                'base64_image': tv_icon_base64,
-                'font_color': '#FF00FF',
-                'brightness': 0.67,
-                'brightness_lower_part': 0.5,
-                'background_color': '#000000',
-                'background_color_rgb': (0, 0, 0),
-                'color1': '#000000',
-                'color2': '#000000',
-                'color3': '#000000'
-            }
+    @staticmethod
+    def draw_weather(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.ellipse([cx+2, cy-8, cx+8, cy-2], outline=(255, 215, 0), width=1)
+        draw.arc([cx-8, cy-2, cx+2, cy+6], 90, 270, fill=color, width=1)
+        draw.arc([cx-2, cy-4, cx+8, cy+6], 180, 0, fill=color, width=1)
+        draw.line([(cx-8, cy+2), (cx+8, cy+2)], fill=color, width=1)
 
-        if not getattr(self.config, 'force_ai', False) and song_cache_key in self._artwork_cache:
-            cached = self._artwork_cache[song_cache_key]
-            media_data.pic_url = cached['url']
-            media_data.pic_source = cached['source']
-            _LOGGER.debug("Reusing resolved artwork for '%s' from %s", song_cache_key, cached['source'])
-            return cached['data']
+    @staticmethod
+    def draw_attack(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.line([(cx, cy-9), (cx-3, cy-4)], fill=color, width=1)
+        draw.line([(cx, cy-9), (cx+3, cy-4)], fill=color, width=1)
+        draw.rectangle([cx-3, cy-4, cx+3, cy+4], outline=color, width=1)
+        draw.line([(cx-3, cy+4), (cx-6, cy+8)], fill=color, width=1)
+        draw.line([(cx+3, cy+4), (cx+6, cy+8)], fill=color, width=1)
+        fire_color = (255, 165, 0) if frame_num == 0 else (255, 255, 0)
+        draw.line([(cx-1, cy+4), (cx-1, cy+7)], fill=fire_color, width=1)
+        draw.line([(cx+1, cy+4), (cx+1, cy+7)], fill=fire_color, width=1)
 
-        try:
-            if picture and not (getattr(media_data, 'playing_radio', False) and not getattr(media_data, 'radio_logo', False)):
-                result = await self.image_processor.get_image(picture, media_data, getattr(media_data, 'spotify_slide_pass', False))
-                if result:
-                    self._save_to_artwork_cache(song_cache_key, result, picture, "Original")
-                    media_data.pic_source = "Original"
-                    media_data.pic_url = picture
-                    return result
-        except Exception as e: 
-            _LOGGER.error("Original picture processing failed: %s", e) 
+    @staticmethod
+    def draw_wifi(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.point((cx, cy+6), fill=color)
+        if frame_num >= 1: draw.arc([cx-4, cy, cx+4, cy+8], 225, 315, fill=color, width=1)
+        if frame_num >= 2: draw.arc([cx-8, cy-4, cx+8, cy+4], 225, 315, fill=color, width=1)
 
-        self.spotify_first_album = None
-        self.spotify_artist_pic = None
+    @staticmethod
+    def draw_time(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.ellipse([cx-9, cy-9, cx+9, cy+9], outline=color, width=1)
+        angle = frame_num * 90
+        rad = math.radians(angle - 90)
+        draw.line([(cx, cy), (cx + 6 * math.cos(rad), cy + 6 * math.sin(rad))], fill=color, width=1)
 
-        if getattr(self.config, 'spotify_client_id', None) and getattr(self.config, 'spotify_client_secret', None):
-            try:
-                album_id, first_album = await self.spotify_service.get_spotify_album_id(media_data)
-                if first_album:
-                    self.spotify_first_album = await self.spotify_service.get_spotify_album_image_url(first_album)
-                if album_id:
-                    image_url = await self.spotify_service.get_spotify_album_image_url(album_id)
-                    if image_url:
-                        proc_res = await self.image_processor.get_image(image_url, media_data, getattr(media_data, 'spotify_slide_pass', False))
-                        if proc_res:
-                            self._save_to_artwork_cache(song_cache_key, proc_res, image_url, "Spotify")
-                            media_data.pic_url = image_url
-                            media_data.pic_source = "Spotify"
-                            return proc_res
-                self.spotify_artist_pic = await self.spotify_service.get_spotify_artist_image_url_by_name(media_data.artist)
-            except Exception as e: 
-                _LOGGER.error("Spotify fallback failed: %s", e) 
-        
-        tasks, providers = [], []
-        if getattr(self.config, 'discogs', None):
-            tasks.append(self.search_discogs_album_art(media_data.artist, media_data.title))
-            providers.append("Discogs")
+    @staticmethod
+    def draw_boiler(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.rectangle([cx-5, cy-8, cx+5, cy+8], outline=color, width=1)
+        draw.line([(cx+1, cy-4), (cx-2, cy), (cx+2, cy), (cx-1, cy+5)], fill=color, width=1)
+        draw.point((cx, cy+6), fill=color)
 
-        if getattr(self.config, 'lastfm', None):
-            tasks.append(self.search_lastfm_album_art(media_data.artist, media_data.title, media_data.album))
-            providers.append("Last.FM")
-            
-        tidal_id = getattr(self.config, 'tidal_client_id', None)
-        tidal_secret = getattr(self.config, 'tidal_client_secret', None)
-        if tidal_id and tidal_secret:
-            tasks.append(self.get_tidal_album_art_url(media_data.artist, media_data.title))
-            providers.append("TIDAL")
+    @staticmethod
+    def draw_shutter(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.rectangle([cx-8, cy-8, cx+8, cy+8], outline=color, width=1)
+        for y_line in range(cy-5, cy+7, 3):
+            draw.line([(cx-6, y_line), (cx+6, y_line)], fill=color, width=1)
 
-            
-        if getattr(self.config, 'musicbrainz', False):
-            tasks.append(self.get_musicbrainz_album_art_url(media_data.artist, media_data.title))
-            providers.append("MusicBrainz")
+    @staticmethod
+    def draw_car(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.rectangle([cx-9, cy, cx+9, cy+6], outline=color, width=1)
+        draw.line([(cx-9, cy), (cx-5, cy-5), (cx+5, cy-5), (cx+9, cy)], fill=color, width=1)
+        draw.ellipse([cx-7, cy+5, cx-4, cy+8], fill=color)
+        draw.ellipse([cx+4, cy+5, cx+7, cy+8], fill=color)
 
-        if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for i, result in enumerate(results):
-                if isinstance(result, Exception) or not result: continue
-                provider_name = providers[i]
-                proc_result = await self.image_processor.get_image(result, media_data, getattr(media_data, 'spotify_slide_pass', False))
-                if proc_result:
-                    self._save_to_artwork_cache(song_cache_key, proc_result, result, provider_name)
-                    media_data.pic_url = result
-                    media_data.pic_source = provider_name
-                    return proc_result
+    @staticmethod
+    def draw_washer(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.rectangle([cx-8, cy-8, cx+8, cy+8], outline=color, width=1)
+        draw.ellipse([cx-5, cy-5, cx+5, cy+5], outline=color, width=1)
+        draw.point((cx+6, cy-6), fill=color) 
 
-        if self.spotify_artist_pic:
-            result = await self.image_processor.get_image(self.spotify_artist_pic, media_data, getattr(media_data, 'spotify_slide_pass', False))
-            if result:
-                self._save_to_artwork_cache(song_cache_key, result, self.spotify_artist_pic, "Spotify Artist")
-                media_data.pic_source = "Spotify Artist"
-                return result
+    @staticmethod
+    def draw_trash(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.line([(cx-5, cy+8), (cx+5, cy+8), (cx+7, cy-4), (cx-7, cy-4), (cx-5, cy+8)], fill=color, width=1)
+        draw.line([(cx-8, cy-4), (cx+8, cy-4)], fill=color, width=1)
+        draw.rectangle([cx-2, cy-6, cx+2, cy-4], fill=color)
 
-        if not getattr(self.config, 'force_ai', False) and getattr(self.config, 'pollinations', None):
-            result = await self._try_ai_generation(media_data)
-            if result: 
-                if media_data.pic_url:
-                    self._save_to_artwork_cache(song_cache_key, result, media_data.pic_url, "AI")
-                media_data.pic_source = "AI"
-                return result
+    @staticmethod
+    def draw_door(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.rectangle([cx-6, cy-9, cx+6, cy+9], outline=color, width=1)
+        draw.line([(cx-6, cy-9), (cx+2, cy-6)], fill=color, width=1)
+        draw.line([(cx+2, cy-6), (cx+2, cy+9)], fill=color, width=1)
+        draw.line([(cx+2, cy+9), (cx-6, cy+9)], fill=color, width=1)
 
-        if self.spotify_first_album:
-            result = await self.image_processor.get_image(self.spotify_first_album, media_data, getattr(media_data, 'spotify_slide_pass', False))
-            if result:
-                media_data.pic_url = self.spotify_first_album
-                media_data.pic_source = "Spotify (Artist Profile Image)"
-                return result
+    @staticmethod
+    def draw_lock(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.rectangle([cx-6, cy-2, cx+6, cy+7], fill=color)
+        draw.arc([cx-5, cy-8, cx+5, cy-1], 180, 0, fill=color, width=1)
 
-        media_data.pic_url = "Fallback Image"
-        media_data.pic_source = "Internal"
-        return self._get_fallback_black_image_data(media_data)
+    @staticmethod
+    def draw_mail(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.rectangle([cx-9, cy-6, cx+9, cy+6], outline=color, width=1)
+        draw.line([(cx-9, cy-6), (cx, cy+2), (cx+9, cy-6)], fill=color, width=1)
 
-    def _save_to_artwork_cache(self, key: str, data: dict, url: str, source: str):
-        if len(self._artwork_cache) >= 50:
-            self._artwork_cache.popitem(last=False)
-        self._artwork_cache[key] = {
-            'data': data,
-            'url': url,
-            'source': source
-        }
+    @staticmethod
+    def draw_battery(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.rectangle([cx-8, cy-4, cx+6, cy+4], outline=color, width=1)
+        draw.rectangle([cx-7, cy-3, cx-2, cy+3], fill=color) 
+        draw.rectangle([cx+6, cy-2, cx+8, cy+2], fill=color) 
 
-    async def _try_ai_generation(self, media_data):
-        ai_url = media_data.format_ai_image_prompt(media_data.artist, media_data.title)
-        if not ai_url: return None
-        
-        max_retries = 2
-        for attempt in range(max_retries + 1):
-            try:
-                result = await asyncio.wait_for(
-                    self.image_processor.get_image(ai_url, media_data, getattr(media_data, 'spotify_slide_pass', False)),
-                    timeout=25
-                )
-                
-                if result: 
-                    _LOGGER.info("Successfully generated AI album art on attempt %s", attempt + 1)
-                    media_data.pic_url = ai_url
-                    media_data.pic_source = "AI"
-                    return result
-                    
-            except asyncio.TimeoutError:
-                _LOGGER.warning("AI generation timed out (Attempt %s/%s)", attempt + 1, max_retries + 1)
-            except Exception as e:
-                _LOGGER.warning("AI generation failed: %s (Attempt %s/%s)", e, attempt + 1, max_retries + 1)
-            
-            if attempt < max_retries: 
-                await asyncio.sleep(1.5)
-                
-        return None
+    @staticmethod
+    def draw_fire(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.polygon([(cx, cy-8), (cx+5, cy+2), (cx+3, cy+8), (cx-3, cy+8), (cx-5, cy+2)], outline=color, fill=None)
+        draw.point((cx, cy+5), fill=color)
 
-    def _get_fallback_black_image_data(self, media_data: Optional["MediaData"] = None) -> dict: 
-        self.fail_txt = True
-        self.fallback = True
-        
-        # Create a dark slate background to make it look intentional
-        img = Image.new("RGB", (64, 64), (25, 25, 30)) 
-        draw = ImageDraw.Draw(img)
-        
-        # Add a subtle border
-        draw.rectangle([0, 0, 63, 63], outline=(50, 50, 60), width=1)
-        
-        if media_data:
-            artist = getattr(media_data, 'artist', 'Unknown Artist')
-            title = getattr(media_data, 'title', 'Unknown Track')
-            
-            if artist == "Unknown Artist" and title == "Unknown Track":
-                # Draw a minimalistic music note centered on the screen
-                draw.ellipse([24, 34, 32, 42], fill=(150, 150, 150))
-                draw.ellipse([38, 30, 46, 38], fill=(150, 150, 150))
-                draw.line([(32, 38), (32, 18)], fill=(150, 150, 150), width=2)
-                draw.line([(46, 34), (46, 14)], fill=(150, 150, 150), width=2)
-                draw.line([(32, 18), (46, 14)], fill=(150, 150, 150), width=2)
-                draw.line([(32, 19), (46, 15)], fill=(150, 150, 150), width=2)
-            else:
-                # Reuse the ImageProcessor's burned text logic to render the artist/title elegantly
-                img = self.image_processor._draw_burned_text(img, artist, title)
-                
-        return { 
-            'base64_image': self.image_processor.gbase64(img),
-            'font_color': '#FFFFFF', 
-            'brightness_lower_part': 0.5,
-            'background_color': '#19191E', 
-            'background_color_rgb': (25, 25, 30),
-            'color1': '#19191E',
-            'color2': '#19191E',
-            'color3': '#19191E'
-        }
+    @staticmethod
+    def draw_water(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.polygon([(cx, cy-8), (cx+5, cy+2), (cx, cy+8), (cx-5, cy+2)], outline=color, fill=color)
 
-    async def get_musicbrainz_album_art_url(self, ai_artist: str, ai_title: str) -> Optional[str]: 
-            now = time.monotonic()
-            elapsed = now - getattr(self, '_last_mb_query', 0.0)
-            if elapsed < 1.1:
-                await asyncio.sleep(1.1 - elapsed)
-            self._last_mb_query = time.monotonic()
-    
-            search_url = "https://musicbrainz.org/ws/2/release/"
-            headers = { 
-                "Accept": "application/json", 
-                "User-Agent": "Pixoo64MediaArt/1.0 (https://github.com/idodov/pixoo64_art)" 
-            }
-            clean_artist = str(ai_artist or "").replace('"', '').strip()
-            clean_title = str(ai_title or "").replace('"', '').strip()
-            params = { "query": f'artist:"{clean_artist}" AND recording:"{clean_title}"', "fmt": "json" }
-            
-            try:
-                async with self.session.get(search_url, params=params, headers=headers, timeout=10) as response: 
-                    if response.status != 200: return None
-                    data = await response.json()
-                    if not data.get("releases"): return None
-                    release_id = data["releases"][0]["id"]
-                    cover_art_url = f"https://coverartarchive.org/release/{release_id}"
-                    try: 
-                        async with self.session.get(cover_art_url, headers=headers, timeout=15) as art_response: 
-                            if art_response.status != 200: return None
-                            art_data = await art_response.json()
-                            for image in art_data.get("images", []):
-                                if image.get("front", False):
-                                    return image.get("thumbnails", {}).get("250")
-                            return None
-                    except Exception: return None
-            except Exception: return None
+    @staticmethod
+    def draw_sleep(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.arc([cx-6, cy-6, cx+6, cy+6], 90, 270, fill=color, width=2)
+        draw.line([(cx, cy-6), (cx, cy+6)], fill=color, width=1)
 
-    async def search_discogs_album_art(self, ai_artist: str, ai_title: str) -> Optional[str]: 
-        base_url = "https://api.discogs.com/database/search"
-        headers = { "User-Agent": "AlbumArtSearchApp/1.0", "Authorization": f"Discogs token={self.config.discogs}" }
-        params = { "artist": ai_artist, "track": ai_title, "type": "release", "format": "album", "per_page": 5 }
-        try:
-            async with self.session.get(base_url, headers=headers, params=params, timeout=10) as response: 
-                if response.status != 200: 
-                    _LOGGER.warning(f"Discogs API returned status {response.status}")
-                    return None
-                data = await response.json()
-                results = data.get("results", [])
-                if not results: return None
-                return results[0].get("cover_image")
-        except Exception as e: 
-            _LOGGER.error(f"Discogs search exception: {e}")
-            return None
+    @staticmethod
+    def draw_phone(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.arc([cx-8, cy-4, cx+8, cy+12], 0, 180, fill=color, width=2)
+        draw.rectangle([cx-9, cy-4, cx-6, cy], fill=color)
+        draw.rectangle([cx+6, cy-4, cx+9, cy], fill=color)
 
-    def _is_valid_lastfm_image(self, url: Optional[str]) -> bool:
-        """Validate that the Last.fm image is not empty and not the default star placeholder."""
-        if not url or not isinstance(url, str):
-            return False
-        url = url.strip()
-        if not url.startswith("http"):
-            return False
-        # Last.fm returns this specific hash for empty/placeholder star artwork
-        if "2a96cbd8b46e442fc41c2b86b821562f" in url or "default_album" in url:
-            return False
-        return True
+    @staticmethod
+    def draw_calendar(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.rectangle([cx-8, cy-7, cx+8, cy+8], outline=color, width=1)
+        draw.line([(cx-8, cy-3), (cx+8, cy-3)], fill=color, width=1)
+        draw.point((cx-4, cy+1), fill=color)
+        draw.point((cx, cy+1), fill=color)
+        draw.point((cx+4, cy+1), fill=color)
+        draw.point((cx-4, cy+5), fill=color)
+        draw.point((cx, cy+5), fill=color)
 
-    def _optimize_lastfm_url(self, url: str) -> str:
-        """Upgrade Last.fm image URL to 300x300 resolution for optimal cropping and display."""
-        if url and "fastly.net" in url:
-            return re.sub(r'/i/u/(?:\d+s|\d+x\d+)/', '/i/u/300x300/', url)
-        return url
+    @staticmethod
+    def draw_camera(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.rectangle([cx-8, cy-5, cx+8, cy+6], outline=color, width=1)
+        draw.rectangle([cx-2, cy-8, cx+2, cy-5], fill=color)
+        draw.ellipse([cx-3, cy-2, cx+3, cy+4], outline=color, width=1)
 
-    def _extract_lastfm_image_url(self, image_list: list) -> Optional[str]:
-        """Extract the highest quality valid image from Last.fm image list."""
-        if not isinstance(image_list, list):
-            return None
-            
-        # Priority order: extralarge, mega, large, medium
-        preferred_sizes = ["mega", "extralarge", "large", "medium"]
-        
-        # 1. Search by preferred size
-        for size in preferred_sizes:
-            for item in image_list:
-                if isinstance(item, dict) and item.get("size") == size:
-                    img_url = item.get("#text", "")
-                    if self._is_valid_lastfm_image(img_url):
-                        return self._optimize_lastfm_url(img_url)
+    @staticmethod
+    def draw_music(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.ellipse([cx-7, cy+3, cx-3, cy+7], fill=color)
+        draw.ellipse([cx+3, cy+3, cx+7, cy+7], fill=color)
+        draw.line([(cx-3, cy+5), (cx-3, cy-6)], fill=color, width=1)
+        draw.line([(cx+7, cy+5), (cx+7, cy-6)], fill=color, width=1)
+        draw.line([(cx-3, cy-6), (cx+7, cy-6)], fill=color, width=2)
 
-        # 2. Fallback: Check in reverse (last valid image)
-        for item in reversed(image_list):
-            if isinstance(item, dict):
-                img_url = item.get("#text", "")
-                if self._is_valid_lastfm_image(img_url):
-                    return self._optimize_lastfm_url(img_url)
+    @staticmethod
+    def draw_sun(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.ellipse([cx-4, cy-4, cx+4, cy+4], fill=color)
+        s = 7
+        draw.line([(cx, cy-s), (cx, cy-s-2)], fill=color, width=1)
+        draw.line([(cx, cy+s), (cx, cy+s+2)], fill=color, width=1)
+        draw.line([(cx-s, cy), (cx-s-2, cy)], fill=color, width=1)
+        draw.line([(cx+s, cy), (cx+s+2, cy)], fill=color, width=1)
+        draw.point((cx-5, cy-5), fill=color)
+        draw.point((cx+5, cy-5), fill=color)
+        draw.point((cx-5, cy+5), fill=color)
+        draw.point((cx+5, cy+5), fill=color)
 
-        return None
+    @staticmethod
+    def draw_moon(draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int):
+        draw.arc([cx-6, cy-6, cx+6, cy+6], 90, 270, fill=color, width=2)
+        draw.line([(cx, cy-6), (cx, cy+6)], fill=color, width=1)
 
-    async def search_lastfm_album_art(self, ai_artist: str, ai_title: str, album: Optional[str] = None) -> Optional[str]: 
-        clean_artist = str(ai_artist or "").strip()
-        clean_title = str(ai_title or "").strip()
-        clean_album = str(album or "").strip()
-        
-        api_key = str(getattr(self.config, 'lastfm', "") or "").strip()
+    _REGISTRY: Dict[str, Callable] = {
+        "v": draw_v, "x": draw_x, "info": draw_info, "success": draw_success,
+        "warning": draw_warning, "alert": draw_alert, "error": draw_error,
+        "weather": draw_weather, "attack": draw_attack, "wifi": draw_wifi,
+        "timer": draw_time, "time": draw_time, "boiler": draw_boiler,
+        "shutter": draw_shutter, "car": draw_car, "washer": draw_washer,
+        "trash": draw_trash, "door": draw_door, "lock": draw_lock,
+        "mail": draw_mail, "battery": draw_battery, "fire": draw_fire,
+        "water": draw_water, "sleep": draw_sleep, "phone": draw_phone,
+        "calendar": draw_calendar, "camera": draw_camera, "music": draw_music,
+        "sun": draw_sun, "moon": draw_moon
+    }
 
-        if not clean_artist or clean_artist == "Unknown Artist" or not api_key:
-            return None
+    @classmethod
+    def render_icon(cls, n_type: str, draw: ImageDraw.ImageDraw, cx: int, cy: int, color: tuple, frame_num: int = 0) -> None:
+        fn = cls._REGISTRY.get(n_type)
+        if fn:
+            fn(draw, cx, cy, color, frame_num)
 
-        base_url = "https://ws.audioscrobbler.com/2.0/"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json"
-        }
-
-        if clean_album and clean_album != "Unknown Album":
-            params = {
-                "method": "album.getInfo",
-                "api_key": api_key,
-                "artist": clean_artist,
-                "album": clean_album,
-                "autocorrect": 1,
-                "format": "json"
-            }
-            try:
-                async with self.session.get(base_url, headers=headers, params=params, timeout=8) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        images = data.get("album", {}).get("image", [])
-                        valid_url = self._extract_lastfm_image_url(images)
-                        if valid_url:
-                            _LOGGER.debug("Last.fm: Found album art via album.getInfo: %s", valid_url)
-                            return valid_url
-                    else:
-                        err_text = await response.text()
-                        _LOGGER.warning("Last.fm album.getInfo HTTP %s: %s", response.status, err_text)
-            except Exception as e:
-                _LOGGER.debug("Last.fm album.getInfo query error: %s", e)
-
-        if clean_title and clean_title != "Unknown Track":
-            params = {
-                "method": "track.getInfo",
-                "api_key": api_key,
-                "artist": clean_artist,
-                "track": clean_title,
-                "autocorrect": 1,
-                "format": "json"
-            }
-            try:
-                async with self.session.get(base_url, headers=headers, params=params, timeout=8) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        track_data = data.get("track", {})
-                        
-                        album_obj = track_data.get("album", {})
-                        images = album_obj.get("image", [])
-                        valid_url = self._extract_lastfm_image_url(images)
-                        if valid_url:
-                            _LOGGER.debug("Last.fm: Found album art via track.getInfo: %s", valid_url)
-                            return valid_url
-                        
-                        discovered_album = album_obj.get("title")
-                        if discovered_album and discovered_album != clean_album:
-                            alb_params = {
-                                "method": "album.getInfo",
-                                "api_key": api_key,
-                                "artist": clean_artist,
-                                "album": discovered_album,
-                                "autocorrect": 1,
-                                "format": "json"
-                            }
-                            async with self.session.get(base_url, headers=headers, params=alb_params, timeout=8) as alb_response:
-                                if alb_response.status == 200:
-                                    alb_data = await alb_response.json()
-                                    alb_images = alb_data.get("album", {}).get("image", [])
-                                    valid_url = self._extract_lastfm_image_url(alb_images)
-                                    if valid_url:
-                                        _LOGGER.debug("Last.fm: Found album art via discovered album: %s", valid_url)
-                                        return valid_url
-                    else:
-                        err_text = await response.text()
-                        _LOGGER.warning("Last.fm track.getInfo HTTP %s: %s", response.status, err_text)
-
-            except Exception as e:
-                _LOGGER.error("Last.fm search exception: %s", e)
-
-        return None
-
-    def _format_tidal_uuid(self, val: Any) -> Optional[str]:
-        """Convert a Tidal artwork UUID into the directory structure used by Tidal CDN."""
-        if not val or not isinstance(val, str):
-            return None
-        cleaned = val.strip().replace("-", "").replace("/", "")
-        if len(cleaned) == 32 and all(c in "0123456789abcdefABCDEF" for c in cleaned):
-            return f"{cleaned[:8]}/{cleaned[8:12]}/{cleaned[12:16]}/{cleaned[16:20]}/{cleaned[20:]}"
-        return None
-
-    def _ensure_320_resolution(self, url: str) -> str:
-        """Ensure Tidal CDN URL requests the optimal 320x320 resolution."""
-        if url and "resources.tidal.com" in url:
-            return re.sub(r'\d+x\d+', '320x320', url)
-        return url
-
-    def _extract_tidal_image(self, item: dict) -> Optional[str]:
-        """Extract a cover art image URL targeting 320x320 resolution."""
-        if not isinstance(item, dict):
-            return None
-
-        attrs = item.get("attributes", {})
-
-        # 1. Check for files / imageLinks / images arrays
-        for key in ["files", "imageLinks", "images"]:
-            links = attrs.get(key)
-            if isinstance(links, list) and links:
-                # First pass: try finding explicit 320x320
-                for candidate in links:
-                    if isinstance(candidate, dict):
-                        href = candidate.get("href") or candidate.get("url")
-                        meta = candidate.get("meta", {})
-                        if (meta.get("width") == 320) or (href and "320x320" in href):
-                            return self._ensure_320_resolution(href)
-                # Second pass: pick any valid url and transform it to 320x320
-                for candidate in reversed(links):
-                    if isinstance(candidate, dict):
-                        href = candidate.get("href") or candidate.get("url")
-                        if href and isinstance(href, str) and href.startswith("http"):
-                            return self._ensure_320_resolution(href)
-
-        # 2. Check for direct URL string in attributes
-        for key in ["href", "url", "image", "picture"]:
-            val = attrs.get(key)
-            if isinstance(val, str) and val.startswith("http"):
-                return self._ensure_320_resolution(val)
-
-        # 3. If item type is artworks/coverArt, its ID is the UUID on resources.tidal.com
-        item_type = str(item.get("type", "")).lower()
-        if item_type in ["artworks", "artwork", "coverart"]:
-            uuid_path = self._format_tidal_uuid(item.get("id"))
-            if uuid_path:
-                return f"https://resources.tidal.com/images/{uuid_path}/320x320.jpg"
-
-        # 4. Check cover attribute in albums
-        for cover_key in ["cover", "coverArt", "imageCover"]:
-            uuid_path = self._format_tidal_uuid(attrs.get(cover_key))
-            if uuid_path:
-                return f"https://resources.tidal.com/images/{uuid_path}/320x320.jpg"
-
-        # 5. Check coverArt relationship in album/track
-        cover_data = item.get("relationships", {}).get("coverArt", {}).get("data")
-        if isinstance(cover_data, dict):
-            uuid_path = self._format_tidal_uuid(cover_data.get("id"))
-            if uuid_path:
-                return f"https://resources.tidal.com/images/{uuid_path}/320x320.jpg"
-        elif isinstance(cover_data, list):
-            for entry in cover_data:
-                if isinstance(entry, dict):
-                    uuid_path = self._format_tidal_uuid(entry.get("id"))
-                    if uuid_path:
-                        return f"https://resources.tidal.com/images/{uuid_path}/320x320.jpg"
-
-        return None
-
-    async def get_tidal_album_art_url(self, artist: str, title: str) -> Optional[str]: 
-        #_LOGGER.warning(f"-> TIDAL Search initiated for Artist: '{artist}', Title: '{title}'")
-        
-        base_url = "https://openapi.tidal.com/v2/"
-        access_token = await self.get_tidal_access_token()
-        if not access_token: 
-            _LOGGER.warning("-> TIDAL Token failed to generate!")
-            return None
-        
-        clean_artist = str(artist).strip() if artist and artist != "Unknown Artist" else ""
-        clean_title = str(title).strip() if title and title != "Unknown Track" else ""
-        query = f"{clean_artist} {clean_title}".strip()
-        
-        if len(query) < 2 or query == "-":
-            return None
-            
-        headers = { 
-            "Authorization": f"Bearer {access_token}", 
-            "Accept": "application/vnd.api+json" 
-        }
-        
-        search_url = f"{base_url}searchResults"
-        search_params = { 
-            "countryCode": "US", 
-            "filter[query]": query,
-            "include": "tracks.albums.coverArt,albums.coverArt" 
-        }
-        
-        try:
-            async with self.session.get(search_url, headers=headers, params=search_params, timeout=10) as response: 
-                if response.status != 200:
-                    err = await response.text()
-                    _LOGGER.warning(f"-> TIDAL HTTP {response.status}: {err}")
-                    return None
-                
-                search_data = await response.json()
-                included_items = search_data.get("included", [])
-                
-                # Priority 1: Check included artworks directly
-                for inc in included_items:
-                    if str(inc.get("type", "")).lower() in ["artworks", "artwork", "coverart"]:
-                        img_url = self._extract_tidal_image(inc)
-                        if img_url:
-                            #_LOGGER.warning(f"-> TIDAL SUCCESS via included artwork (320x320): {img_url}")
-                            return img_url
-
-                # Priority 2: Check included albums
-                for inc in included_items:
-                    if str(inc.get("type", "")).lower() == "albums":
-                        img_url = self._extract_tidal_image(inc)
-                        if img_url:
-                            #_LOGGER.warning(f"-> TIDAL SUCCESS via included album (320x320): {img_url}")
-                            return img_url
-
-                # Priority 3: Check any other included items
-                for inc in included_items:
-                    img_url = self._extract_tidal_image(inc)
-                    if img_url:
-                        #_LOGGER.warning(f"-> TIDAL SUCCESS via included resource (320x320): {img_url}")
-                        return img_url
-
-                # Priority 4: Regex search for direct Tidal CDN URL anywhere in the JSON
-                text_response = json.dumps(search_data)
-                url_match = re.search(r'https?://(?:resources|images)\.tidal\.com/images/[a-zA-Z0-9/_-]+(?:\.jpg|\.png)', text_response)
-                if url_match:
-                    img_url = self._ensure_320_resolution(url_match.group(0))
-                    #_LOGGER.warning(f"-> TIDAL SUCCESS via text regex (320x320): {img_url}")
-                    return img_url
-
-                # Priority 5: Search for any standalone UUID in the response
-                uuid_matches = re.findall(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', text_response)
-                for u in uuid_matches:
-                    formatted = self._format_tidal_uuid(u)
-                    if formatted:
-                        img_url = f"https://resources.tidal.com/images/{formatted}/320x320.jpg"
-                        #_LOGGER.warning(f"-> TIDAL SUCCESS via extracted UUID (320x320): {img_url}")
-                        return img_url
-
-                _LOGGER.warning(f"-> TIDAL: No cover art found. Included types: {[x.get('type') for x in included_items]}")
-                return None
-        except Exception as e: 
-            _LOGGER.warning(f"-> TIDAL search exception: {e}")
-            return None
-
-    async def get_tidal_access_token(self) -> Optional[str]: 
-        if self.tidal_token_cache['token'] and time.time() < self.tidal_token_cache['expires']:
-            return self.tidal_token_cache['token']
-            
-        url = "https://auth.tidal.com/v1/oauth2/token"
-        
-        # Use Basic Auth standard for OAuth2
-        client_id = str(self.config.tidal_client_id).strip()
-        client_secret = str(self.config.tidal_client_secret).strip()
-        auth_str = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
-        
-        tidal_headers = { 
-            "Authorization": f"Basic {auth_str}",
-            "Content-Type": "application/x-www-form-urlencoded" 
-        }
-        payload = { "grant_type": "client_credentials" }
-        
-        try:
-            async with self.session.post(url, headers=tidal_headers, data=payload, timeout=10) as response: 
-                if response.status != 200: 
-                    _LOGGER.error(f"TIDAL Token Auth failed: {response.status} - {await response.text()}")
-                    return None
-                response_json = await response.json()
-                access_token = response_json["access_token"]
-                expiry_time = time.time() + response_json.get("expires_in", 3600) - 60 
-                self.tidal_token_cache = { 'token': access_token, 'expires': expiry_time }
-                return access_token
-        except Exception as e: 
-            _LOGGER.error(f"TIDAL token exception: {e}")
-            return None
-
-    def create_tv_icon_image(self) -> Image.Image: 
-        image_width = 300
-        image_height = 300
-        final_width = 64
-        final_height = 64
-        vertical_offset = 10
-        black = (0, 0, 0)
-        brown = (139, 69, 19)  
-        screen_bg = (240, 240, 240) 
-        white = (255, 255, 255)
-        gray = (150, 150, 150)
-        rainbow_colors = [
-            (255, 0, 0),     
-            (255, 165, 0),   
-            (255, 255, 0),   
-            (0, 255, 0),     
-            (0, 0, 255),     
-            (75, 0, 130),    
-            (238, 130, 238)  
-        ]
-        image = Image.new("RGB", (image_width, image_height), black)
-        draw = ImageDraw.Draw(image)
-        tv_body_padding = 60 + vertical_offset  
-        tv_body_rect = [
-            tv_body_padding,
-            tv_body_padding,
-            image_width - tv_body_padding,
-            image_height - tv_body_padding - 40
-        ]
-        tv_body_radius = 20
-        draw.rounded_rectangle(tv_body_rect, tv_body_radius, fill=brown)
-        screen_padding = tv_body_padding + 15 
-        screen_rect = [
-            screen_padding,
-            screen_padding,
-            image_width - screen_padding,
-            tv_body_rect[3] - 15
-        ]
-        draw.rectangle(screen_rect, fill=screen_bg)
-        num_bars = len(rainbow_colors)
-        bar_width = (screen_rect[2] - screen_rect[0]) // num_bars
-        start_x = screen_rect[0]
-        for color in rainbow_colors:
-            bar_rect = [
-                start_x,
-                screen_rect[1],
-                start_x + bar_width,
-                screen_rect[3]
-            ]
-            draw.rectangle(bar_rect, fill=color)
-            start_x += bar_width
-        antenna_color = gray
-        antenna_thickness = 3
-        antenna_length = 50
-        antenna_base_x1 = image_width // 2 - 30
-        antenna_base_x2 = image_width // 2 + 30
-        antenna_base_y = tv_body_padding  
-        draw.line(
-            (antenna_base_x1, antenna_base_y, antenna_base_x1 - 20, antenna_base_y - antenna_length),
-            fill=antenna_color, width=antenna_thickness
-        )
-        draw.line(
-            (antenna_base_x2, antenna_base_y, antenna_base_x2 + 20, antenna_base_y - antenna_length),
-            fill=antenna_color, width=antenna_thickness
-        )
-        highlight_color = white
-        highlight_thickness = 4
-        draw.line(
-            (tv_body_rect[0], tv_body_rect[1], tv_body_rect[0] + 20, tv_body_rect[1]),
-            fill=highlight_color, width=highlight_thickness
-        )
-        draw.line(
-            (tv_body_rect[0], tv_body_rect[1], tv_body_rect[0], tv_body_rect[1] + 20),
-            fill=highlight_color, width=highlight_thickness
-        )
-        image = image.resize((final_width, final_height), Image.Resampling.BILINEAR)
-        return image
-
-class ProgressBarManager:
-    def __init__(self, config: "Config", hass: HomeAssistant):
-        self.config = config
-        self.hass = hass
-        self.current_bar_str = ""
-
-    def calculate(self, position: float, duration: float) -> tuple[str, float]:
-        if duration <= 0: return "", None
-        max_chars = self.config.progress_bar_resolution
-        ratio = min(position / duration, 1.0)
-        chars_needed = max(int(ratio * max_chars), 1)
-        self.current_bar_str = self.config.progress_bar_character * chars_needed
-        
-        next_char_index = chars_needed + 1
-        delay = None
-        if next_char_index <= max_chars:
-            target_time = (next_char_index / max_chars) * duration
-            delay = max(target_time - position, 0.2)
-        return self.current_bar_str, delay
-
-    async def get_payload_item(self, media_data: "MediaData") -> list:
-        if not self.config.progress_bar_enabled or not getattr(media_data, 'show_progress_bar', False) or not self.current_bar_str: return []
-        color = getattr(media_data, 'lyrics_font_color', "#FFFFFF") if self.config.progress_bar_color == 'match' else self.config.progress_bar_color
-        
-        return [
-            {"TextId": 20, "type": 22, "x": 0, "y": self.config.progress_bar_y_offset-7, "dir": 0, "font": self.config.progress_bar_font, "TextWidth": 64, "Textheight": 10, "speed": 100, "align": 1, "TextString": self.current_bar_str, "color": color},
-            {"TextId": 21, "type": 22, "x": 1, "y": self.config.progress_bar_y_offset-7, "dir": 0, "font": self.config.progress_bar_font, "TextWidth": 64, "Textheight": 10, "speed": 100, "align": 1, "TextString": self.current_bar_str, "color": color}
-        ]
+# =========================================================================
+# NOTIFICATION MANAGER
+# =========================================================================
 
 class NotificationManager:
     THEMES = {
@@ -2889,139 +3062,7 @@ class NotificationManager:
         cx += shift_x
         cy += shift_y
 
-        if n_type == "v":
-            draw.line([(cx-8, cy), (cx-2, cy+8), (cx+10, cy-8)], fill=active_color, width=3)
-        elif n_type == "x":
-            s = 7
-            draw.line([(cx-s, cy-s), (cx+s, cy+s)], fill=active_color, width=3)
-            draw.line([(cx+s, cy-s), (cx-s, cy+s)], fill=active_color, width=3)
-        elif n_type == "info":
-            draw.ellipse([cx-9, cy-9, cx+9, cy+9], outline=active_color, width=1)
-            draw.rectangle([cx-1, cy-2, cx+1, cy+5], fill=active_color) 
-            draw.rectangle([cx-1, cy-5, cx+1, cy-4], fill=active_color)
-        elif n_type == "success":
-            draw.line([(cx-6, cy), (cx-2, cy+6), (cx+7, cy-5)], fill=active_color, width=2)
-        elif n_type in ["warning", "alert"]:
-            if n_type == "alert":
-                draw.arc([cx-6, cy-5, cx+6, cy+5], 180, 0, fill=active_color, width=1)
-                draw.line([(cx-6, cy), (cx-8, cy+6)], fill=active_color, width=1)
-                draw.line([(cx+6, cy), (cx+8, cy+6)], fill=active_color, width=1)
-                draw.line([(cx-8, cy+6), (cx+8, cy+6)], fill=active_color, width=1)
-                clapper_x = cx + (2 if frame_num == 1 else 0)
-                draw.line([(clapper_x-1, cy+6), (clapper_x+1, cy+6)], fill=active_color, width=1)
-                draw.point((clapper_x, cy+8), fill=active_color)
-            else:
-                draw.polygon([(cx, cy-9), (cx-10, cy+8), (cx+10, cy+8)], outline=active_color, fill=None)
-                draw.line([(cx, cy-3), (cx, cy+3)], fill=active_color, width=1)
-                draw.point((cx, cy+5), fill=active_color)
-        elif n_type == "error":
-            s = 5
-            draw.line([(cx-s, cy-s), (cx+s, cy+s)], fill=active_color, width=2)
-            draw.line([(cx+s, cy-s), (cx-s, cy+s)], fill=active_color, width=2)
-        elif n_type == "weather":
-            draw.ellipse([cx+2, cy-8, cx+8, cy-2], outline=(255, 215, 0), width=1)
-            draw.arc([cx-8, cy-2, cx+2, cy+6], 90, 270, fill=active_color, width=1)
-            draw.arc([cx-2, cy-4, cx+8, cy+6], 180, 0, fill=active_color, width=1)
-            draw.line([(cx-8, cy+2), (cx+8, cy+2)], fill=active_color, width=1)
-        elif n_type == "attack":
-            draw.line([(cx, cy-9), (cx-3, cy-4)], fill=active_color, width=1)
-            draw.line([(cx, cy-9), (cx+3, cy-4)], fill=active_color, width=1)
-            draw.rectangle([cx-3, cy-4, cx+3, cy+4], outline=active_color, width=1)
-            draw.line([(cx-3, cy+4), (cx-6, cy+8)], fill=active_color, width=1)
-            draw.line([(cx+3, cy+4), (cx+6, cy+8)], fill=active_color, width=1)
-            fire_color = (255, 165, 0) if frame_num == 0 else (255, 255, 0)
-            draw.line([(cx-1, cy+4), (cx-1, cy+7)], fill=fire_color, width=1)
-            draw.line([(cx+1, cy+4), (cx+1, cy+7)], fill=fire_color, width=1)
-        elif n_type == "wifi":
-            draw.point((cx, cy+6), fill=active_color)
-            if frame_num >= 1: draw.arc([cx-4, cy, cx+4, cy+8], 225, 315, fill=active_color, width=1)
-            if frame_num >= 2: draw.arc([cx-8, cy-4, cx+8, cy+4], 225, 315, fill=active_color, width=1)
-        elif n_type in ["timer", "time"]:
-            draw.ellipse([cx-9, cy-9, cx+9, cy+9], outline=active_color, width=1)
-            angle = frame_num * 90
-            rad = math.radians(angle - 90)
-            draw.line([(cx, cy), (cx + 6 * math.cos(rad), cy + 6 * math.sin(rad))], fill=active_color, width=1)
-        elif n_type == "boiler": 
-            draw.rectangle([cx-5, cy-8, cx+5, cy+8], outline=active_color, width=1)
-            draw.line([(cx+1, cy-4), (cx-2, cy), (cx+2, cy), (cx-1, cy+5)], fill=active_color, width=1)
-            draw.point((cx, cy+6), fill=active_color)
-        elif n_type == "shutter": 
-            draw.rectangle([cx-8, cy-8, cx+8, cy+8], outline=active_color, width=1)
-            for y_line in range(cy-5, cy+7, 3):
-                draw.line([(cx-6, y_line), (cx+6, y_line)], fill=active_color, width=1)
-        elif n_type == "car": 
-            draw.rectangle([cx-9, cy, cx+9, cy+6], outline=active_color, width=1)
-            draw.line([(cx-9, cy), (cx-5, cy-5), (cx+5, cy-5), (cx+9, cy)], fill=active_color, width=1)
-            draw.ellipse([cx-7, cy+5, cx-4, cy+8], fill=active_color)
-            draw.ellipse([cx+4, cy+5, cx+7, cy+8], fill=active_color)
-        elif n_type == "washer": 
-            draw.rectangle([cx-8, cy-8, cx+8, cy+8], outline=active_color, width=1)
-            draw.ellipse([cx-5, cy-5, cx+5, cy+5], outline=active_color, width=1)
-            draw.point((cx+6, cy-6), fill=active_color) 
-        elif n_type == "trash": 
-            draw.line([(cx-5, cy+8), (cx+5, cy+8), (cx+7, cy-4), (cx-7, cy-4), (cx-5, cy+8)], fill=active_color, width=1)
-            draw.line([(cx-8, cy-4), (cx+8, cy-4)], fill=active_color, width=1)
-            draw.rectangle([cx-2, cy-6, cx+2, cy-4], fill=active_color)
-        elif n_type == "door": 
-            draw.rectangle([cx-6, cy-9, cx+6, cy+9], outline=active_color, width=1)
-            draw.line([(cx-6, cy-9), (cx+2, cy-6)], fill=active_color, width=1)
-            draw.line([(cx+2, cy-6), (cx+2, cy+9)], fill=active_color, width=1)
-            draw.line([(cx+2, cy+9), (cx-6, cy+9)], fill=active_color, width=1)
-        elif n_type == "lock": 
-            draw.rectangle([cx-6, cy-2, cx+6, cy+7], fill=active_color)
-            draw.arc([cx-5, cy-8, cx+5, cy-1], 180, 0, fill=active_color, width=1)
-        elif n_type == "mail": 
-            draw.rectangle([cx-9, cy-6, cx+9, cy+6], outline=active_color, width=1)
-            draw.line([(cx-9, cy-6), (cx, cy+2), (cx+9, cy-6)], fill=active_color, width=1)
-        elif n_type == "battery": 
-            draw.rectangle([cx-8, cy-4, cx+6, cy+4], outline=active_color, width=1)
-            draw.rectangle([cx-7, cy-3, cx-2, cy+3], fill=active_color) 
-            draw.rectangle([cx+6, cy-2, cx+8, cy+2], fill=active_color) 
-        elif n_type == "fire": 
-            draw.polygon([(cx, cy-8), (cx+5, cy+2), (cx+3, cy+8), (cx-3, cy+8), (cx-5, cy+2)], outline=active_color, fill=None)
-            draw.point((cx, cy+5), fill=active_color)
-        elif n_type == "water": 
-            draw.polygon([(cx, cy-8), (cx+5, cy+2), (cx, cy+8), (cx-5, cy+2)], outline=active_color, fill=active_color)
-        elif n_type == "sleep": 
-            draw.arc([cx-6, cy-6, cx+6, cy+6], 90, 270, fill=active_color, width=2)
-            draw.line([(cx, cy-6), (cx, cy+6)], fill=active_color, width=1)
-        elif n_type == "phone":
-            draw.arc([cx-8, cy-4, cx+8, cy+12], 0, 180, fill=active_color, width=2)
-            draw.rectangle([cx-9, cy-4, cx-6, cy], fill=active_color)
-            draw.rectangle([cx+6, cy-4, cx+9, cy], fill=active_color)
-        elif n_type == "calendar":
-            draw.rectangle([cx-8, cy-7, cx+8, cy+8], outline=active_color, width=1)
-            draw.line([(cx-8, cy-3), (cx+8, cy-3)], fill=active_color, width=1)
-            draw.point((cx-4, cy+1), fill=active_color)
-            draw.point((cx, cy+1), fill=active_color)
-            draw.point((cx+4, cy+1), fill=active_color)
-            draw.point((cx-4, cy+5), fill=active_color)
-            draw.point((cx, cy+5), fill=active_color)
-        elif n_type == "camera":
-            draw.rectangle([cx-8, cy-5, cx+8, cy+6], outline=active_color, width=1)
-            draw.rectangle([cx-2, cy-8, cx+2, cy-5], fill=active_color)
-            draw.ellipse([cx-3, cy-2, cx+3, cy+4], outline=active_color, width=1)
-        elif n_type == "music":
-            draw.ellipse([cx-7, cy+3, cx-3, cy+7], fill=active_color)
-            draw.ellipse([cx+3, cy+3, cx+7, cy+7], fill=active_color)
-            draw.line([(cx-3, cy+5), (cx-3, cy-6)], fill=active_color, width=1)
-            draw.line([(cx+7, cy+5), (cx+7, cy-6)], fill=active_color, width=1)
-            draw.line([(cx-3, cy-6), (cx+7, cy-6)], fill=active_color, width=2)
-        elif n_type == "sun":
-            draw.ellipse([cx-4, cy-4, cx+4, cy+4], fill=active_color)
-            s = 7
-            draw.line([(cx, cy-s), (cx, cy-s-2)], fill=active_color, width=1)
-            draw.line([(cx, cy+s), (cx, cy+s+2)], fill=active_color, width=1)
-            draw.line([(cx-s, cy), (cx-s-2, cy)], fill=active_color, width=1)
-            draw.line([(cx+s, cy), (cx+s+2, cy)], fill=active_color, width=1)
-            draw.point((cx-5, cy-5), fill=active_color)
-            draw.point((cx+5, cy-5), fill=active_color)
-            draw.point((cx-5, cy+5), fill=active_color)
-            draw.point((cx+5, cy+5), fill=active_color)
-        elif n_type == "moon":
-            draw.arc([cx-6, cy-6, cx+6, cy+6], 90, 270, fill=active_color, width=2)
-            draw.line([(cx, cy-6), (cx, cy+6)], fill=active_color, width=1)
-
+        NotificationIconRenderer.render_icon(n_type, draw, cx, cy, active_color, frame_num)
         return img
 
     def _create_text_items(self, lines: list, color: str, start_y: int) -> list:
@@ -3054,3 +3095,36 @@ class NotificationManager:
             return tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
         except ValueError:
             return (255, 255, 255)
+
+# =========================================================================
+# PROGRESS BAR MANAGER
+# =========================================================================
+
+class ProgressBarManager:
+    def __init__(self, config: "Config", hass: HomeAssistant):
+        self.config = config
+        self.hass = hass
+        self.current_bar_str = ""
+
+    def calculate(self, position: float, duration: float) -> tuple[str, float]:
+        if duration <= 0: return "", None
+        max_chars = self.config.progress_bar_resolution
+        ratio = min(position / duration, 1.0)
+        chars_needed = max(int(ratio * max_chars), 1)
+        self.current_bar_str = self.config.progress_bar_character * chars_needed
+        
+        next_char_index = chars_needed + 1
+        delay = None
+        if next_char_index <= max_chars:
+            target_time = (next_char_index / max_chars) * duration
+            delay = max(target_time - position, 0.2)
+        return self.current_bar_str, delay
+
+    async def get_payload_item(self, media_data: "MediaData") -> list:
+        if not self.config.progress_bar_enabled or not getattr(media_data, 'show_progress_bar', False) or not self.current_bar_str: return []
+        color = getattr(media_data, 'lyrics_font_color', "#FFFFFF") if self.config.progress_bar_color == 'match' else self.config.progress_bar_color
+        
+        return [
+            {"TextId": 20, "type": 22, "x": 0, "y": self.config.progress_bar_y_offset-7, "dir": 0, "font": self.config.progress_bar_font, "TextWidth": 64, "Textheight": 10, "speed": 100, "align": 1, "TextString": self.current_bar_str, "color": color},
+            {"TextId": 21, "type": 22, "x": 1, "y": self.config.progress_bar_y_offset-7, "dir": 0, "font": self.config.progress_bar_font, "TextWidth": 64, "Textheight": 10, "speed": 100, "align": 1, "TextString": self.current_bar_str, "color": color}
+        ]

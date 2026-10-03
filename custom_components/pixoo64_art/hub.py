@@ -4,7 +4,7 @@ import logging
 import time
 import json
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event, async_call_later
 
@@ -16,6 +16,133 @@ from .pixoo_services import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+class AmbientLightingController:
+    """Controls synchronized Home Assistant light entities and WLED LED strips."""
+
+    def __init__(self, hass, websession, config: Config):
+        self.hass = hass
+        self.websession = websession
+        self.config = config
+
+    async def control_light(self, action: str, rgb_color: tuple = None, is_night: bool = True):
+        if not is_night and getattr(self.config, 'only_at_night', False): return
+            
+        light_entities = getattr(self.config, 'light_entity', [])
+        if not light_entities:
+            return
+            
+        entities = light_entities if isinstance(light_entities, list) else [light_entities]
+        
+        for entity_id in entities:
+            service_data = {"entity_id": entity_id}
+            if action == 'on' and rgb_color:
+                service_data["rgb_color"] = rgb_color
+                service_data["transition"] = 1
+                
+            try:
+                await self.hass.services.async_call("light", f"turn_{action}", service_data, blocking=False)
+            except Exception as e:
+                _LOGGER.error("Failed to control light %s: %s", entity_id, e)
+
+    async def control_wled_light(self, action: str, colors: list = None, is_night: bool = True):
+        wled_ip = getattr(self.config, 'wled_ip', None)
+        if not wled_ip:
+            return
+            
+        payload = {"on": action == "on"}
+        if action == "on" and colors:
+            clean_colors = [c.lstrip('#') for c in colors if c]
+            if clean_colors:
+                effect_id = getattr(self.config, 'effect', 38)
+                payload["bri"] = getattr(self.config, 'brightness', 255)
+                payload["seg"] = [{"fx": effect_id, "col": clean_colors}]
+                    
+            url = f"http://{wled_ip}/json/state"
+            try:
+                async with self.websession.post(url, json=payload, timeout=5) as response:
+                    response.raise_for_status()
+            except Exception as e:
+                _LOGGER.debug("Failed to control WLED at %s: %s", wled_ip, e)
+
+class DisplayLayerBuilder:
+    """Builds HTTP text item payloads including OSD, clock, weather and track info."""
+
+    @staticmethod
+    def build_text_items(config: Config, media_data: MediaData, osd_mode: Optional[str], last_volume_level: float, font_color: str, bg_color: str, scope: str = "all") -> List[Dict]:
+        text_items = []
+        
+        y_info = 3 if getattr(config, 'overlay_top', True) else 56
+        align_mode = getattr(config, 'overlay_align', 'Clock Right, Temp Left')
+        show_clk = getattr(config, 'show_clock', True)
+        show_tmp = getattr(config, 'temperature', False)
+        
+        if align_mode == "Clock Left, Temp Right":
+            x_c, x_t = 3, 47
+        elif align_mode == "Centered":
+            if show_clk and not show_tmp: x_c, x_t = 22, 3
+            elif show_tmp and not show_clk: x_c, x_t = 44, 24
+            else: x_c, x_t = 36, 3
+        else: 
+            x_c, x_t = 44, 3
+
+        if osd_mode:
+            if osd_mode == "Pause":
+                text_items.append({"TextId": 4, "type": 22, "x": 0, "y": 24, "dir": 0, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 0, "align": 2, "TextString": "PAUSED", "color": font_color})
+            elif osd_mode == "Volume":
+                pct = int((last_volume_level or 0) * 100)
+                text_items.append({"TextId": 4, "type": 22, "x": 0, "y": 20, "dir": 0, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 0, "align": 2, "TextString": f"VOL {pct}%", "color": font_color})
+                bars = int((pct / 100) * 10)
+                bar_str = "=" * bars + "-" * (10 - bars)
+                text_items.append({"TextId": 5, "type": 22, "x": 0, "y": 32, "dir": 0, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 0, "align": 2, "TextString": bar_str, "color": font_color})
+                
+            if show_clk:
+                text_items.append({"TextId": 2, "type": 5, "x": x_c, "y": y_info, "dir": 0, "font": 18, "TextWidth": 32, "Textheight": 16, "speed": 100, "align": 1, "color": font_color})
+            if show_tmp:
+                t_val = getattr(media_data, 'temperature', None)
+                t_type = 22 if t_val else 17
+                t_str = str(t_val) if t_type == 22 else ""
+                text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": t_str})
+                
+            return text_items
+
+        y_text = 0 if getattr(config, 'top_text', False) else 48
+        txt = f"{media_data.artist} - {media_data.title}"
+        if len(txt) > 14: txt += "        "
+        rtl = 1 if has_bidi(txt) else 0
+        is_burned = getattr(config, 'burned', False)
+        
+        if getattr(config, 'special_mode', False):
+            text_items.append({"TextId": 1, "type": 14, "x": 3, "y": 1, "dir": 0, "font": 18, "TextWidth": 33, "Textheight": 6, "speed": 100, "align": 1, "color": font_color})
+            text_items.append({"TextId": 2, "type": 5, "x": 1, "y": 1, "dir": 0, "font": 18, "TextWidth": 63, "Textheight": 6, "speed": 100, "align": 2, "color": font_color})
+            
+            t_val = getattr(media_data, 'temperature', None)
+            t_type = 22 if t_val else 17
+            t_str = str(t_val) if t_type == 22 else ""
+            text_items.append({"TextId": 3, "type": t_type, "x": 48, "y": 1, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": t_str})
+
+            show_http_text = getattr(config, 'show_text', True) and not getattr(media_data, 'playing_tv', False) and not is_burned
+            
+            if show_http_text:
+                a_rtl = 1 if has_bidi(media_data.artist) else 0
+                text_items.append({"TextId": 4, "type": 22, "x": 0, "y": 42, "dir": a_rtl, "font": 190, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(media_data.artist) if a_rtl else media_data.artist, "color": font_color})
+                t_rtl = 1 if has_bidi(media_data.title) else 0
+                text_items.append({"TextId": 5, "type": 22, "x": 0, "y": 52, "dir": t_rtl, "font": 190, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(media_data.title) if t_rtl else media_data.title, "color": font_color})
+
+        else:
+            if getattr(config, 'show_text', True) and not getattr(media_data, 'playing_tv', False) and not is_burned:
+                text_items.append({"TextId": 4, "type": 22, "x": 0, "y": y_text, "dir": rtl, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(txt) if rtl else txt, "color": font_color})
+                            
+            if show_clk:
+                text_items.append({"TextId": 2, "type": 5, "x": x_c, "y": y_info, "dir": 0, "font": 18, "TextWidth": 32, "Textheight": 16, "speed": 100, "align": 1, "color": font_color})
+            
+            if show_tmp:
+                t_val = getattr(media_data, 'temperature', None)
+                t_type = 22 if t_val else 17
+                t_str = str(t_val) if t_type == 22 else ""
+                text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": t_str})
+                        
+        return text_items
 
 class PixooHub:
     def __init__(self, hass, entry):
@@ -39,6 +166,9 @@ class PixooHub:
         self.fallback_service = FallbackService(self.config, self.image_processor, self.websession, self.spotify_service, self.pixoo_device)
         self.progress_manager = ProgressBarManager(self.config, self.hass)
         self.notification_manager = NotificationManager(self.config, self.pixoo_device, self.image_processor, self.hass)
+
+        self.lighting = AmbientLightingController(self.hass, self.websession, self.config)
+        self.layer_builder = DisplayLayerBuilder()
 
         self.is_art_visible = False
         self.lyrics_active_mode = False
@@ -64,14 +194,31 @@ class PixooHub:
         self._early_send_timer_unsub = None
         self._pause_timeout_unsub = None
         self._volume_osd_timer_unsub = None
+        self._force_next_text_render = False
         
         self._early_slider_sent_for = None
         self.prefetch_status = "Idle"
         self.prefetch_next_artist = None
         self.prefetch_next_title = None
 
+        self.spotify_slider_status = "Idle"
+        self.spotify_slider_frames = 0
+        self.spotify_slider_artist = None
+        self.spotify_slider_last_error = None
+
+    async def control_light(self, action: str, rgb_color: tuple = None, is_night: bool = True):
+        await self.lighting.control_light(action, rgb_color, is_night)
+
+    async def control_wled_light(self, action: str, colors: list = None, is_night: bool = True):
+        await self.lighting.control_wled_light(action, colors, is_night)
+
+    async def _build_text_items_list(self, font_color, bg_color, scope="all"):
+        return self.layer_builder.build_text_items(
+            self.config, self.media_data, self.osd_mode, 
+            self.last_volume_level, font_color, bg_color, scope=scope
+        )
+
     def _cleanup_timers(self, timers=None):
-        """Safely unsubscribe specified timers or all known timers."""
         default_timers = [
             '_progress_timer_unsub', '_lyrics_timer_unsub', 
             '_pending_render_unsub', '_prefetch_timer_unsub', 
@@ -85,7 +232,6 @@ class PixooHub:
                 setattr(self, attr, None)
 
     def _cancel_tasks(self, tasks=None):
-        """Safely cancel specified tasks or all known tasks."""
         default_tasks = ['current_task', 'debounce_task', '_prefetch_task']
         for attr in (tasks or default_tasks):
             task = getattr(self, attr, None)
@@ -102,6 +248,10 @@ class PixooHub:
         attrs["prefetch_status"] = self.prefetch_status
         attrs["prefetch_next_artist"] = self.prefetch_next_artist
         attrs["prefetch_next_title"] = self.prefetch_next_title
+        attrs["spotify_slider_status"] = self.spotify_slider_status
+        attrs["spotify_slider_frames"] = self.spotify_slider_frames
+        attrs["spotify_slider_artist"] = self.spotify_slider_artist
+        attrs["spotify_slider_last_error"] = self.spotify_slider_last_error
         
         state_val = getattr(self.sensor, '_attr_native_value', "Initializing")
         self.sensor.update_state(state_val, attrs)
@@ -143,8 +293,10 @@ class PixooHub:
         self.last_progress_str = ""
         self._active_song_key = None 
         
-        if key in ["force_ai", "crop_mode", "text_background", "text_position", "display_mode", "overlay_position", "overlay_align"]:
+        # Invalidate cache on any layout, mode or filter change
+        if key in ["force_ai", "crop_mode", "text_background", "text_position", "display_mode", "overlay_position", "overlay_align", "image_filter"]:
             self.image_processor.image_cache.clear()
+            self.image_processor.raw_image_cache.clear()
             if hasattr(self.fallback_service, "_artwork_cache"):
                 self.fallback_service._artwork_cache.clear()
             
@@ -162,6 +314,10 @@ class PixooHub:
         self.prefetch_next_artist = None
         self.prefetch_next_title = None
         self._early_slider_sent_for = None
+        self.spotify_slider_status = "Idle"
+        self.spotify_slider_frames = 0
+        self.spotify_slider_artist = None
+        self.spotify_slider_last_error = None
         
         self._cleanup_timers(['_prefetch_timer_unsub', '_early_send_timer_unsub', '_pause_timeout_unsub', '_volume_osd_timer_unsub'])
         self._cancel_tasks(['_prefetch_task'])
@@ -229,34 +385,32 @@ class PixooHub:
         options = self.entry.options
         data = self.entry.data
 
-        # --- FIX: ENSURING ALL API KEYS ARE MAPPED TO CONFIG ---
         self.config.pollinations = options.get("pollinations_key", data.get("pollinations_key", ""))
         self.config.spotify_client_id = options.get("spotify_client_id", data.get("spotify_client_id", ""))
         self.config.spotify_client_secret = options.get("spotify_client_secret", data.get("spotify_client_secret", ""))
         
-        # New Fallback Services API Keys mapping
         self.config.musicbrainz = options.get("musicbrainz_enabled", data.get("musicbrainz_enabled", True))
         self.config.tidal_client_id = options.get("tidal_client_id", data.get("tidal_client_id", ""))
         self.config.tidal_client_secret = options.get("tidal_client_secret", data.get("tidal_client_secret", ""))
         self.config.lastfm = options.get("lastfm_key", data.get("lastfm_key", ""))
         self.config.discogs = options.get("discogs_token", data.get("discogs_token", ""))
 
-        # Base Configuration settings
         self.config.tv_mode = options.get("tv_mode", data.get("tv_mode", False))
         self.config.temperature_sensor = options.get("temperature_entity", data.get("temperature_entity"))
         
-        # OSD Configuration (read from config flow instead of UI entities)
         self.config.osd_overlay = options.get("osd_overlay", data.get("osd_overlay", "Enabled"))
         self.config.pause_timeout = options.get("pause_timeout", data.get("pause_timeout", "15s"))
         self.config.volume_osd_duration = options.get("volume_osd_duration", data.get("volume_osd_duration", "2s"))
         
-        # UI Entities state mapping
         self.config.full_control = self.ui_state.get("full_control", False)
         self.config.progress_bar_enabled = self.ui_state.get("progress_bar", True)
         self.config.force_ai = bool(self.ui_state.get("force_ai", False) and self.is_ai_available)
         self.config.text_bg = self.ui_state.get("text_background", True)
 
         self.config.lyrics_sync = float(self.ui_state.get("lyrics_sync", 0.0))
+
+        # Dynamic image filter mapping
+        self.config.image_filter = self.ui_state.get("image_filter", "None")
 
         crop_mode = self.ui_state.get("crop_mode", "No Crop")
         self.config.crop_borders = crop_mode in ["Crop", "Extra Crop"]
@@ -292,6 +446,9 @@ class PixooHub:
         if display_mode == "Spotify Slider" and not self.is_spotify_available:
             display_mode = "Standard"
             self.ui_state["display_mode"] = "Standard"
+        elif display_mode == "Force AI" and not self.is_ai_available:
+            display_mode = "Standard"
+            self.ui_state["display_mode"] = "Standard"
 
         m = display_mode.lower()
         self.config.show_lyrics = (m == "lyrics")
@@ -299,9 +456,7 @@ class PixooHub:
         self.config.special_mode = ("special" in m)
         self.config.spotify_slide = ("slider" in m) and self.is_spotify_available
 
-        self.config.special_mode_spotify_slider = bool(
-            self.config.spotify_slide and self.config.special_mode and self.config.show_text
-        )
+        self.config.force_ai = (display_mode == "Force AI" or bool(self.ui_state.get("force_ai", False))) and self.is_ai_available
 
         self.cached_static_items = []
         self.last_text_payload_hash = None
@@ -322,17 +477,21 @@ class PixooHub:
         else:
             self.media_data.temperature = None
 
-    def request_text_render(self):
+    def request_text_render(self, force: bool = False):
         if self.notification_manager.is_active: return
+        if force:
+            self._force_next_text_render = True
         self._cleanup_timers(['_pending_render_unsub'])
         self._pending_render_unsub = async_call_later(self.hass, 0.2, self._execute_text_render)
 
     async def _execute_text_render(self, now=None):
         self._pending_render_unsub = None
         if self.notification_manager.is_active: return
-        await self._render_and_send_text_layers()
+        force = getattr(self, '_force_next_text_render', False)
+        self._force_next_text_render = False
+        await self._render_and_send_text_layers(force=force)
 
-    async def _render_and_send_text_layers(self):
+    async def _render_and_send_text_layers(self, force: bool = False):
         if not self.is_art_visible or self.notification_manager.is_active: return
         items = []
         
@@ -348,12 +507,10 @@ class PixooHub:
                  self.cached_static_items = await self._build_text_items_list(font_color, bg_color, scope="static")
             items.extend(self.cached_static_items)
             
-        # Hide progress bar if OSD is active to keep it clean
         if getattr(self.media_data, 'show_progress_bar', False) and not self.osd_mode:
             pb = await self.progress_manager.get_payload_item(self.media_data)
             if pb: items.extend(pb)
             
-        # CLEAR UNUSED IDS: Ensure any text IDs from previous renders (like Volume Bar) are wiped from Pixoo memory
         used_ids = {item.get("TextId") for item in items if "TextId" in item}
         for i in range(1, 22):
             if i not in used_ids:
@@ -364,7 +521,7 @@ class PixooHub:
                 })
 
         hsh = hash(json.dumps(items, sort_keys=True))
-        if hsh != self.last_text_payload_hash:
+        if force or hsh != self.last_text_payload_hash:
             await self.pixoo_device.send_command({"Command": "Draw/SendHttpItemList", "ItemList": items})
             self.last_text_payload_hash = hsh
 
@@ -378,7 +535,6 @@ class PixooHub:
             pos += (datetime.now(timezone.utc) - self.media_data.media_position_updated_at).total_seconds()
         
         pos -= getattr(self.config, 'lyrics_sync', 0.0)
-        
         layout, delay = self.media_data.lyrics_provider.get_refresh_plan(pos)
 
         self.current_lyrics_items = []
@@ -421,7 +577,6 @@ class PixooHub:
                 })
             
         self.request_text_render()
-        
         safe_delay = delay if delay is not None else 5.0
         
         async def _timer(now):
@@ -443,8 +598,9 @@ class PixooHub:
             
         dur = self.media_data.media_duration
         is_slider = getattr(self.config, 'spotify_slide', False)
-        prefetch_offset = 30.0 if is_slider else 20.0
+        is_ai = getattr(self.config, 'force_ai', False)
         
+        prefetch_offset = 35.0 if (is_slider or is_ai) else 20.0
         delay = (dur - pos) - prefetch_offset
 
         if delay > 0:
@@ -467,6 +623,9 @@ class PixooHub:
                 self.prefetch_next_artist = artist
                 self.prefetch_next_title = title
                 self.prefetch_status = "Downloading Art..."
+                if getattr(self.config, 'spotify_slide', False):
+                    self.spotify_slider_status = f"Prefetching for {artist}..."
+                    self.spotify_slider_artist = artist
                 self._update_prefetch_sensor_state()
                 
                 dummy_media = MediaData(self.hass, self.config, self.image_processor, self.websession)
@@ -485,46 +644,59 @@ class PixooHub:
             self.prefetch_status = "No next song detected"
             self.prefetch_next_artist = None
             self.prefetch_next_title = None
+            if getattr(self.config, 'spotify_slide', False) and self.spotify_slider_status not in ["Active Live", "Slider Sent Early"]:
+                self.spotify_slider_status = "No next queue detected"
             self._update_prefetch_sensor_state()
 
     async def _run_prefetch_and_update_status(self, url: str, dummy_media: MediaData):
         try:
             await self.fallback_service.prefetch_next_track(url, dummy_media)
             self.prefetch_status = "Ready in RAM"
+            
+            if getattr(self.config, 'spotify_slide', False) and not getattr(dummy_media, 'radio_logo', False):
+                frames = getattr(dummy_media, 'slider_frames', 0)
+                self.spotify_slider_frames = frames
+                if frames >= 2:
+                    self.spotify_slider_status = f"Ready in RAM ({frames} frames)"
+                else:
+                    self.spotify_slider_status = f"Prefetch: {dummy_media.slider_error or 'No albums found'}"
             self._update_prefetch_sensor_state()
             
             if getattr(self.config, 'spotify_slide', False) and not getattr(dummy_media, 'radio_logo', False):
-                pos = self.media_data.media_position
-                if self.media_data.media_position_updated_at:
-                    pos += (datetime.now(timezone.utc) - self.media_data.media_position_updated_at).total_seconds()
-                dur = self.media_data.media_duration
-                
-                frames = getattr(dummy_media, 'slider_frames', 0)
-                early_offset = max(2.0, float(frames)) if frames > 0 else 5.0
-                
-                time_to_early_send = (dur - pos) - early_offset
-                
-                if time_to_early_send > 0:
-                    self._cleanup_timers(['_early_send_timer_unsub'])
-                        
-                    async def _early_send_cb(now):
-                        self._early_send_timer_unsub = None
-                        await self._do_early_slider_send(dummy_media)
-                        
-                    self._early_send_timer_unsub = async_call_later(self.hass, time_to_early_send, _early_send_cb)
-                elif time_to_early_send > -early_offset:
-                    self.hass.async_create_task(self._do_early_slider_send(dummy_media))
+                if dummy_media.slider_frames >= 2:
+                    pos = self.media_data.media_position
+                    if self.media_data.media_position_updated_at:
+                        pos += (datetime.now(timezone.utc) - self.media_data.media_position_updated_at).total_seconds()
+                    dur = self.media_data.media_duration
                     
+                    early_offset = 2.5
+                    time_to_early_send = (dur - pos) - early_offset
+                    
+                    if time_to_early_send > 0:
+                        self._cleanup_timers(['_early_send_timer_unsub'])
+                            
+                        async def _early_send_cb(now):
+                            self._early_send_timer_unsub = None
+                            await self._do_early_slider_send(dummy_media)
+                            
+                        self._early_send_timer_unsub = async_call_later(self.hass, time_to_early_send, _early_send_cb)
+                    elif time_to_early_send > -early_offset:
+                        self.hass.async_create_task(self._do_early_slider_send(dummy_media))
+                        
         except asyncio.CancelledError:
             self.prefetch_status = "Cancelled"
+            self.spotify_slider_status = "Prefetch Cancelled"
             self._update_prefetch_sensor_state()
         except Exception as e:
             self.prefetch_status = f"Failed: {e}"
+            self.spotify_slider_status = f"Prefetch Error: {e}"
+            self.spotify_slider_last_error = str(e)
             self._update_prefetch_sensor_state()
 
     async def _do_early_slider_send(self, dummy_media: MediaData):
         if not dummy_media: return
         self.prefetch_status = "Sending Slider Early..."
+        self.spotify_slider_status = "Sending Early Slider to Pixoo..."
         self._update_prefetch_sensor_state()
         
         try:
@@ -536,10 +708,17 @@ class PixooHub:
             if getattr(dummy_media, 'spotify_slide_pass', False):
                 self._early_slider_sent_for = f"{dummy_media.artist}_{dummy_media.title}".strip().lower()
                 self.prefetch_status = "Slider Sent Early"
+                self.spotify_slider_status = f"Slider Sent Early ({dummy_media.slider_frames} frames)"
+                self.spotify_slider_frames = dummy_media.slider_frames
+                self.spotify_slider_artist = dummy_media.artist
             else:
                 self.prefetch_status = "Early Slider Failed"
+                self.spotify_slider_status = f"Early Slider Failed: {dummy_media.slider_error or 'Unknown'}"
+                self.spotify_slider_last_error = dummy_media.slider_error
         except Exception as e:
             self.prefetch_status = f"Early Slider Error: {e}"
+            self.spotify_slider_status = f"Early Slider Exception: {e}"
+            self.spotify_slider_last_error = str(e)
             
         self._update_prefetch_sensor_state()
 
@@ -559,7 +738,7 @@ class PixooHub:
                 if response and self.media_player in response:
                     queue = response[self.media_player]
             except Exception as e:
-                _LOGGER.debug(f"Failed to fetch Sonos queue: {e}")
+                _LOGGER.debug("Failed to fetch Sonos queue: %s", e)
 
         if isinstance(queue, list) and isinstance(queue_pos, int):
             next_pos = queue_pos 
@@ -628,12 +807,11 @@ class PixooHub:
         
         osd_enabled = getattr(self.config, 'osd_overlay', "Enabled") == "Enabled"
 
-        # Handle Pause State with OSD overlay
         if new_state.state == "paused":
             if osd_enabled:
                 self._stop_lyrics_scheduler()
                 self.osd_mode = "Pause"
-                self.request_text_render()
+                self.request_text_render(force=True)
                 
                 pause_timeout_str = getattr(self.config, 'pause_timeout', "15s")
                 self._cleanup_timers(['_pause_timeout_unsub', '_volume_osd_timer_unsub'])
@@ -647,18 +825,16 @@ class PixooHub:
                 self._stop_lyrics_scheduler()
                 return
 
-        # Restore from Pause
         if old_state and old_state.state == "paused" and new_state.state in ["playing", "on"]:
             self._cleanup_timers(['_pause_timeout_unsub'])
             self.osd_mode = None
-            self.request_text_render()
+            self.request_text_render(force=True)
 
         if new_state.state not in ["playing", "on"]:
             await self._send_off_command()
             self._stop_lyrics_scheduler()
             return
 
-        # Handle Volume OSD while playing
         is_volume_change = False
         if old_state and old_state.state in ["playing", "on"]:
             new_vol = new_state.attributes.get("volume_level")
@@ -669,7 +845,7 @@ class PixooHub:
 
         if is_volume_change and osd_enabled:
             self.osd_mode = "Volume"
-            self.request_text_render()
+            self.request_text_render(force=True)
             
             vol_duration_str = getattr(self.config, 'volume_osd_duration', "2s")
             vol_duration = int(vol_duration_str.replace("s", "")) if "s" in vol_duration_str else 2
@@ -679,7 +855,7 @@ class PixooHub:
             def _clear_vol_osd(now):
                 if self.osd_mode == "Volume":
                     self.osd_mode = None
-                    self.request_text_render()
+                    self.request_text_render(force=True)
                     
             self._volume_osd_timer_unsub = async_call_later(self.hass, vol_duration, _clear_vol_osd)
             
@@ -690,7 +866,6 @@ class PixooHub:
                 await self._update_progress_bar_loop()
                 return 
 
-        # Standard Track Update processing
         await self.media_data.update()
         self._fetch_external_temperature()
 
@@ -807,36 +982,12 @@ class PixooHub:
                     if self._early_slider_sent_for == current_song_key:
                         early_slider_match = True
                         self.media_data.spotify_slide_pass = True
+                        self.spotify_slider_status = f"Active (Early Match, {self.spotify_slider_frames} frames)"
                         _LOGGER.debug("Slider was already sent early for %s", current_song_key)
 
                 self._early_slider_sent_for = None
                 duration = time.perf_counter() - start_time
                 
-                sensor_attrs = {
-                    "artist": self.media_data.artist,
-                    "media_title": self.media_data.title,
-                    "image_source": self.media_data.pic_source,
-                    "image_url": self.media_data.pic_url,
-                    "active_mode": self.ui_state.get("display_mode", "Standard"),
-                    "font_color": font_color,
-                    "background_color": bg_color_str,
-                    "background_color_rgb": processed_data.get('background_color_rgb'),
-                    "brightness_lower_part": processed_data.get('brightness_lower_part'),
-                    "images_in_cache": len(self.image_processor.image_cache),
-                    "process_duration": f"{duration:.2f}s",
-                    "progress_bar_active": getattr(self.media_data, 'show_progress_bar', False),
-                    "lyrics_found": len(self.media_data.lyrics) > 0,
-                    "lyrics_sync_offset": getattr(self.config, 'lyrics_sync', 0.0),
-                    "lyrics_count": len(self.media_data.lyrics),
-                    "pixoo64_channel": self.select_index,
-                    "prefetch_status": self.prefetch_status,
-                    "prefetch_next_artist": self.prefetch_next_artist,
-                    "prefetch_next_title": self.prefetch_next_title,
-                }
-
-                if self.sensor: 
-                    self.sensor.update_state(f"{self.media_data.artist} - {self.media_data.title}", sensor_attrs)
-
                 success = True
                 if not early_slider_match:
                     image_cmd = {
@@ -860,30 +1011,79 @@ class PixooHub:
                     self.media_data.background_color = bg_color_str
                     
                     self.lyrics_active_mode = getattr(self.config, 'show_lyrics', False) and len(self.media_data.lyrics) > 0 and not getattr(self.media_data, 'playing_tv', False)
-                    
                     self.cached_static_items = await self._build_text_items_list(font_color, bg_color_str, scope="static")
-                    
                     self.progress_timer_gen_id += 1
                     
                     if self.lyrics_active_mode:
                         await self._calculate_and_schedule_next()
                     else:
                         self._stop_lyrics_scheduler()
-                        self.request_text_render()
+
+                    is_live_slider = (
+                        getattr(self.config, 'spotify_slide', False)
+                        and not early_slider_match
+                        and not getattr(self.media_data, 'radio_logo', False)
+                        and not getattr(self.media_data, 'playing_tv', False)
+                    )
+
+                    if is_live_slider:
+                        self.spotify_slider_status = f"Loading Live Slider for {self.media_data.artist}..."
+                        self.spotify_slider_artist = self.media_data.artist
+                        self._update_prefetch_sensor_state()
                         
+                        await self.spotify_service.prepare_slider_for_media(self.media_data)
+                        
+                        if getattr(self.config, 'special_mode_spotify_slider', False): 
+                            await self.spotify_service.spotify_album_art_animation(self.pixoo_device, self.media_data, self.select_index)
+                        else: 
+                            await self.spotify_service.spotify_albums_slide(self.pixoo_device, self.media_data, self.select_index)
+                        
+                        if getattr(self.media_data, 'spotify_slide_pass', False):
+                            self.spotify_slider_status = f"Active Live ({self.media_data.slider_frames} frames)"
+                            self.spotify_slider_frames = self.media_data.slider_frames
+                        else:
+                            self.spotify_slider_status = f"Live Failed: {self.media_data.slider_error or 'No albums found'}"
+                            self.spotify_slider_last_error = self.media_data.slider_error
+
+                        if not self.lyrics_active_mode:
+                            self.last_text_payload_hash = None
+                            await self._render_and_send_text_layers(force=True)
+                    else:
+                        if not self.lyrics_active_mode:
+                            self.last_text_payload_hash = None
+                            await self._render_and_send_text_layers(force=True)
+
                     await self._update_progress_bar_loop()
                     self._schedule_prefetch()
 
-                    if getattr(self.config, 'spotify_slide', False) and not early_slider_match and not getattr(self.media_data, 'radio_logo', False) and not getattr(self.media_data, 'playing_tv', False):
-                        self.spotify_service.spotify_data = await self.spotify_service.get_spotify_json(self.media_data.artist, self.media_data.title)
-                        if self.spotify_service.spotify_data:
-                            if getattr(self.config, 'special_mode_spotify_slider', False): 
-                                await self.spotify_service.spotify_album_art_animation(self.pixoo_device, self.media_data, self.select_index)
-                            else: 
-                                await self.spotify_service.spotify_albums_slide(self.pixoo_device, self.media_data, self.select_index)
-                            
-                            if getattr(self.media_data, 'spotify_slide_pass', False):
-                                self.request_text_render()
+                sensor_attrs = {
+                    "artist": self.media_data.artist,
+                    "media_title": self.media_data.title,
+                    "image_source": self.media_data.pic_source,
+                    "image_url": self.media_data.pic_url,
+                    "active_mode": self.ui_state.get("display_mode", "Standard"),
+                    "font_color": font_color,
+                    "background_color": bg_color_str,
+                    "background_color_rgb": processed_data.get('background_color_rgb'),
+                    "brightness_lower_part": processed_data.get('brightness_lower_part'),
+                    "images_in_cache": len(self.image_processor.image_cache),
+                    "process_duration": f"{duration:.2f}s",
+                    "progress_bar_active": getattr(self.media_data, 'show_progress_bar', False),
+                    "lyrics_found": len(self.media_data.lyrics) > 0,
+                    "lyrics_sync_offset": getattr(self.config, 'lyrics_sync', 0.0),
+                    "lyrics_count": len(self.media_data.lyrics),
+                    "pixoo64_channel": self.select_index,
+                    "prefetch_status": self.prefetch_status,
+                    "prefetch_next_artist": self.prefetch_next_artist,
+                    "prefetch_next_title": self.prefetch_next_title,
+                    "spotify_slider_status": self.spotify_slider_status,
+                    "spotify_slider_frames": self.spotify_slider_frames,
+                    "spotify_slider_artist": self.spotify_slider_artist,
+                    "spotify_slider_last_error": self.spotify_slider_last_error,
+                }
+
+                if self.sensor: 
+                    self.sensor.update_state(f"{self.media_data.artist} - {self.media_data.title}", sensor_attrs)
 
             except asyncio.CancelledError: 
                 pass
@@ -897,7 +1097,6 @@ class PixooHub:
         if not state or state.state not in ["playing", "on"]: return
         
         if not getattr(self.config, 'progress_bar_enabled', False): 
-            self.request_text_render()
             return
             
         pos = self.media_data.media_position
@@ -918,98 +1117,6 @@ class PixooHub:
             
             self._cleanup_timers(['_progress_timer_unsub'])
             self._progress_timer_unsub = async_call_later(self.hass, delay, _pb_timer)
-
-    def get_opposite_color(self, hex_color):
-        try:
-            hex_color = hex_color.lstrip('#')
-            rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-            inverted_rgb = tuple(255 - value for value in rgb)
-            return '#{:02x}{:02x}{:02x}'.format(*inverted_rgb)
-        except Exception:
-            return "#FFFFFF"
-
-    async def _build_text_items_list(self, font_color, bg_color, scope="all"):
-        text_items = []
-        
-        y_info = 3 if getattr(self.config, 'overlay_top', True) else 56
-        align_mode = getattr(self.config, 'overlay_align', 'Clock Right, Temp Left')
-        show_clk = getattr(self.config, 'show_clock', True)
-        show_tmp = getattr(self.config, 'temperature', False)
-        
-        if align_mode == "Clock Left, Temp Right":
-            x_c, x_t = 3, 47
-        elif align_mode == "Centered":
-            if show_clk and not show_tmp: x_c, x_t = 22, 3
-            elif show_tmp and not show_clk: x_c, x_t = 44, 24
-            else: x_c, x_t = 36, 3
-        else: 
-            x_c, x_t = 44, 3
-
-        # Render OSD items instead of track/lyrics text if an OSD mode is active
-        if self.osd_mode:
-            if self.osd_mode == "Pause":
-                text_items.append({"TextId": 4, "type": 22, "x": 0, "y": 24, "dir": 0, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 0, "align": 2, "TextString": "PAUSED", "color": font_color})
-            elif self.osd_mode == "Volume":
-                pct = int((self.last_volume_level or 0) * 100)
-                text_items.append({"TextId": 4, "type": 22, "x": 0, "y": 20, "dir": 0, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 0, "align": 2, "TextString": f"VOL {pct}%", "color": font_color})
-                
-                bars = int((pct / 100) * 10)
-                bar_str = "=" * bars + "-" * (10 - bars)
-                text_items.append({"TextId": 5, "type": 22, "x": 0, "y": 32, "dir": 0, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 0, "align": 2, "TextString": bar_str, "color": font_color})
-                
-            # Keep clock & temp visible during OSD
-            if show_clk:
-                text_items.append({"TextId": 2, "type": 5, "x": x_c, "y": y_info, "dir": 0, "font": 18, "TextWidth": 32, "Textheight": 16, "speed": 100, "align": 1, "color": font_color})
-            if show_tmp:
-                t_val = getattr(self.media_data, 'temperature', None)
-                t_type = 22 if t_val else 17
-                t_str = str(t_val) if t_type == 22 else ""
-                text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": t_str})
-                
-            return text_items
-
-        y_text = 0 if getattr(self.config, 'top_text', False) else 48
-        txt = f"{self.media_data.artist} - {self.media_data.title}"
-        if len(txt) > 14: txt += "        "
-        rtl = 1 if has_bidi(txt) else 0
-        is_burned = getattr(self.config, 'burned', False)
-        
-        if getattr(self.config, 'special_mode', False):
-            text_items.append({"TextId": 1, "type": 14, "x": 3, "y": 1, "dir": 0, "font": 18, "TextWidth": 33, "Textheight": 6, "speed": 100, "align": 1, "color": font_color})
-            text_items.append({"TextId": 2, "type": 5, "x": 1, "y": 1, "dir": 0, "font": 18, "TextWidth": 63, "Textheight": 6, "speed": 100, "align": 2, "color": font_color})
-            
-            t_val = getattr(self.media_data, 'temperature', None)
-            t_type = 22 if t_val else 17
-            if t_type == 22:
-                text_items.append({"TextId": 3, "type": t_type, "x": 48, "y": 1, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": str(t_val)})
-            else:
-                text_items.append({"TextId": 3, "type": t_type, "x": 48, "y": 1, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color})
-
-            show_http_text = getattr(self.config, 'show_text', True) and not getattr(self.media_data, 'playing_tv', False) and not is_burned
-            
-            if show_http_text or (getattr(self.media_data, 'spotify_slide_pass', False) and getattr(self.config, 'spotify_slide', False)):
-                a_rtl = 1 if has_bidi(self.media_data.artist) else 0
-                text_items.append({"TextId": 4, "type": 22, "x": 0, "y": 42, "dir": a_rtl, "font": 190, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(self.media_data.artist) if a_rtl else self.media_data.artist, "color": font_color})
-                t_rtl = 1 if has_bidi(self.media_data.title) else 0
-                text_items.append({"TextId": 5, "type": 22, "x": 0, "y": 52, "dir": t_rtl, "font": 190, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(self.media_data.title) if t_rtl else self.media_data.title, "color": font_color})
-
-        else:
-            if not getattr(self, 'lyrics_active_mode', False):
-                if getattr(self.config, 'show_text', True) and not getattr(self.media_data, 'playing_tv', False) and not is_burned and not getattr(self.config, 'spotify_slide', False):
-                    text_items.append({"TextId": 4, "type": 22, "x": 0, "y": y_text, "dir": rtl, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 100, "align": 2, "TextString": get_bidi(txt) if rtl else txt, "color": font_color})
-                                
-                if show_clk:
-                    text_items.append({"TextId": 2, "type": 5, "x": x_c, "y": y_info, "dir": 0, "font": 18, "TextWidth": 32, "Textheight": 16, "speed": 100, "align": 1, "color": font_color})
-                
-                if show_tmp:
-                    t_val = getattr(self.media_data, 'temperature', None)
-                    t_type = 22 if t_val else 17
-                    if t_type == 22:
-                        text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": str(t_val)})
-                    else:
-                        text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_info, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color})
-                            
-        return text_items
 
     def _stop_lyrics_scheduler(self):
         self.lyrics_active_mode = False
@@ -1080,43 +1187,3 @@ class PixooHub:
                         {"Command": "Channel/SetIndex", "SelectIndex": previous_channel}
                     ]
                 })
-
-    async def control_light(self, action: str, rgb_color: tuple = None, is_night: bool = True):
-        if not is_night and getattr(self.config, 'only_at_night', False): return
-            
-        light_entities = getattr(self.config, 'light_entity', [])
-        if not light_entities:
-            return
-            
-        entities = light_entities if isinstance(light_entities, list) else [light_entities]
-        
-        for entity_id in entities:
-            service_data = {"entity_id": entity_id}
-            if action == 'on' and rgb_color:
-                service_data["rgb_color"] = rgb_color
-                service_data["transition"] = 1
-                
-            try:
-                await self.hass.services.async_call("light", f"turn_{action}", service_data, blocking=False)
-            except Exception as e:
-                _LOGGER.error(f"Failed to control light {entity_id}: {e}")
-
-    async def control_wled_light(self, action: str, colors: list = None, is_night: bool = True):
-        wled_ip = getattr(self.config, 'wled_ip', None)
-        if not wled_ip:
-            return
-            
-        payload = {"on": action == "on"}
-        if action == "on" and colors:
-            clean_colors = [c.lstrip('#') for c in colors if c]
-            if clean_colors:
-                effect_id = getattr(self.config, 'effect', 38)
-                payload["bri"] = getattr(self.config, 'brightness', 255)
-                payload["seg"] = [{"fx": effect_id, "col": clean_colors}]
-                    
-            url = f"http://{wled_ip}/json/state"
-            try:
-                async with self.websession.post(url, json=payload, timeout=5) as response:
-                    response.raise_for_status()
-            except Exception as e:
-                _LOGGER.debug(f"Failed to control WLED at {wled_ip}: {e}")

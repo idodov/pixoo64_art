@@ -13,6 +13,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     selects_config = [
         ("display_mode", "Display Mode", ["Standard", "Lyrics", "Burned", "Special Mode"], "Standard", "mdi:monitor-dashboard"),
+        ("image_filter", "Image Filter", ["None", "Vibrant", "Retro Arcade", "Crisp & Sharp", "Noir B&W", "Cyberpunk Neon"], "None", "mdi:image-filter-hdr"),
         ("text_position", "Artist & Track Text", ["Hidden", "Top", "Bottom"], "Bottom", "mdi:format-text"),
         ("overlay_info", "Overlay Info", ["None", "Clock", "Temperature", "Clock + Temp"], "Clock", "mdi:information-outline"),
         ("overlay_position", "Overlay Vertical Position", ["Auto (Opposite of Text)", "Top", "Bottom"], "Auto (Opposite of Text)", "mdi:arrow-up-down"),
@@ -53,19 +54,23 @@ class PixooRestoreSelect(SelectEntity, RestoreEntity):
 
     @property
     def options(self) -> list[str]:
-        """Return dynamic options (Hides 'Spotify Slider' if Spotify credentials are missing)."""
+        """Return dynamic options (Hides dynamic modes if credentials are missing)."""
         if self.key == "display_mode":
             modes = ["Standard", "Lyrics", "Burned", "Special Mode"]
             if self.hub.is_spotify_available:
                 modes.append("Spotify Slider")
+            if self.hub.is_ai_available:
+                modes.append("Force AI")
             return modes
         return self._base_options
 
     @property
     def current_option(self) -> str:
-        """Return current option, falling back to Standard if Spotify Slider is unavailable."""
-        if self.key == "display_mode" and self._attr_current_option == "Spotify Slider":
-            if not self.hub.is_spotify_available:
+        """Return current option, falling back to Standard if dynamic mode is unavailable."""
+        if self.key == "display_mode":
+            if self._attr_current_option == "Spotify Slider" and not self.hub.is_spotify_available:
+                return "Standard"
+            if self._attr_current_option == "Force AI" and not self.hub.is_ai_available:
                 return "Standard"
         return self._attr_current_option
 

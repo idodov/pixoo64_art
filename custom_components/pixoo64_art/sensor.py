@@ -16,7 +16,15 @@ class PixooStatusSensor(SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_status"
         self._attr_icon = "mdi:television-ambient-light"
         self._attr_native_value = "Initializing"
-        self._attr_extra_state_attributes = {}
+        self._attr_extra_state_attributes = {
+            "prefetch_status": "Idle",
+            "prefetch_next_artist": None,
+            "prefetch_next_title": None,
+            "spotify_slider_status": "Idle",
+            "spotify_slider_frames": 0,
+            "spotify_slider_artist": None,
+            "spotify_slider_last_error": None,
+        }
 
     @property
     def device_info(self):

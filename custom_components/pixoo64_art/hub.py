@@ -320,6 +320,11 @@ class PixooHub:
         state = self.hass.states.get(self.media_player)
         if state and state.state in ["playing", "on"]:
             await self.force_update()
+            queue, current_idx = await self._fetch_player_queue()
+            if queue:
+                self.media_data.queue_total = len(queue)
+            if current_idx is not None:
+                self.media_data.track_number = current_idx + 1
 
     async def terminate(self):
         for unsub in self._unsub_listeners:
@@ -338,10 +343,19 @@ class PixooHub:
         self._active_song_key = None 
         
         if key in ["force_ai", "crop_mode", "text_background", "text_position", "display_mode", "overlay_position", "overlay_align", "image_filter"]:
+            self._early_slider_sent_for = None
             self.image_processor.image_cache.clear()
             self.image_processor.raw_image_cache.clear()
             if hasattr(self.fallback_service, "_artwork_cache"):
                 self.fallback_service._artwork_cache.clear()
+            
+            if hasattr(self, 'media_data'):
+                self.media_data.slider_album_urls = []
+                self.media_data.slider_artist_pic_url = None
+                self.media_data.slider_frames = 0
+                self.media_data.spotify_slide_pass = False
+                self.media_data.artist_slide_pass = False
+                self.media_data.slider_error = None
             
         await self.force_update()
 
@@ -441,6 +455,7 @@ class PixooHub:
         self.config.playlist_prefetch_range = options.get(CONF_PLAYLIST_PREFETCH, data.get(CONF_PLAYLIST_PREFETCH, "Disabled"))
 
         crop_mode = self.ui_state.get("crop_mode", "No Crop")
+        self.config.crop_mode = crop_mode
         self.config.crop_borders = crop_mode in ["Crop", "Extra Crop"]
         self.config.crop_extra = (crop_mode == "Extra Crop")
 
@@ -673,9 +688,12 @@ class PixooHub:
                 dummy_media.artist = artist
                 dummy_media.title = title
                 dummy_media.album = album
+                dummy_media.queue_total = getattr(self.media_data, 'queue_total', 0)
+                dummy_media.track_number = getattr(self.media_data, 'track_number', 1) + 1
                 dummy_media.playing_tv = False
                 dummy_media.playing_radio = False
                 dummy_media.radio_logo = False
+                dummy_media.track_number = (self.media_data.track_number + 1)
                 
                 self._cancel_tasks(['_prefetch_task'])
                 self._prefetch_task = self.hass.async_create_task(
@@ -722,7 +740,9 @@ class PixooHub:
             if is_vinyl and not getattr(dummy_media, 'radio_logo', False):
                 proc_img = await self.fallback_service.get_final_url(url, dummy_media)
                 if proc_img and 'pil_image' in proc_img:
-                    dummy_media.vinyl_frames_b64 = self.image_processor.generate_vinyl_frames(proc_img['pil_image'], dummy_media)
+                    dummy_media.vinyl_frames_b64 = await self.hass.async_add_executor_job(
+                        self.image_processor.generate_vinyl_frames, proc_img['pil_image'], dummy_media
+                    )
                 if dummy_media.vinyl_frames_b64:
                     self.prefetch_status = f"Vinyl Ready ({len(dummy_media.vinyl_frames_b64)} frames)"
 
@@ -731,16 +751,18 @@ class PixooHub:
             if is_cassette and not getattr(dummy_media, 'radio_logo', False):
                 proc_img = await self.fallback_service.get_final_url(url, dummy_media)
                 if proc_img and 'pil_image' in proc_img:
-                    dummy_media.cassette_frames_b64 = self.image_processor.generate_cassette_frames(proc_img['pil_image'], dummy_media)
+                    dummy_media.cassette_frames_b64 = await self.hass.async_add_executor_job(
+                        self.image_processor.generate_cassette_frames, proc_img['pil_image'], dummy_media
+                    )
                 if dummy_media.cassette_frames_b64:
                     self.prefetch_status = f"Cassette Ready ({len(dummy_media.cassette_frames_b64)} frames)"
 
             self._update_prefetch_sensor_state()
             
-            # Schedule Early Send (2.5s before track end)
+            # Schedule Early Send (dynamic offset before track end)
             if (is_slider or is_artist_slider or is_vinyl or is_cassette) and not getattr(dummy_media, 'radio_logo', False):
                 has_frames = (
-                    (dummy_media.slider_frames >= 2) if (is_slider or is_artist_slider) else 
+                    (dummy_media.slider_frames >= 5) if (is_slider or is_artist_slider) else 
                     bool(dummy_media.vinyl_frames_b64) if is_vinyl else 
                     bool(dummy_media.cassette_frames_b64)
                 )
@@ -749,18 +771,25 @@ class PixooHub:
                     if self.media_data.media_position_updated_at:
                         pos += (datetime.now(timezone.utc) - self.media_data.media_position_updated_at).total_seconds()
                     dur = self.media_data.media_duration
-                    early_offset = 2.5
+                    
+                    if is_vinyl:
+                        early_offset = 10
+                    elif is_cassette:
+                        early_offset = 3
+                    else:
+                        early_offset = 5
+                        
                     time_to_early_send = (dur - pos) - early_offset
                     
                     if time_to_early_send > 0:
                         self._cleanup_timers(['_early_send_timer_unsub'])
                         async def _early_send_cb(now):
                             self._early_send_timer_unsub = None
-                            if is_slider or is_artist_slider:
+                            if getattr(self.config, 'spotify_slide', False) or getattr(self.config, 'artist_slide', False):
                                 await self._do_early_slider_send(dummy_media)
-                            elif is_vinyl:
+                            elif getattr(self.config, 'vinyl_mode', False):
                                 await self._do_early_vinyl_send(dummy_media)
-                            elif is_cassette:
+                            elif getattr(self.config, 'cassette_mode', False):
                                 await self._do_early_cassette_send(dummy_media)
                         self._early_send_timer_unsub = async_call_later(self.hass, time_to_early_send, _early_send_cb)
                     elif time_to_early_send > -early_offset:
@@ -787,6 +816,9 @@ class PixooHub:
         self.prefetch_status = "Sending Slider Early..."
         self.spotify_slider_status = "Sending Early Slider to Pixoo..."
         self._update_prefetch_sensor_state()
+        
+        self._early_slider_sent_for = f"slider_{dummy_media.artist}_{dummy_media.title}".strip().lower()
+        
         try:
             if getattr(self.config, 'artist_slide', False):
                 await self.fallback_service.play_artist_gallery_slide(self.pixoo_device, dummy_media)
@@ -799,7 +831,6 @@ class PixooHub:
                 pass_flag = getattr(dummy_media, 'spotify_slide_pass', False)
                 
             if pass_flag:
-                self._early_slider_sent_for = f"{dummy_media.artist}_{dummy_media.title}".strip().lower()
                 self.prefetch_status = "Slider Sent Early"
                 self.spotify_slider_status = f"Slider Sent Early ({dummy_media.slider_frames} frames)"
                 self.spotify_slider_frames = dummy_media.slider_frames
@@ -819,6 +850,9 @@ class PixooHub:
             return
         self.prefetch_status = "Sending Early Vinyl..."
         self._update_prefetch_sensor_state()
+        
+        self._early_slider_sent_for = f"vinyl_{dummy_media.artist}_{dummy_media.title}".strip().lower()
+        
         try:
             await self.pixoo_device.send_command({
                 "Command": "Draw/CommandList", 
@@ -835,10 +869,9 @@ class PixooHub:
                     "PicWidth": 64,
                     "PicOffset": offset,
                     "PicID": 0,
-                    "PicSpeed": 75,
+                    "PicSpeed": 70,
                     "PicData": b64_frame
                 })
-            self._early_slider_sent_for = f"{dummy_media.artist}_{dummy_media.title}".strip().lower()
             self.prefetch_status = "Vinyl Sent Early"
         except Exception as e:
             self.prefetch_status = f"Early Vinyl Error: {e}"
@@ -849,6 +882,9 @@ class PixooHub:
             return
         self.prefetch_status = "Sending Early Cassette..."
         self._update_prefetch_sensor_state()
+        
+        self._early_slider_sent_for = f"cassette_{dummy_media.artist}_{dummy_media.title}".strip().lower()
+        
         try:
             await self.pixoo_device.send_command({
                 "Command": "Draw/CommandList", 
@@ -868,7 +904,6 @@ class PixooHub:
                     "PicSpeed": 100,
                     "PicData": b64_frame
                 })
-            self._early_slider_sent_for = f"{dummy_media.artist}_{dummy_media.title}".strip().lower()
             self.prefetch_status = "Cassette Sent Early"
         except Exception as e:
             self.prefetch_status = f"Early Cassette Error: {e}"
@@ -1028,6 +1063,11 @@ class PixooHub:
         if state and state.state in ["playing", "on"]:
             await self.media_data.update()
             self._fetch_external_temperature()
+            queue, current_idx = await self._fetch_player_queue()
+            if queue:
+                self.media_data.queue_total = len(queue)
+            if current_idx is not None:
+                self.media_data.track_number = current_idx + 1
             
             song_key = f"{self.media_data.artist}_{self.media_data.title}".strip().lower()
             if song_key and song_key == self._active_song_key and self.is_art_visible:
@@ -1215,23 +1255,21 @@ class PixooHub:
                 is_spotify_slider = getattr(self.config, 'spotify_slide', False) and not getattr(self.media_data, 'radio_logo', False) and not getattr(self.media_data, 'playing_tv', False)
                 is_artist_slider = getattr(self.config, 'artist_slide', False) and not getattr(self.media_data, 'radio_logo', False) and not getattr(self.media_data, 'playing_tv', False)
                 
-                if is_spotify_slider or is_artist_slider:
-                    if self._early_slider_sent_for == current_song_key:
-                        early_slider_match = True
-                        if is_spotify_slider:
-                            self.media_data.spotify_slide_pass = True
-                        else:
-                            self.media_data.artist_slide_pass = True
-                        self.spotify_slider_status = f"Active (Early Match, {self.spotify_slider_frames} frames)"
+                if (is_spotify_slider or is_artist_slider) and self._early_slider_sent_for == f"slider_{current_song_key}":
+                    early_slider_match = True
+                    if is_spotify_slider:
+                        self.media_data.spotify_slide_pass = True
+                    else:
+                        self.media_data.artist_slide_pass = True
 
                 is_vinyl = getattr(self.config, 'vinyl_mode', False) and not getattr(self.media_data, 'radio_logo', False) and not getattr(self.media_data, 'playing_tv', False)
                 early_vinyl_match = False
-                if is_vinyl and self._early_slider_sent_for == current_song_key:
+                if is_vinyl and self._early_slider_sent_for == f"vinyl_{current_song_key}":
                     early_vinyl_match = True
 
                 is_cassette = getattr(self.config, 'cassette_mode', False) and not getattr(self.media_data, 'radio_logo', False) and not getattr(self.media_data, 'playing_tv', False)
                 early_cassette_match = False
-                if is_cassette and self._early_slider_sent_for == current_song_key:
+                if is_cassette and self._early_slider_sent_for == f"cassette_{current_song_key}":
                     early_cassette_match = True
 
                 self._early_slider_sent_for = None
@@ -1239,7 +1277,9 @@ class PixooHub:
                 
                 if is_vinyl and not early_vinyl_match:
                     pil_img = processed_data.get('pil_image')
-                    vinyl_frames = self.image_processor.generate_vinyl_frames(pil_img, self.media_data)
+                    vinyl_frames = await self.hass.async_add_executor_job(
+                        self.image_processor.generate_vinyl_frames, pil_img, self.media_data
+                    )
                     if vinyl_frames:
                         await self.pixoo_device.send_command({
                             "Command": "Draw/CommandList", 
@@ -1256,14 +1296,16 @@ class PixooHub:
                                 "PicWidth": 64,
                                 "PicOffset": offset,
                                 "PicID": 0,
-                                "PicSpeed": 75,
+                                "PicSpeed": 70,
                                 "PicData": b64_frame
                             })
                         early_vinyl_match = True
 
                 if is_cassette and not early_cassette_match:
                     pil_img = processed_data.get('pil_image')
-                    cassette_frames = self.image_processor.generate_cassette_frames(pil_img, self.media_data)
+                    cassette_frames = await self.hass.async_add_executor_job(
+                        self.image_processor.generate_cassette_frames, pil_img, self.media_data
+                    )
                     if cassette_frames:
                         await self.pixoo_device.send_command({
                             "Command": "Draw/CommandList", 

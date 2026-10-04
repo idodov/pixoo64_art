@@ -361,7 +361,7 @@ class ImageCropper:
         if radio_logo or not getattr(config, 'crop_borders', False):
             return img
 
-        if getattr(config, 'crop_extra', False) or getattr(config, 'special_mode', False): 
+        if (getattr(config, 'crop_extra', False) or getattr(config, 'special_mode', False)) and not getattr(config, 'vinyl_mode', False): 
             return cls._perform_extra_subject_crop(img)
 
         return cls._perform_standard_crop(img)
@@ -1302,88 +1302,158 @@ class CassetteRenderer:
         if len(translit) > max_chars:
             return f"{translit[:int(max_chars) - 2].strip()}.."
         return translit
-       
-# =========================================================================
-# VINYL RECORD ANIMATION RENDERER 
-# =========================================================================
 
 class VinylRenderer:
-    """Generates an ultra-smooth 16-frame spinning vinyl turntable animation
-    with dynamic light sheen gloss and realistic tonearm micro-tracking wobble."""
+    """Generates an ultra-smooth 32-frame spinning vinyl turntable animation
+    with translucent grooves, soft glossy sheen reflection on Extra Crop, and proportional 1:5 tonearm tracking."""
 
     @classmethod
     def render_frames(cls, base_img: Image.Image, image_processor: "ImageProcessor", media_data: "MediaData") -> List[str]:
         frames_b64 = []
         try:
-            cx, cy = 30, 32
-            record_radius = 27
-            label_radius = 12
-            label_diam = label_radius * 2
+            crop_mode = getattr(image_processor.config, 'crop_mode', None)
+            if not crop_mode:
+                if getattr(image_processor.config, 'crop_extra', False):
+                    crop_mode = "Extra Crop"
+                elif getattr(image_processor.config, 'crop_borders', False):
+                    crop_mode = "Crop"
+                else:
+                    crop_mode = "No Crop"
 
-            # Extract circular center label from album artwork
-            center_crop = base_img.resize((label_diam, label_diam), Image.Resampling.BILINEAR)
-            label_mask = Image.new("L", (label_diam, label_diam), 0)
-            ImageDraw.Draw(label_mask).ellipse([0, 0, label_diam - 1, label_diam - 1], fill=255)
+            total_frames = 32
 
-            deck_bg = (14, 14, 16)
-            total_frames = 16
+            if crop_mode == "Extra Crop":
+                cx, cy = 32, 32
+                record_radius = 32
+                deck_bg = (8, 8, 10)
+                show_arm = False
+                sheen_r1 = 30
+                sheen_r2 = 21
+
+                art_full = base_img.resize((64, 64), Image.Resampling.BILINEAR)
+                disc_mask = Image.new("L", (64, 64), 0)
+                ImageDraw.Draw(disc_mask).ellipse([0, 0, 63, 63], fill=255)
+
+                groove_overlay = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+                g_draw = ImageDraw.Draw(groove_overlay)
+                
+                g_draw.ellipse([0, 0, 63, 63], outline=(0, 0, 0, 70), width=1)
+                
+                for r in [28, 24, 20, 16, 12]:
+                    g_draw.ellipse([32 - r, 32 - r, 32 + r, 32 + r], outline=(0, 0, 0, 45), width=1)
+                
+                g_draw.ellipse([25, 25, 39, 39], outline=(0, 0, 0, 60), width=1)
+
+            elif crop_mode == "Crop":
+                cx, cy = 32, 32
+                record_radius = 29
+                label_diam = 26
+                deck_bg = (14, 14, 16)
+                show_arm = False
+                grooves = [28, 26, 24, 22, 20, 18, 16, 14]
+                sheen_r1 = 27
+                sheen_r2 = 18
+
+                center_crop = base_img.resize((label_diam, label_diam), Image.Resampling.BILINEAR)
+                label_mask = Image.new("L", (label_diam, label_diam), 0)
+                ImageDraw.Draw(label_mask).ellipse([0, 0, label_diam - 1, label_diam - 1], fill=255)
+
+            else:  # "No Crop"
+                cx, cy = 30, 32
+                record_radius = 27
+                label_diam = 24
+                deck_bg = (14, 14, 16)
+                show_arm = True
+                grooves = [26, 24, 22, 20, 18, 16, 14]
+                sheen_r1 = 25
+                sheen_r2 = 19
+
+                center_crop = base_img.resize((label_diam, label_diam), Image.Resampling.BILINEAR)
+                label_mask = Image.new("L", (label_diam, label_diam), 0)
+                ImageDraw.Draw(label_mask).ellipse([0, 0, label_diam - 1, label_diam - 1], fill=255)
+
+            track_num = getattr(media_data, 'track_number', 1) or 1
+            queue_total = getattr(media_data, 'queue_total', 0) or 0
+
+            if queue_total > 1:
+                progress = max(0.0, min(1.0, (track_num - 1) / max(1, queue_total - 1)))
+                side_index = min(4, max(0, int(progress * 5)))
+            else:
+                side_index = 0
+
+            base_needle_x = 51 - (side_index * 2)
+            base_needle_y = 31 + int(round(side_index * 0.5))
 
             for i in range(total_frames):
                 angle = i * (360.0 / total_frames)
                 canvas = Image.new("RGB", (64, 64), deck_bg)
-                draw = ImageDraw.Draw(canvas)
 
-                # 1. Turntable Platter Outer Ring & Rubber Rim
-                draw.ellipse([cx - record_radius - 1, cy - record_radius - 1, cx + record_radius + 1, cy + record_radius + 1], fill=(28, 28, 32))
-                # 2. Vinyl Disc Body
-                draw.ellipse([cx - record_radius, cy - record_radius, cx + record_radius, cy + record_radius], fill=(16, 16, 18))
-
-                # 3. Concentric Vinyl Grooves
-                for r in [26, 24, 22, 20, 18, 16, 14]:
-                    draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=(25, 25, 28), width=1)
-
-                # 4. Dynamic Specular Sheen (Breathing gloss effect that shimmers as the disc spins)
                 sheen_wobble = math.sin(i * 2.0 * math.pi / total_frames) * 6.0
-                sheen_brightness = int(50 + math.sin(i * math.pi / (total_frames / 2.0)) * 12)
-                sheen_color_main = (sheen_brightness, sheen_brightness, sheen_brightness + 8)
-                sheen_color_sub = (sheen_brightness - 12, sheen_brightness - 12, sheen_brightness - 6)
 
-                # Top-Left to Bottom-Right Anisotropic Sheen Arcs
-                draw.arc([cx - 25, cy - 25, cx + 25, cy + 25], int(118 + sheen_wobble), int(152 + sheen_wobble), fill=sheen_color_main, width=2)
-                draw.arc([cx - 25, cy - 25, cx + 25, cy + 25], int(298 + sheen_wobble), int(332 + sheen_wobble), fill=sheen_color_main, width=2)
-                draw.arc([cx - 19, cy - 19, cx + 19, cy + 19], int(124 - sheen_wobble), int(146 - sheen_wobble), fill=sheen_color_sub, width=2)
-                draw.arc([cx - 19, cy - 19, cx + 19, cy + 19], int(304 - sheen_wobble), int(326 - sheen_wobble), fill=sheen_color_sub, width=2)
+                if crop_mode == "Extra Crop":
+                    rotated_art = art_full.rotate(-angle, resample=Image.Resampling.BILINEAR).convert("RGBA")
+                    
+                    rotated_art.alpha_composite(groove_overlay)
 
-                # 5. Rotating Center Label (Album Artwork)
-                rotated_label = center_crop.rotate(-angle, resample=Image.Resampling.BILINEAR)
-                canvas.paste(rotated_label, (cx - label_radius, cy - label_radius), label_mask)
+                    sheen_layer = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+                    s_draw = ImageDraw.Draw(sheen_layer)
 
-                # 6. Spindle Pin
+                    sheen_alpha_main = int(85 + math.sin(i * math.pi / (total_frames / 2.0)) * 25)  
+                    sheen_alpha_sub = int(45 + math.sin(i * math.pi / (total_frames / 2.0)) * 15)   
+
+                    color_main = (255, 255, 255, sheen_alpha_main)
+                    color_sub = (230, 240, 255, sheen_alpha_sub)
+
+                    s_draw.arc([cx - sheen_r1, cy - sheen_r1, cx + sheen_r1, cy + sheen_r1], int(118 + sheen_wobble), int(152 + sheen_wobble), fill=color_main, width=2)
+                    s_draw.arc([cx - sheen_r1, cy - sheen_r1, cx + sheen_r1, cy + sheen_r1], int(298 + sheen_wobble), int(332 + sheen_wobble), fill=color_main, width=2)
+                    s_draw.arc([cx - sheen_r2, cy - sheen_r2, cx + sheen_r2, cy + sheen_r2], int(124 - sheen_wobble), int(146 - sheen_wobble), fill=color_sub, width=2)
+                    s_draw.arc([cx - sheen_r2, cy - sheen_r2, cx + sheen_r2, cy + sheen_r2], int(304 - sheen_wobble), int(326 - sheen_wobble), fill=color_sub, width=2)
+
+                    rotated_art.alpha_composite(sheen_layer)
+
+                    canvas.paste(rotated_art.convert("RGB"), (0, 0), disc_mask)
+                    draw = ImageDraw.Draw(canvas)
+
+                else:
+                    draw = ImageDraw.Draw(canvas)
+                    draw.ellipse([cx - record_radius - 1, cy - record_radius - 1, cx + record_radius + 1, cy + record_radius + 1], fill=(28, 28, 32))
+                    draw.ellipse([cx - record_radius, cy - record_radius, cx + record_radius, cy + record_radius], fill=(16, 16, 18))
+
+                    for r in grooves:
+                        draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=(25, 25, 28), width=1)
+
+                    rotated_label = center_crop.rotate(-angle, resample=Image.Resampling.BILINEAR)
+                    canvas.paste(rotated_label, (cx - (label_diam // 2), cy - (label_diam // 2)), label_mask)
+
+                    sheen_brightness = int(50 + math.sin(i * math.pi / (total_frames / 2.0)) * 12)
+                    sheen_color_main = (sheen_brightness, sheen_brightness, sheen_brightness + 8)
+                    sheen_color_sub = (sheen_brightness - 12, sheen_brightness - 12, sheen_brightness - 6)
+
+                    draw.arc([cx - sheen_r1, cy - sheen_r1, cx + sheen_r1, cy + sheen_r1], int(118 + sheen_wobble), int(152 + sheen_wobble), fill=sheen_color_main, width=2)
+                    draw.arc([cx - sheen_r1, cy - sheen_r1, cx + sheen_r1, cy + sheen_r1], int(298 + sheen_wobble), int(332 + sheen_wobble), fill=sheen_color_main, width=2)
+                    draw.arc([cx - sheen_r2, cy - sheen_r2, cx + sheen_r2, cy + sheen_r2], int(124 - sheen_wobble), int(146 - sheen_wobble), fill=sheen_color_sub, width=2)
+                    draw.arc([cx - sheen_r2, cy - sheen_r2, cx + sheen_r2, cy + sheen_r2], int(304 - sheen_wobble), int(326 - sheen_wobble), fill=sheen_color_sub, width=2)
+
                 draw.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=(10, 10, 12), outline=(180, 180, 190))
 
-                # 7. Tonearm / Needle with realistic micro-tracking wobble
-                # Needle rides the groove with sub-pixel oscillation
-                arm_wobble_x = int(round(math.sin(i * 2.0 * math.pi / (total_frames / 2.0)) * 0.75))
-                arm_wobble_y = int(round(math.cos(i * 2.0 * math.pi / (total_frames / 2.0)) * 0.5))
+                if show_arm:
+                    arm_wobble_x = int(round(math.sin(i * 2.0 * math.pi / total_frames) * 0.6))
+                    arm_wobble_y = int(round(math.cos(i * 2.0 * math.pi / total_frames) * 0.4))
 
-                needle_x = 42 + arm_wobble_x
-                needle_y = 32 + arm_wobble_y
+                    needle_x = base_needle_x + arm_wobble_x
+                    needle_y = base_needle_y + arm_wobble_y
 
-                # Pivot Base (Top-right corner)
-                draw.ellipse([55, 6, 61, 12], fill=(80, 80, 90), outline=(160, 160, 170))
-                draw.point((58, 9), fill=(220, 220, 230))
-                
-                # Tonearm Rod (Bending towards stylus)
-                joint_x = 52 + (arm_wobble_x // 2)
-                joint_y = 22
-                draw.line([(57, 11), (joint_x, joint_y)], fill=(170, 170, 180), width=1)
-                draw.line([(joint_x, joint_y), (needle_x + 1, needle_y - 1)], fill=(190, 190, 200), width=1)
+                    draw.ellipse([55, 6, 61, 12], fill=(80, 80, 90), outline=(160, 160, 170))
+                    draw.point((58, 9), fill=(220, 220, 230))
+                    
+                    joint_x = int(round(54 - (side_index * 1.0))) + (arm_wobble_x // 2)
+                    joint_y = int(round(20 + (side_index * 0.8)))
+                    draw.line([(57, 11), (joint_x, joint_y)], fill=(170, 170, 180), width=1)
+                    draw.line([(joint_x, joint_y), (needle_x + 1, needle_y - 1)], fill=(190, 190, 200), width=1)
 
-                # Headshell Cartridge (Stylus with illuminated red tracking dot)
-                draw.rectangle([needle_x - 1, needle_y - 2, needle_x + 2, needle_y + 2], fill=(210, 210, 220))
-                draw.point((needle_x, needle_y + 1), fill=(235, 45, 45))
+                    draw.rectangle([needle_x - 1, needle_y - 2, needle_x + 2, needle_y + 2], fill=(210, 210, 220))
+                    draw.point((needle_x, needle_y + 1), fill=(235, 45, 45))
 
-                # 8. Filter & Text Clock Integration
                 filter_mode = getattr(image_processor.config, 'image_filter', 'None')
                 canvas = image_processor.filter_service.apply_post_scale(canvas, filter_mode)
                 canvas = image_processor.text_clock_img(canvas, {}, media_data)
@@ -3031,6 +3101,8 @@ class MediaData:
         self.slider_album_urls: list[str] = []
         self.slider_artist_pic_url: Optional[str] = None
         self.slider_error: Optional[str] = None
+        self.track_number: int = 1
+        self.queue_total: int = 0
 
     def clean_title(self, title: str) -> str: 
         return self.title_cleaner.clean(title)
@@ -3143,6 +3215,15 @@ class MediaData:
             self.media_position_updated_at = datetime.fromisoformat(pos_updated_at_str.replace('Z', '+00:00'))
         else: 
             self.media_position_updated_at = None
+
+        raw_track = attributes.get('media_track')
+        if raw_track is not None:
+            try:
+                self.track_number = int(raw_track)
+            except (ValueError, TypeError):
+                self.track_number = 1
+        else:
+            self.track_number = 1
 
     def _evaluate_radio_mode(self, raw_title: str, raw_artist: str, attributes: dict):
         media_content_id = attributes.get('media_content_id')

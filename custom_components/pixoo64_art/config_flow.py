@@ -72,7 +72,7 @@ async def async_get_pollinations_models(hass) -> list:
     return fallback_models
 
 class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    VERSION = 1.1
 
     def __init__(self):
         self._user_data = {}

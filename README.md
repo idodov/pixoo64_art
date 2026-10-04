@@ -61,7 +61,7 @@ This project is a **100% native Home Assistant custom integration**:
 
 ### Option 2: Manual Installation
 
-1. Download the latest release from the [Releases Page](https://github.com/idodov/pixoo64_art/custom_componens/pixoo64_art).
+1. Download the latest release from the [Releases Page](https://github.com/idodov/pixoo64_art/tree/main/custom_components/pixoo64_art).
 2. Extract the folder into your Home Assistant directory:
 ```text
 config/custom_components/pixoo64_art/

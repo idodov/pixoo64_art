@@ -229,7 +229,27 @@ action:
 >   * **No keys or tokens required!** These platforms are completely free and open-source. The integration automatically handles compliant rate-limiting for them.
 
 </details>
+<details>
+<summary><strong>🔌 Q: Do I have to configure all these APIs? Can I use just one or two, and what is recommended?</strong></summary>
 
+> You are not required to configure *any* API keys if you don't want to! You can pick and choose exactly which services you want to enable. The integration uses a smart "Waterfall" engine—it will simply skip any service you haven't configured and seamlessly move to the next available one.
+> 
+> Here are a few ways you can set it up:
+> * **The Minimalist (Zero Setup):** Don't enter any keys. The integration will rely on your local Home Assistant media player's artwork and automatically fall back to the built-in free databases (MusicBrainz, TheAudioDB, Internet Archive).
+> * **The Recommended "Sweet Spot":** We highly recommend generating a free **Spotify** API key. It is incredibly fast, holds the largest high-resolution library, and unlocks the animated *Spotify Slider* mode.
+> * **The "Never Blank" Setup (Best Experience):** Add **Spotify** (for mainstream hits), **Discogs / Last.fm** (for rare vinyls, B-sides, and indie tracks), and **Pollinations AI** (to dynamically generate stunning conceptual art when a song truly has no official cover). 
+
+</details>
+<details>
+<summary><strong>💸 Q: Do I need to pay for any API keys or premium subscriptions to use this?</strong></summary>
+
+> **Absolutely not.** The integration is designed to be 100% free out-of-the-box.
+> 
+> * **Built-in Open APIs:** Services like MusicBrainz, Internet Archive, and TheAudioDB are completely open to the public and require zero configuration or keys to function. The integration uses them automatically.
+> * **Free Developer Keys:** While you *can* plug in API keys to unlock higher-resolution artwork or specific animated modes (like Spotify, TIDAL, Last.fm, Discogs, and Pollinations AI), generating these developer keys is completely free. 
+> * **No Premium Accounts Needed:** You **do not** need a Spotify Premium or TIDAL Hi-Fi subscription to use their APIs to fetch album covers. A standard free account is all you need to access their developer portals and generate a Client ID.
+
+</details>
 <details>
 <summary><strong>🌊 Q: What happens if my music doesn't have official album art? (The Fallback Waterfall)</strong></summary>
 
@@ -259,6 +279,25 @@ action:
 >          ▼
 >  7. Internal Geometric Canvas ─────────► [Minimalist Burned Slate]
 > ```
+
+</details>
+<details>
+<summary><strong>🎛️ Q: What settings can I change from my dashboard vs. the integration configuration?</strong></summary>
+
+> The integration is designed to give you maximum flexibility, dividing settings into two logical areas:
+> 
+> **1. Dashboard UI Controls (Real-Time Visuals):**
+> Once installed, the integration automatically generates several `Select` entities that you can place directly on your Home Assistant dashboard. Changing these updates the Pixoo64 **instantly**:
+> * **Display Mode:** Switch live between Standard, Vinyl, Cassette, Artist Slide, Spotify Slider, Lyrics, or Force AI.
+> * **Image Filter:** Apply real-time processing effects (e.g., Vibrant, Retro Arcade, Cyberpunk Neon).
+> * **Crop Mode:** Toggle between No Crop, Standard Crop, or Extra Crop.
+> * **Layout Controls:** Adjust the typography position, toggle the Clock/Temperature overlays, and change their alignment on the fly.
+> 
+> **2. Integration Settings (Core Infrastructure):**
+> For deeper structural changes, navigate to **Settings > Devices & Services > Pixoo64 > Configure**. Here you can safely update:
+> * **API Keys & Credentials:** Add or remove tokens for Spotify, TIDAL, Last.fm, Discogs, or Pollinations AI.
+> * **Hardware Links:** Change the targeted Media Player, Temperature Sensor, or your synchronized Ambient Lights / WLED strips.
+> * **Background Engine Rules:** Enable/Disable TV Mode, adjust Playlist Prefetch ranges, and modify OSD (On-Screen Display) timeout durations for volume and pausing.
 
 </details>
 <details>
@@ -346,7 +385,19 @@ action:
 > You can easily calibrate this by going to the integration's **Configure** menu and adjusting the **Lyrics Sync Offset**. You can add or subtract seconds (e.g., `1.5` or `-0.8`) to perfectly match the text rendering on the Pixoo64 with the audio hitting your ears.
 
 </details>
+<details>
+<summary><strong>✨ Q: Can I apply visual effects or filters to the album art?</strong></summary>
 
+> Yes! Scaling high-resolution album covers down to a 64x64 pixel grid can sometimes make them look soft or slightly washed out. To fix this, the integration includes a dedicated **Image Filter Engine** that applies professional pre-scale and post-scale processing using Python's Pillow library.
+> 
+> You can select from several curated styles directly from the Home Assistant UI:
+> * **Vibrant:** Boosts color saturation, contrast, and sharpness. (Highly recommended to make the LEDs truly pop).
+> * **Retro Arcade:** Posterizes the image and reduces the color bit-depth for a classic 8-bit / 16-bit video game vibe.
+> * **Cyberpunk Neon:** Maximizes contrast, auto-levels, and applies edge enhancement for a glowing, neon-drenched look.
+> * **Noir B&W:** Converts the artwork to high-contrast grayscale for a moody, vintage aesthetic.
+> * **Crisp & Sharp:** Applies an unsharp mask to recover fine details and lines that are usually lost during the extreme downscaling process.
+
+</details>
 <details>
 <summary><strong>💡 Q: How does the ambient lighting (WLED/RGB) sync work? Will it turn on my lights during the day?</strong></summary>
 

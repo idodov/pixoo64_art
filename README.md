@@ -188,7 +188,6 @@ action:
       buzzer_total: 3000
 
 ```
-Here is the logically organized and grouped FAQ. Questions are structured into five clear categories so users can easily find what they are looking for:
 
 ---
 

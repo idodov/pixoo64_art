@@ -346,12 +346,18 @@ action:
 </details>
 
 <details>
-<summary><strong>🌍 Q: Why are Hebrew or Arabic lyrics/text displayed correctly without reversing?</strong></summary>
+<summary><strong>🔀 Q: Why does the integration sometimes show a different album cover than the one I am actually listening to?</strong></summary>
 
-> The integration includes an internal Bidirectional (BiDi) layout algorithm. Text containing Hebrew or Arabic characters is parsed and formatted for Right-to-Left (RTL) reading order before rendering to the Pixoo LED matrix.
+> This is a completely normal phenomenon and is an intentional design choice to keep your screen active and beautiful!
+> 
+> **Here is why it happens:**
+> 1. **Multiple Releases:** A single song very often exists across multiple releases. The exact same track might be featured on the original studio album, a "Greatest Hits" compilation, a movie soundtrack, or as a standalone single.
+> 2. **Smart Search Logic:** When the integration falls back to querying external APIs (like Spotify, Last.fm, or TIDAL), it searches primarily using the **Artist Name + Track Title**, rather than strictly forcing an exact match on the Album Name.
+> 3. **Messy Metadata:** Album names provided by streaming services or local files are notoriously messy (often appending tags like *"Deluxe Edition"*, *"Remastered 2023"*, or *"Bonus Track Version"*). If the integration enforced a strict 1:1 album name match, the vast majority of API queries would fail.
+> 
+> By prioritizing the artist and track name, the engine maximizes the success rate of finding stunning, high-resolution artwork for the song, even if it happens to pull the cover of the single or the greatest hits compilation.
 
 </details>
-
 <details>
 <summary><strong>🌐 Q: Does this integration require an internet connection?</strong></summary>
 

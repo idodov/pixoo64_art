@@ -43,6 +43,10 @@ This project is a **100% native Home Assistant custom integration**:
 | 💡 **Ambient Lighting Sync** | Extracts primary album colors in real time and synchronizes **Home Assistant RGB lights** and **WLED fixtures** (with night-only filters). |
 | 🔔 **Animated Visual Alerts** | 30+ animated pixel icons (doorbell, laundry, climate, security) with onboard **Pixoo hardware buzzer** chime integration. |
 
+|  |  |  |
+| :---: | :---: | :---: |
+|![pixoo_demo3](https://github.com/user-attachments/assets/f689500a-509d-491c-8a8f-1cacf897d61e)|![pixoo_demo4](https://github.com/user-attachments/assets/c073ea7a-0b81-4dd3-9845-dfd0cd679844)|![pixoo_demo5](https://github.com/user-attachments/assets/ed34c076-76ed-459d-bb78-51b6e39f6045)|
+|![pixoo_demo](https://github.com/user-attachments/assets/ea74891f-493e-4f10-ae0d-8108d6b371a8)|![pixoo_demo1](https://github.com/user-attachments/assets/d37e2f34-4023-4e46-9358-8ff618f3da99)|![pixoo_demo2](https://github.com/user-attachments/assets/07308c9d-a44b-4978-a7ac-ced42f9e6046)|
 ---
 
 ## 📦 Installation

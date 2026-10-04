@@ -100,6 +100,7 @@ class Config:
         self.spotify_client_id = get_val("spotify_client_id", "")
         self.spotify_client_secret = get_val("spotify_client_secret", "")
         self.musicbrainz = get_val("musicbrainz_enabled", True)
+        self.internet_archive = get_val("internet_archive_enabled", True)
         self.tidal_client_id = get_val("tidal_client_id", "")
         self.tidal_client_secret = get_val("tidal_client_secret", "")
         self.lastfm = get_val("lastfm_key", "")
@@ -108,6 +109,7 @@ class Config:
         self.light_entity = get_val("light_entity", [])
         self.only_at_night = get_val("only_at_night", True)
         self.tv_mode = get_val("tv_mode", False)
+        self.artist_slide = False
         self.vinyl_mode = False
         self.cassette_mode = False
         
@@ -1714,6 +1716,106 @@ class AiArtProvider:
         url_params = f"?model={model}&width=512&height=512&seed={seed}&nologo=true&key={api_key.strip()}"
         return f"https://gen.pollinations.ai/image/{encoded_prompt}{url_params}"
 
+
+class InternetArchiveProvider:
+    """Searches the Internet Archive (archive.org) for metadata and album/item cover art
+    using their open public search and metadata APIs (no API key required)."""
+
+    def __init__(self, session: aiohttp.ClientSession):
+        self.session = session
+
+    async def search_artwork(self, artist: str, title: str) -> Optional[str]:
+        clean_artist = str(artist or "").strip()
+        clean_title = str(title or "").strip()
+        if not clean_artist or not clean_title or clean_artist == "Unknown Artist":
+            return None
+
+        query = f'artist:( "{clean_artist}" ) AND title:( "{clean_title}" )'
+        search_url = "https://archive.org/advancedsearch.php"
+        params = {
+            "q": query,
+            "fl[]": "identifier",
+            "rows": 3,
+            "page": 1,
+            "output": "json"
+        }
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json"
+        }
+
+        try:
+            async with self.session.get(search_url, params=params, headers=headers, timeout=8) as response:
+                if response.status != 200:
+                    return None
+                
+                data = await response.json(content_type=None)
+                docs = data.get("response", {}).get("docs", [])
+                if not docs:
+                    return None
+
+                for doc in docs:
+                    identifier = doc.get("identifier")
+                    if not identifier:
+                        continue
+                    
+                    meta_url = f"https://archive.org/metadata/{identifier}"
+                    async with self.session.get(meta_url, headers=headers, timeout=8) as meta_resp:
+                        if meta_resp.status != 200:
+                            continue
+                        meta_data = await meta_resp.json(content_type=None)
+                        files = meta_data.get("files", [])
+                        
+                        for file_info in files:
+                            name = file_info.get("name", "").lower()
+                            if name.endswith((".jpg", ".jpeg", ".png")) and ("cover" in name or "thumb" in name or "front" in name):
+                                return f"https://archive.org/download/{identifier}/{file_info.get('name')}"
+                        
+                        for file_info in files:
+                            name = file_info.get("name", "").lower()
+                            if name.endswith((".jpg", ".jpeg", ".png")):
+                                return f"https://archive.org/download/{identifier}/{file_info.get('name')}"
+
+        except Exception as e:
+            _LOGGER.debug("Internet Archive search exception: %s", e)
+
+        return None
+
+class TheAudioDbProvider:
+    def __init__(self, session: aiohttp.ClientSession):
+        self.session = session
+
+    async def get_artist_images(self, artist: str) -> List[str]:
+        clean_artist = str(artist or "").strip()
+        if not clean_artist or clean_artist == "Unknown Artist":
+            return []
+            
+        raw_artists = [
+            a.strip() for a in re.split(r'[,&/]|(?:\s+feat\.?\s+)|\s+ft\.?\s+|\s+and\s+', clean_artist, flags=re.IGNORECASE) 
+            if a.strip()
+        ]
+        
+        urls = []
+        for a in raw_artists:
+            url = f"https://www.theaudiodb.com/api/v1/json/123/search.php?s={urllib.parse.quote(a)}"
+            try:
+                async with self.session.get(url, timeout=8) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        artists_data = data.get("artists")
+                        
+                        if artists_data and isinstance(artists_data, list):
+                            ad = artists_data[0]
+                            for key in ["strArtistThumb", "strArtistFanart", "strArtistFanart2", "strArtistFanart3", "strArtistFanart4", "strArtistClearart", "strArtistWideThumb"]:
+                                val = ad.get(key)
+                                if val and isinstance(val, str) and val.startswith("http"):
+                                    urls.append(val)
+            except Exception as e:
+                _LOGGER.debug("AudioDB search exception: %s", e)
+        
+        return list(OrderedDict.fromkeys(urls))
+    
 # =========================================================================
 # FALLBACK COORDINATOR SERVICE
 # =========================================================================
@@ -1735,6 +1837,8 @@ class FallbackService:
         self.lastfm_provider = LastFmProvider(config, session)
         self.tidal_provider = TidalProvider(config, session)
         self.ai_provider = AiArtProvider(config)
+        self.ia_provider = InternetArchiveProvider(session)
+        self.audiodb_provider = TheAudioDbProvider(session)
 
     async def get_musicbrainz_album_art_url(self, artist: str, title: str):
         return await self.mb_provider.get_album_art_url(artist, title)
@@ -1751,11 +1855,86 @@ class FallbackService:
     async def get_tidal_access_token(self):
         return await self.tidal_provider.get_access_token()
 
+    async def play_artist_gallery_slide(self, pixoo_device: "PixooDevice", media_data: "MediaData") -> None:
+        media_data.artist_slide_pass = False
+        try:
+            urls = getattr(media_data, 'slider_album_urls', None)
+            if not urls:
+                urls = await self.audiodb_provider.get_artist_images(media_data.artist)
+                
+            if not urls or len(urls) < 2:
+                media_data.slider_error = "Not enough artist images found"
+                return
+
+            media_data.slider_album_urls = urls
+
+            try:
+                preview_raw = await self.image_processor.get_raw_image_data(urls[0])
+                if preview_raw:
+                    preview_b64 = await self.image_processor.process_slide_image(preview_raw, media_data)
+                    if preview_b64:
+                        await pixoo_device.send_command({
+                            "Command": "Draw/CommandList", 
+                            "CommandList": [
+                                {"Command": "Draw/ResetHttpGifId"},
+                                {"Command": "Draw/SendHttpGif", "PicNum": 1, "PicWidth": 64, "PicOffset": 0, "PicID": 0, "PicSpeed": 1000, "PicData": preview_b64}
+                            ]
+                        })
+            except Exception as e:
+                _LOGGER.debug("Artist Slide preview error: %s", e)
+
+            sem = asyncio.Semaphore(5)
+            async def process_pipeline(url):
+                async with sem:
+                    try:
+                        raw_data = await self.image_processor.get_raw_image_data(url)
+                        if raw_data:
+                            return await self.image_processor.process_slide_image(raw_data, media_data)
+                    except Exception as err:
+                        _LOGGER.error("Artist Slide pipeline error: %s", err)
+                    return None
+
+            tasks = [process_pipeline(u) for u in urls[:10]]
+            frames_b64 = await asyncio.gather(*tasks)
+            frames_b64 = [f for f in frames_b64 if f]
+
+            if len(frames_b64) < 2:
+                media_data.slider_error = "Failed to process enough frames"
+                return
+
+            media_data.artist_slide_pass = True
+            media_data.slider_frames = len(frames_b64)
+            
+            await pixoo_device.send_command({
+                "Command": "Draw/CommandList", 
+                "CommandList": [{"Command": "Draw/ResetHttpGifId"}]
+            })
+            
+            for pic_offset, b64_frame in enumerate(frames_b64):
+                await pixoo_device.send_command({
+                    "Command": "Draw/SendHttpGif", 
+                    "PicNum": len(frames_b64), 
+                    "PicWidth": 64, 
+                    "PicOffset": pic_offset, 
+                    "PicID": 0, 
+                    "PicSpeed": 5000, 
+                    "PicData": b64_frame
+                })
+        except Exception as e:
+            media_data.slider_error = str(e)
+            _LOGGER.error("Artist Gallery Slide Error: %s", e)
+
     async def prefetch_next_track(self, url: Optional[str], media_data: "MediaData"):
         await self.get_final_url(url, media_data)
         frames = 0
         if getattr(self.config, 'spotify_slide', False) and not getattr(media_data, 'radio_logo', False):
             frames = await self.spotify_service.prefetch_slider_data(media_data)
+        elif getattr(self.config, 'artist_slide', False) and not getattr(media_data, 'radio_logo', False):
+            urls = await self.audiodb_provider.get_artist_images(media_data.artist)
+            media_data.slider_album_urls = urls
+            frames = len(urls)
+            for u in urls[:10]:
+                await self.image_processor.async_prefetch_url(u, media_data)
         media_data.slider_frames = frames
 
     async def get_final_url(self, picture: Optional[str], media_data: "MediaData") -> Optional[dict]: 
@@ -1773,8 +1952,13 @@ class FallbackService:
             and not getattr(media_data, 'radio_logo', False) 
             and not getattr(media_data, 'playing_tv', False)
         )
+        is_artist_slider = (
+            getattr(self.config, 'artist_slide', False) 
+            and not getattr(media_data, 'radio_logo', False) 
+            and not getattr(media_data, 'playing_tv', False)
+        )
         
-        if not is_spotify_slider and getattr(self.config, 'force_ai', False) and getattr(self.config, 'pollinations', None) and not getattr(media_data, 'radio_logo', False) and not getattr(media_data, 'playing_tv', False):
+        if not is_spotify_slider and not is_artist_slider and getattr(self.config, 'force_ai', False) and getattr(self.config, 'pollinations', None) and not getattr(media_data, 'radio_logo', False) and not getattr(media_data, 'playing_tv', False):
             ai_res = await self._try_ai_generation(media_data)
             if ai_res:
                 return ai_res
@@ -1799,7 +1983,7 @@ class FallbackService:
 
         if not getattr(self.config, 'force_ai', False) and song_cache_key in self._artwork_cache:
             cached = self._artwork_cache[song_cache_key]
-            if not is_spotify_slider or cached.get('source') in ["Spotify", "Spotify Artist", "Spotify (Artist Profile Image)", "Original"]:
+            if not is_spotify_slider and not is_artist_slider or cached.get('source') in ["Spotify", "Spotify Artist", "Spotify (Artist Profile Image)", "Original"]:
                 media_data.pic_url = cached['url']
                 media_data.pic_source = cached['source']
                 _LOGGER.debug("Reusing resolved artwork for '%s' from %s", song_cache_key, cached['source'])
@@ -1807,7 +1991,8 @@ class FallbackService:
 
         try:
             if picture and not (getattr(media_data, 'playing_radio', False) and not getattr(media_data, 'radio_logo', False)):
-                result = await self.image_processor.get_image(picture, media_data, getattr(media_data, 'spotify_slide_pass', False))
+                is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
+                result = await self.image_processor.get_image(picture, media_data, is_slide_pass)
                 if result:
                     self._save_to_artwork_cache(song_cache_key, result, picture, "Original")
                     media_data.pic_source = "Original"
@@ -1827,7 +2012,8 @@ class FallbackService:
                 if album_id:
                     image_url = await self.spotify_service.get_spotify_album_image_url(album_id)
                     if image_url:
-                        proc_res = await self.image_processor.get_image(image_url, media_data, getattr(media_data, 'spotify_slide_pass', False))
+                        is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
+                        proc_res = await self.image_processor.get_image(image_url, media_data, is_slide_pass)
                         if proc_res:
                             self._save_to_artwork_cache(song_cache_key, proc_res, image_url, "Spotify")
                             media_data.pic_url = image_url
@@ -1838,21 +2024,23 @@ class FallbackService:
                 _LOGGER.error("Spotify fallback failed: %s", e) 
 
         if self.spotify_artist_pic:
-            result = await self.image_processor.get_image(self.spotify_artist_pic, media_data, getattr(media_data, 'spotify_slide_pass', False))
+            is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
+            result = await self.image_processor.get_image(self.spotify_artist_pic, media_data, is_slide_pass)
             if result:
                 self._save_to_artwork_cache(song_cache_key, result, self.spotify_artist_pic, "Spotify Artist")
                 media_data.pic_source = "Spotify Artist"
                 return result
 
         if self.spotify_first_album:
-            result = await self.image_processor.get_image(self.spotify_first_album, media_data, getattr(media_data, 'spotify_slide_pass', False))
+            is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
+            result = await self.image_processor.get_image(self.spotify_first_album, media_data, is_slide_pass)
             if result:
                 self._save_to_artwork_cache(song_cache_key, result, self.spotify_first_album, "Spotify (Artist Profile Image)")
                 media_data.pic_url = self.spotify_first_album
                 media_data.pic_source = "Spotify (Artist Profile Image)"
                 return result
 
-        if is_spotify_slider:
+        if is_spotify_slider or is_artist_slider:
             media_data.pic_url = "Fallback Image"
             media_data.pic_source = "Internal"
             return self._get_fallback_black_image_data(media_data)
@@ -1876,17 +2064,34 @@ class FallbackService:
             tasks.append(self.mb_provider.get_album_art_url(media_data.artist, media_data.title))
             providers.append("MusicBrainz")
 
+        if getattr(self.config, 'internet_archive', False):
+            tasks.append(self.ia_provider.search_artwork(media_data.artist, media_data.title))
+            providers.append("Internet Archive")
+
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for i, result in enumerate(results):
                 if isinstance(result, Exception) or not result: continue
                 provider_name = providers[i]
-                proc_result = await self.image_processor.get_image(result, media_data, getattr(media_data, 'spotify_slide_pass', False))
+                is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
+                proc_result = await self.image_processor.get_image(result, media_data, is_slide_pass)
                 if proc_result:
                     self._save_to_artwork_cache(song_cache_key, proc_result, result, provider_name)
                     media_data.pic_url = result
                     media_data.pic_source = provider_name
                     return proc_result
+
+        if not getattr(self.config, 'force_ai', False):
+            audiodb_urls = await self.audiodb_provider.get_artist_images(media_data.artist)
+            if audiodb_urls:
+                for img_url in audiodb_urls:
+                    is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
+                    proc_result = await self.image_processor.get_image(img_url, media_data, is_slide_pass)
+                    if proc_result:
+                        self._save_to_artwork_cache(song_cache_key, proc_result, img_url, "TheAudioDB")
+                        media_data.pic_url = img_url
+                        media_data.pic_source = "TheAudioDB"
+                        return proc_result
 
         if not getattr(self.config, 'force_ai', False) and getattr(self.config, 'pollinations', None):
             result = await self._try_ai_generation(media_data)
@@ -1917,8 +2122,9 @@ class FallbackService:
         max_retries = 2
         for attempt in range(max_retries + 1):
             try:
+                is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
                 result = await asyncio.wait_for(
-                    self.image_processor.get_image(ai_url, media_data, getattr(media_data, 'spotify_slide_pass', False)),
+                    self.image_processor.get_image(ai_url, media_data, is_slide_pass),
                     timeout=25
                 )
                 
@@ -2048,7 +2254,7 @@ class FallbackService:
         )
         image = image.resize((final_width, final_height), Image.Resampling.BILINEAR)
         return image
-
+  
 # =========================================================================
 # SPOTIFY SERVICE
 # =========================================================================
@@ -2770,6 +2976,7 @@ class MediaData:
         
         # Dedicated Isolated Slider State
         self.spotify_slide_pass: bool = False
+        self.artist_slide_pass: bool = False
         self.slider_frames: int = 0
         self.slider_album_urls: list[str] = []
         self.slider_artist_pic_url: Optional[str] = None
@@ -3266,9 +3473,11 @@ class NotificationManager:
                     "PicSpeed": anim_speed,
                     "PicData": b64_frame
                 })
+                if total_frames > 1:
+                    await asyncio.sleep(0.15)
 
             if total_frames > 1:
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.75)
             else:
                 await asyncio.sleep(0.1)
 

@@ -12,7 +12,7 @@ from .const import (
     CONF_SPOTIFY_CLIENT_ID, CONF_SPOTIFY_CLIENT_SECRET,
     CONF_TIDAL_CLIENT_ID, CONF_TIDAL_CLIENT_SECRET,
     CONF_LASTFM_KEY, CONF_DISCOGS_TOKEN,
-    CONF_MUSICBRAINZ_ENABLED, CONF_WLED_IP, CONF_LIGHT_ENTITY, CONF_TEMPERATURE_ENTITY,
+    CONF_MUSICBRAINZ_ENABLED, CONF_INTERNET_ARCHIVE, CONF_WLED_IP, CONF_LIGHT_ENTITY, CONF_TEMPERATURE_ENTITY,
     CONF_PLAYLIST_PREFETCH
 )
 
@@ -156,7 +156,7 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_apis()
 
         schema = vol.Schema({
-            vol.Optional("osd_overlay", default="Enabled"): selector.SelectSelector(selector.SelectSelectorConfig(options=["Enabled", "Disabled"], mode=selector.SelectSelectorMode.DROPDOWN)),
+            vol.Optional("osd_overlay", default="Disabled"): selector.SelectSelector(selector.SelectSelectorConfig(options=["Enabled", "Disabled"], mode=selector.SelectSelectorMode.DROPDOWN)),
             vol.Optional("pause_timeout", default="15s"): selector.SelectSelector(selector.SelectSelectorConfig(options=["5s", "15s", "30s", "60s", "Never"], mode=selector.SelectSelectorMode.DROPDOWN)),
             vol.Optional("volume_osd_duration", default="2s"): selector.SelectSelector(selector.SelectSelectorConfig(options=["1s", "2s", "3s", "5s"], mode=selector.SelectSelectorMode.DROPDOWN)),
             vol.Optional(CONF_LIGHT_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="light", multiple=True)),
@@ -178,6 +178,7 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional("ai_model", default="black-forest-labs/flux.1-schnell"): selector.SelectSelector(selector.SelectSelectorConfig(options=dynamic_ai_models, mode=selector.SelectSelectorMode.DROPDOWN)),
             vol.Optional(CONF_POLLINATIONS_KEY): PASSWORD_SELECTOR,
             vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=True): selector.BooleanSelector(),
+            vol.Optional(CONF_INTERNET_ARCHIVE, default=True): selector.BooleanSelector(),
             vol.Optional(CONF_SPOTIFY_CLIENT_ID): TEXT_SELECTOR,
             vol.Optional(CONF_SPOTIFY_CLIENT_SECRET): PASSWORD_SELECTOR,
             vol.Optional(CONF_TIDAL_CLIENT_ID): TEXT_SELECTOR,
@@ -259,7 +260,7 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
             vol.Optional(CONF_TEMPERATURE_ENTITY, description={"suggested_value": get_val(CONF_TEMPERATURE_ENTITY, None)}):
                 selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature")),
             vol.Optional(CONF_TV_MODE, default=get_val(CONF_TV_MODE, False)): selector.BooleanSelector(),
-            vol.Optional("osd_overlay", default=get_val("osd_overlay", "Enabled")):
+            vol.Optional("osd_overlay", default=get_val("osd_overlay", "Disabled")):
                 selector.SelectSelector(selector.SelectSelectorConfig(options=["Enabled", "Disabled"], mode=selector.SelectSelectorMode.DROPDOWN)),
             vol.Optional("pause_timeout", default=get_val("pause_timeout", "15s")):
                 selector.SelectSelector(selector.SelectSelectorConfig(options=["5s", "15s", "30s", "60s", "Never"], mode=selector.SelectSelectorMode.DROPDOWN)),
@@ -273,6 +274,7 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
                 selector.SelectSelector(selector.SelectSelectorConfig(options=dynamic_ai_models, mode=selector.SelectSelectorMode.DROPDOWN)),
             vol.Optional(CONF_POLLINATIONS_KEY): PASSWORD_SELECTOR,
             vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=get_val(CONF_MUSICBRAINZ_ENABLED, True)): selector.BooleanSelector(),
+            vol.Optional(CONF_INTERNET_ARCHIVE, default=get_val(CONF_INTERNET_ARCHIVE, True)): selector.BooleanSelector(),
             vol.Optional(CONF_SPOTIFY_CLIENT_ID, description={"suggested_value": get_val(CONF_SPOTIFY_CLIENT_ID, "")}): TEXT_SELECTOR,
             vol.Optional(CONF_SPOTIFY_CLIENT_SECRET): PASSWORD_SELECTOR,
             vol.Optional(CONF_TIDAL_CLIENT_ID, description={"suggested_value": get_val(CONF_TIDAL_CLIENT_ID, "")}): TEXT_SELECTOR,

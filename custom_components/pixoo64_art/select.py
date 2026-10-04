@@ -12,7 +12,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     hub = hass.data[DOMAIN][entry.entry_id]
 
     selects_config = [
-        ("display_mode", "Display Mode", ["Standard", "Vinyl", "Cassette", "Lyrics", "Burned", "Special Mode"], "Standard", "mdi:monitor-dashboard"),
+        ("display_mode", "Display Mode", ["Standard", "Vinyl", "Cassette", "Lyrics", "Burned", "Special Mode", "Artist Slide"], "Standard", "mdi:monitor-dashboard"),
         ("image_filter", "Image Filter", ["None", "Vibrant", "Retro Arcade", "Crisp & Sharp", "Noir B&W", "Cyberpunk Neon"], "None", "mdi:image-filter-hdr"),
         ("text_position", "Artist & Track Text", ["Hidden", "Top", "Bottom"], "Bottom", "mdi:format-text"),
         ("overlay_info", "Overlay Info", ["None", "Clock", "Temperature", "Clock + Temp"], "Clock", "mdi:information-outline"),
@@ -53,7 +53,7 @@ class PixooRestoreSelect(SelectEntity, RestoreEntity):
     @property
     def options(self) -> list[str]:
         if self.key == "display_mode":
-            modes = ["Standard", "Vinyl", "Cassette", "Lyrics", "Burned", "Special Mode"]
+            modes = ["Standard", "Vinyl", "Cassette", "Lyrics", "Burned", "Special Mode", "Artist Slide"]
             if self.hub.is_spotify_available:
                 modes.append("Spotify Slider")
             if self.hub.is_ai_available:

@@ -284,9 +284,9 @@ class PixooHub:
         attrs["prefetch_status"] = self.prefetch_status
         attrs["prefetch_next_artist"] = self.prefetch_next_artist
         attrs["prefetch_next_title"] = self.prefetch_next_title
-        attrs["spotify_slider_status"] = self.spotify_slider_status
-        attrs["spotify_slider_frames"] = self.spotify_slider_frames
-        attrs["spotify_slider_artist"] = self.spotify_slider_artist
+        attrs["slider_status"] = self.spotify_slider_status
+        attrs["slider_frames"] = self.spotify_slider_frames
+        attrs["slider_artist"] = self.spotify_slider_artist
         attrs["spotify_slider_last_error"] = self.spotify_slider_last_error
         attrs["general_cache_size"] = len(self.image_processor.image_cache)
         attrs["general_cache_limit"] = self.image_processor.cache_size
@@ -418,6 +418,7 @@ class PixooHub:
         self.config.spotify_client_secret = options.get("spotify_client_secret", data.get("spotify_client_secret", ""))
         
         self.config.musicbrainz = options.get("musicbrainz_enabled", data.get("musicbrainz_enabled", True))
+        self.config.internet_archive = options.get("internet_archive_enabled", data.get("internet_archive_enabled", True))
         self.config.tidal_client_id = options.get("tidal_client_id", data.get("tidal_client_id", ""))
         self.config.tidal_client_secret = options.get("tidal_client_secret", data.get("tidal_client_secret", ""))
         self.config.lastfm = options.get("lastfm_key", data.get("lastfm_key", ""))
@@ -432,7 +433,6 @@ class PixooHub:
         
         self.config.full_control = self.ui_state.get("full_control", False)
         self.config.progress_bar_enabled = self.ui_state.get("progress_bar", True)
-        self.config.force_ai = bool(self.ui_state.get("force_ai", False) and self.is_ai_available)
         self.config.text_bg = self.ui_state.get("text_background", True)
 
         self.config.lyrics_sync = float(self.ui_state.get("lyrics_sync", 0.0))
@@ -484,7 +484,9 @@ class PixooHub:
         self.config.special_mode = ("special" in m)
         self.config.vinyl_mode = (m == "vinyl")
         self.config.cassette_mode = ("cassette" in m or "tape" in m)
-        self.config.spotify_slide = ("slider" in m) and self.is_spotify_available
+        
+        self.config.spotify_slide = ("slider" in m and "artist" not in m) and self.is_spotify_available
+        self.config.artist_slide = ("artist slide" in m or "artist gallery" in m)
         self.config.force_ai = (display_mode == "Force AI" or bool(self.ui_state.get("force_ai", False))) and self.is_ai_available
 
         self.cached_static_items = []
@@ -631,6 +633,7 @@ class PixooHub:
         dur = self.media_data.media_duration
         is_anim_mode = (
             getattr(self.config, 'spotify_slide', False) or 
+            getattr(self.config, 'artist_slide', False) or 
             getattr(self.config, 'vinyl_mode', False) or 
             getattr(self.config, 'cassette_mode', False) or
             getattr(self.config, 'force_ai', False)
@@ -659,9 +662,11 @@ class PixooHub:
                 self.prefetch_next_artist = artist
                 self.prefetch_next_title = title
                 self.prefetch_status = "Downloading Art..."
-                if getattr(self.config, 'spotify_slide', False):
+                
+                if getattr(self.config, 'spotify_slide', False) or getattr(self.config, 'artist_slide', False):
                     self.spotify_slider_status = f"Prefetching for {artist}..."
                     self.spotify_slider_artist = artist
+                    
                 self._update_prefetch_sensor_state()
                 
                 dummy_media = MediaData(self.hass, self.config, self.image_processor, self.websession)
@@ -680,7 +685,7 @@ class PixooHub:
             self.prefetch_status = "No next song detected"
             self.prefetch_next_artist = None
             self.prefetch_next_title = None
-            if getattr(self.config, 'spotify_slide', False) and self.spotify_slider_status not in ["Active Live", "Slider Sent Early"]:
+            if (getattr(self.config, 'spotify_slide', False) or getattr(self.config, 'artist_slide', False)) and self.spotify_slider_status not in ["Active Live", "Slider Sent Early"]:
                 self.spotify_slider_status = "No next queue detected"
             self._update_prefetch_sensor_state()
 
@@ -689,8 +694,11 @@ class PixooHub:
             await self.fallback_service.prefetch_next_track(url, dummy_media)
             self.prefetch_status = "Ready in RAM"
             
-            # 1. Pre-generate Spotify Slider frames
-            if getattr(self.config, 'spotify_slide', False) and not getattr(dummy_media, 'radio_logo', False):
+            # 1. Pre-generate Spotify Slider or Artist Slider frames
+            is_slider = getattr(self.config, 'spotify_slide', False)
+            is_artist_slider = getattr(self.config, 'artist_slide', False)
+            
+            if is_slider and not getattr(dummy_media, 'radio_logo', False):
                 frames = getattr(dummy_media, 'slider_frames', 0)
                 self.spotify_slider_frames = frames
                 if frames >= 2:
@@ -698,8 +706,20 @@ class PixooHub:
                 else:
                     self.spotify_slider_status = f"Prefetch: {dummy_media.slider_error or 'No albums found'}"
             
+            elif is_artist_slider and not getattr(dummy_media, 'radio_logo', False):
+                urls = await self.fallback_service.audiodb_provider.get_artist_images(dummy_media.artist)
+                dummy_media.slider_album_urls = urls
+                frames = len(urls)
+                dummy_media.slider_frames = frames
+                self.spotify_slider_frames = frames
+                if frames >= 2:
+                    self.spotify_slider_status = f"Ready in RAM ({frames} artist frames)"
+                else:
+                    self.spotify_slider_status = f"Prefetch: {dummy_media.slider_error or 'No artist images found'}"
+            
             # 2. Pre-generate Vinyl frames in RAM
-            if getattr(self.config, 'vinyl_mode', False) and not getattr(dummy_media, 'radio_logo', False):
+            is_vinyl = getattr(self.config, 'vinyl_mode', False)
+            if is_vinyl and not getattr(dummy_media, 'radio_logo', False):
                 proc_img = await self.fallback_service.get_final_url(url, dummy_media)
                 if proc_img and 'pil_image' in proc_img:
                     dummy_media.vinyl_frames_b64 = self.image_processor.generate_vinyl_frames(proc_img['pil_image'], dummy_media)
@@ -707,7 +727,8 @@ class PixooHub:
                     self.prefetch_status = f"Vinyl Ready ({len(dummy_media.vinyl_frames_b64)} frames)"
 
             # 3. Pre-generate Cassette frames in RAM
-            if getattr(self.config, 'cassette_mode', False) and not getattr(dummy_media, 'radio_logo', False):
+            is_cassette = getattr(self.config, 'cassette_mode', False)
+            if is_cassette and not getattr(dummy_media, 'radio_logo', False):
                 proc_img = await self.fallback_service.get_final_url(url, dummy_media)
                 if proc_img and 'pil_image' in proc_img:
                     dummy_media.cassette_frames_b64 = self.image_processor.generate_cassette_frames(proc_img['pil_image'], dummy_media)
@@ -717,13 +738,9 @@ class PixooHub:
             self._update_prefetch_sensor_state()
             
             # Schedule Early Send (2.5s before track end)
-            is_slider = getattr(self.config, 'spotify_slide', False)
-            is_vinyl = getattr(self.config, 'vinyl_mode', False)
-            is_cassette = getattr(self.config, 'cassette_mode', False)
-            
-            if (is_slider or is_vinyl or is_cassette) and not getattr(dummy_media, 'radio_logo', False):
+            if (is_slider or is_artist_slider or is_vinyl or is_cassette) and not getattr(dummy_media, 'radio_logo', False):
                 has_frames = (
-                    (dummy_media.slider_frames >= 2) if is_slider else 
+                    (dummy_media.slider_frames >= 2) if (is_slider or is_artist_slider) else 
                     bool(dummy_media.vinyl_frames_b64) if is_vinyl else 
                     bool(dummy_media.cassette_frames_b64)
                 )
@@ -739,7 +756,7 @@ class PixooHub:
                         self._cleanup_timers(['_early_send_timer_unsub'])
                         async def _early_send_cb(now):
                             self._early_send_timer_unsub = None
-                            if is_slider:
+                            if is_slider or is_artist_slider:
                                 await self._do_early_slider_send(dummy_media)
                             elif is_vinyl:
                                 await self._do_early_vinyl_send(dummy_media)
@@ -747,7 +764,7 @@ class PixooHub:
                                 await self._do_early_cassette_send(dummy_media)
                         self._early_send_timer_unsub = async_call_later(self.hass, time_to_early_send, _early_send_cb)
                     elif time_to_early_send > -early_offset:
-                        if is_slider:
+                        if is_slider or is_artist_slider:
                             self.hass.async_create_task(self._do_early_slider_send(dummy_media))
                         elif is_vinyl:
                             self.hass.async_create_task(self._do_early_vinyl_send(dummy_media))
@@ -771,12 +788,17 @@ class PixooHub:
         self.spotify_slider_status = "Sending Early Slider to Pixoo..."
         self._update_prefetch_sensor_state()
         try:
-            if getattr(self.config, 'special_mode_spotify_slider', False): 
-                await self.spotify_service.spotify_album_art_animation(self.pixoo_device, dummy_media, self.select_index)
-            else: 
-                await self.spotify_service.spotify_albums_slide(self.pixoo_device, dummy_media, self.select_index)
+            if getattr(self.config, 'artist_slide', False):
+                await self.fallback_service.play_artist_gallery_slide(self.pixoo_device, dummy_media)
+                pass_flag = getattr(dummy_media, 'artist_slide_pass', False)
+            else:
+                if getattr(self.config, 'special_mode_spotify_slider', False): 
+                    await self.spotify_service.spotify_album_art_animation(self.pixoo_device, dummy_media, self.select_index)
+                else: 
+                    await self.spotify_service.spotify_albums_slide(self.pixoo_device, dummy_media, self.select_index)
+                pass_flag = getattr(dummy_media, 'spotify_slide_pass', False)
                 
-            if getattr(dummy_media, 'spotify_slide_pass', False):
+            if pass_flag:
                 self._early_slider_sent_for = f"{dummy_media.artist}_{dummy_media.title}".strip().lower()
                 self.prefetch_status = "Slider Sent Early"
                 self.spotify_slider_status = f"Slider Sent Early ({dummy_media.slider_frames} frames)"
@@ -853,7 +875,6 @@ class PixooHub:
         self._update_prefetch_sensor_state()
 
     async def _fetch_player_queue(self) -> Tuple[List[Dict], Optional[int]]:
-        """Fetch the full queue and active position from the media player (including Sonos service)."""
         state = self.hass.states.get(self.media_player)
         if not state:
             return [], None
@@ -875,13 +896,11 @@ class PixooHub:
         if not isinstance(queue, list) or not queue:
             return [], None
 
-        # Sonos queue_position is 1-based
         if isinstance(queue_pos, int):
             norm_pos = queue_pos - 1 if queue_pos > 0 else 0
             if 0 <= norm_pos < len(queue):
                 return queue, norm_pos
 
-        # Fallback: Match current track by title/artist
         curr_title = (self.media_data.title or "").strip().lower()
         curr_artist = (self.media_data.artist or "").strip().lower()
         if curr_title:
@@ -915,9 +934,8 @@ class PixooHub:
         return None
 
     async def _run_playlist_prefetch(self):
-        """Pre-fetches queue artwork bidirectionally into RAM to guarantee instant skip."""
-        if getattr(self.config, 'spotify_slide', False): 
-            self.playlist_prefetch_status = "Disabled (Spotify Slider active)"
+        if getattr(self.config, 'spotify_slide', False) or getattr(self.config, 'artist_slide', False): 
+            self.playlist_prefetch_status = "Disabled (Slider active)"
             self._update_prefetch_sensor_state()
             return
 
@@ -1193,12 +1211,17 @@ class PixooHub:
                     await self.control_light('on', bg_color_rgb, is_night)
                     await self.control_wled_light('on', [color1, color2, color3], is_night)
                 
-                # Check for Early Matches (Sent 2.5s before track end)
                 early_slider_match = False
-                if getattr(self.config, 'spotify_slide', False) and not getattr(self.media_data, 'radio_logo', False) and not getattr(self.media_data, 'playing_tv', False):
+                is_spotify_slider = getattr(self.config, 'spotify_slide', False) and not getattr(self.media_data, 'radio_logo', False) and not getattr(self.media_data, 'playing_tv', False)
+                is_artist_slider = getattr(self.config, 'artist_slide', False) and not getattr(self.media_data, 'radio_logo', False) and not getattr(self.media_data, 'playing_tv', False)
+                
+                if is_spotify_slider or is_artist_slider:
                     if self._early_slider_sent_for == current_song_key:
                         early_slider_match = True
-                        self.media_data.spotify_slide_pass = True
+                        if is_spotify_slider:
+                            self.media_data.spotify_slide_pass = True
+                        else:
+                            self.media_data.artist_slide_pass = True
                         self.spotify_slider_status = f"Active (Early Match, {self.spotify_slider_frames} frames)"
 
                 is_vinyl = getattr(self.config, 'vinyl_mode', False) and not getattr(self.media_data, 'radio_logo', False) and not getattr(self.media_data, 'playing_tv', False)
@@ -1214,7 +1237,6 @@ class PixooHub:
                 self._early_slider_sent_for = None
                 duration = time.perf_counter() - start_time
                 
-                # 1. Render Vinyl Live if not sent early
                 if is_vinyl and not early_vinyl_match:
                     pil_img = processed_data.get('pil_image')
                     vinyl_frames = self.image_processor.generate_vinyl_frames(pil_img, self.media_data)
@@ -1239,7 +1261,6 @@ class PixooHub:
                             })
                         early_vinyl_match = True
 
-                # 2. Render Cassette Live if not sent early
                 if is_cassette and not early_cassette_match:
                     pil_img = processed_data.get('pil_image')
                     cassette_frames = self.image_processor.generate_cassette_frames(pil_img, self.media_data)
@@ -1264,7 +1285,6 @@ class PixooHub:
                             })
                         early_cassette_match = True
 
-                # 3. Standard Static Frame Upload if not animated mode
                 if not early_slider_match and not early_vinyl_match and not early_cassette_match:
                     image_cmd = {
                         "Command": "Draw/CommandList", 
@@ -1285,24 +1305,11 @@ class PixooHub:
                 self.media_data.lyrics_font_color = font_color
                 self.media_data.background_color = bg_color_str
                 
-                self.lyrics_active_mode = getattr(self.config, 'show_lyrics', False) and len(self.media_data.lyrics) > 0 and not getattr(self.media_data, 'playing_tv', False)
+                new_lyrics_found = getattr(self.config, 'show_lyrics', False) and len(self.media_data.lyrics) > 0 and not getattr(self.media_data, 'playing_tv', False)
                 self.cached_static_items = await self._build_text_items_list(font_color, bg_color_str, scope="static")
                 self.progress_timer_gen_id += 1
-                
-                if self.lyrics_active_mode:
-                    await self._calculate_and_schedule_next()
-                else:
-                    self._stop_lyrics_scheduler()
 
-                # 4. Handle Live Spotify Slider if needed
-                is_live_slider = (
-                    getattr(self.config, 'spotify_slide', False) and 
-                    not early_slider_match and 
-                    not getattr(self.media_data, 'radio_logo', False) and 
-                    not getattr(self.media_data, 'playing_tv', False)
-                )
-
-                if is_live_slider:
+                if is_spotify_slider and not early_slider_match:
                     self.spotify_slider_status = f"Loading Live Slider for {self.media_data.artist}..."
                     self.spotify_slider_artist = self.media_data.artist
                     self._update_prefetch_sensor_state()
@@ -1319,11 +1326,29 @@ class PixooHub:
                         self.spotify_slider_status = f"Live Failed: {self.media_data.slider_error or 'No albums found'}"
                         self.spotify_slider_last_error = self.media_data.slider_error
 
-                    if not self.lyrics_active_mode:
+                    if not new_lyrics_found:
+                        self.last_text_payload_hash = None
+                        await self._render_and_send_text_layers(force=True)
+
+                elif is_artist_slider and not early_slider_match:
+                    self.spotify_slider_status = f"Loading Artist Gallery for {self.media_data.artist}..."
+                    self.spotify_slider_artist = self.media_data.artist
+                    self._update_prefetch_sensor_state()
+                    
+                    await self.fallback_service.play_artist_gallery_slide(self.pixoo_device, self.media_data)
+                    
+                    if getattr(self.media_data, 'artist_slide_pass', False):
+                        self.spotify_slider_status = f"Active Live ({self.media_data.slider_frames} frames)"
+                        self.spotify_slider_frames = self.media_data.slider_frames
+                    else:
+                        self.spotify_slider_status = f"Live Failed: {self.media_data.slider_error or 'No artist images found'}"
+                        self.spotify_slider_last_error = self.media_data.slider_error
+
+                    if not new_lyrics_found:
                         self.last_text_payload_hash = None
                         await self._render_and_send_text_layers(force=True)
                 else:
-                    if not self.lyrics_active_mode:
+                    if not new_lyrics_found:
                         self.last_text_payload_hash = None
                         await self._render_and_send_text_layers(force=True)
 
@@ -1352,9 +1377,9 @@ class PixooHub:
                     "progress_bar_active": getattr(self.media_data, 'show_progress_bar', False),
                     "lyrics_found": len(self.media_data.lyrics) > 0,
                     "pixoo64_channel": self.select_index,
-                    "spotify_slider_status": self.spotify_slider_status,
-                    "spotify_slider_frames": self.spotify_slider_frames,
-                    "spotify_slider_last_error": self.spotify_slider_last_error,
+                    "slider_status": self.spotify_slider_status,
+                    "slider_frames": self.spotify_slider_frames,
+                    "slider_last_error": self.spotify_slider_last_error,
                 }
                 if self.sensor:
                     self.sensor.update_state(f"{self.media_data.artist} - {self.media_data.title}", sensor_attrs)

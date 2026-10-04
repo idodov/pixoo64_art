@@ -415,7 +415,7 @@ class ImageCropper:
             return img
 
         is_pillarbox = (min_y <= int(orig_h * 0.02) and max_y >= int(orig_h * 0.98)) and (min_x > int(orig_w * 0.02) or max_x < int(orig_w * 0.98))
-        is_letterbox = (min_x <= int(orig_w * 0.02) and max_x >= int(orig_w * 0.98)) and (min_y > int(orig_h * 0.02) or max_y < int(orig_h * 0.98))
+        is_letterbox = (min_x <= int(orig_w * 0.02) and max_y >= int(orig_w * 0.98)) and (min_y > int(orig_h * 0.02) or max_y < int(orig_h * 0.98))
 
         if is_pillarbox or is_letterbox:
             crop_dim = min(w, h)
@@ -509,7 +509,7 @@ class ImageCropper:
         top_bucket, top_count = buckets.most_common(1)[0]
         dominance = top_count / float(len(comp_pixels))
 
-        if dominance < 0.45:
+        if dominance < 0.35:
             return None
 
         matching_colors = [pixels[x, y] for x, y in comp_pixels if (pixels[x, y][0] // 16, pixels[x, y][1] // 16, pixels[x, y][2] // 16) == top_bucket]
@@ -686,6 +686,56 @@ class ImageCropper:
             target_bg_color, candidate_comps = container_result
         else:
             target_bg_color, candidate_comps = bg_ref, comps
+
+        is_typography = False
+        if not container_result:
+            max_comp_area = comps[0]['area']
+            if max_comp_area <= int((pw * ph) * 0.07):
+                px = proxy.load()
+                comp_colors = [px[x, y] for c in candidate_comps for x, y in c['pixels']]
+                q_colors = set((c[0] // 16, c[1] // 16, c[2] // 16) for c in comp_colors)
+                
+                min_bx = min(c['min_x'] for c in candidate_comps)
+                max_bx = max(c['max_x'] for c in candidate_comps)
+                min_by = min(c['min_y'] for c in candidate_comps)
+                max_by = max(c['max_y'] for c in candidate_comps)
+                scale_to_orig = 1.0 / scale
+                ox1 = max(0, int(round(min_bx * scale_to_orig)))
+                oy1 = max(0, int(round(min_by * scale_to_orig)))
+                ox2 = min(orig_w, int(round(max_bx * scale_to_orig)) + 1)
+                oy2 = min(orig_h, int(round(max_by * scale_to_orig)) + 1)
+                
+                crop_sample = img.crop((ox1, oy1, ox2, oy2))
+                sample_colors = list(crop_sample.getdata())
+                orig_q_colors = set((c[0] // 16, c[1] // 16, c[2] // 16) for c in sample_colors)
+                
+                if len(orig_q_colors) < 120 and len(q_colors) < 60:
+                    is_typography = True
+
+        if is_typography:
+            sub_min_x = min(c['min_x'] for c in candidate_comps)
+            sub_max_x = max(c['max_x'] for c in candidate_comps)
+            sub_min_y = min(c['min_y'] for c in candidate_comps)
+            sub_max_y = max(c['max_y'] for c in candidate_comps)
+
+            scale_to_orig = 1.0 / scale
+            orig_sub_w = (sub_max_x - sub_min_x + 1) * scale_to_orig
+            orig_sub_h = (sub_max_y - sub_min_y + 1) * scale_to_orig
+            cx = ((sub_min_x + sub_max_x) / 2.0) * scale_to_orig
+            cy = ((sub_min_y + sub_max_y) / 2.0) * scale_to_orig
+
+            content_dim = max(orig_sub_w, orig_sub_h)
+            padding_factor = 1.45
+            crop_dim = int(content_dim * padding_factor)
+            max_allowed = min(orig_w, orig_h)
+            crop_dim = min(crop_dim, max_allowed)
+            crop_dim = max(10, crop_dim)
+
+            half = crop_dim / 2.0
+            left = int(max(0, min(cx - half, orig_w - crop_dim)))
+            top = int(max(0, min(cy - half, orig_h - crop_dim)))
+
+            return img.crop((left, top, left + crop_dim, top + crop_dim))
 
         sub_min_x, sub_min_y, sub_max_x, sub_max_y = cls._find_subject_box(candidate_comps, pw, ph)
 

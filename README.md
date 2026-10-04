@@ -35,6 +35,7 @@ This project is a **100% native Home Assistant custom integration**:
 | :--- | :--- |
 | 🖼️ **Adaptive Crop Engine** | **Standard Crop** trims margins while keeping typography; **Extra Crop** unwraps nested stripes, unites multi-person subjects, and frames minimalist text. |
 | 🧑‍🎤 **Dynamic Artist Gallery** | Dedicated **Artist Slide** mode (and fallback layer) that intelligently parses artist names and fetches high-quality fanart from TheAudioDB to render dynamic slideshows. |
+| 💿 **Vintage Animations** | Enjoy retro playback experiences with **Vinyl Turntable** and **Cassette Tape** animations, featuring transparent grooves, ambient glossy reflections, and full-width micro-pixel track labels. |
 | 🌊 **Multi-Tier Fallback** | When artwork is missing, queries: **Local HA ➔ Spotify ➔ Discogs / Last.fm / TIDAL / MusicBrainz ➔ TheAudioDB ➔ Pollinations AI ➔ Minimalist Slate**. |
 | 🔊 **Real-Time Volume HUD** | Detects volume changes on your AVR, soundbar, or media player and temporarily renders an instant, high-visibility volume level indicator. |
 | 📺 **Intelligent TV Mode** | Detects HDMI-ARC, streaming apps, and live TV sources, displaying a handcrafted retro pixel-art television with antennas and SMPTE test bars. |
@@ -60,10 +61,7 @@ This project is a **100% native Home Assistant custom integration**:
 2. Extract the folder into your Home Assistant directory:
 ```text
 config/custom_components/pixoo64_art/
-
 ```
-
-
 3. Restart Home Assistant.
 
 ---
@@ -186,14 +184,34 @@ action:
       buzzer_total: 3000
 
 ```
+Here is the logically organized and grouped FAQ. Questions are structured into five clear categories so users can easily find what they are looking for:
 
+---
 
 ## ❓ Frequently Asked Questions (FAQ)
 
-<details>
-<summary><strong>🎛️ Q: What is the difference between "Master Control" and "Full Control"?</strong></summary>
+### 🔌 Setup, Connectivity & Power Controls
 
-> Both of these toggles dictate how the integration behaves, but they act on entirely different layers of the hardware:
+<details>
+<summary><strong>🌐 Does this integration require an internet connection?</strong></summary>
+
+> **No, for local playback.** Communication between Home Assistant and the Pixoo64 happens entirely over your local area network (LAN HTTP POST). 
+> 
+> Internet access is only required if you use online fallback providers (Spotify, TheAudioDB, MusicBrainz, TIDAL, LRCLIB lyrics, or Pollinations AI).
+
+</details>
+
+<details>
+<summary><strong>📡 How do I set a static IP for my Pixoo64?</strong></summary>
+
+> It is strongly recommended to assign a permanent **DHCP Reservation** for your Pixoo64 within your home router's admin settings to ensure its LAN IP address never changes.
+
+</details>
+
+<details>
+<summary><strong>🎛️ What is the difference between "Master Control" and "Full Control"?</strong></summary>
+
+> Both toggles dictate how the integration behaves, but they act on entirely different layers of the hardware:
 > 
 > * **Master Control (Software Level):** This acts as the integration's main "Kill Switch". If toggled off, the integration simply stops fetching album art, polling lyrics, and pushing HTTP payloads. The Pixoo64 remains turned on, but it will revert to whatever default clock or custom channel you have set in the Divoom App.
 > * **Full Control (Hardware Override):** When enabled, the integration takes complete ownership of the Pixoo64's screen power. When music plays, it sends an explicit command to power the LED matrix **ON**. The moment playback stops, it sends a command to power the LED matrix **OFF** (completely black). This bypasses the Divoom App entirely and is perfect if you only want the Pixoo active when music is playing.
@@ -201,9 +219,56 @@ action:
 </details>
 
 <details>
-<summary><strong>🔑 Q: Where do I get API keys for all the supported services?</strong></summary>
+<summary><strong>⚙️ What settings can I change from my dashboard vs. the integration configuration?</strong></summary>
 
-> Here are the direct links to obtain developer credentials for every supported metadata provider:
+> The integration divides settings into two logical areas:
+> 
+> **1. Dashboard UI Controls (Real-Time Visuals):**  
+> Once installed, the integration generates several `Select` entities you can place directly on your Home Assistant dashboard. Changing these updates the Pixoo64 **instantly**:
+> * **Display Mode:** Switch live between Standard, Vinyl, Cassette, Artist Slide, Spotify Slider, Lyrics, or Force AI.
+> * **Image Filter:** Apply real-time processing effects (e.g., Vibrant, Retro Arcade, Cyberpunk Neon).
+> * **Crop Mode:** Toggle between No Crop, Standard Crop, or Extra Crop.
+> * **Layout Controls:** Adjust typography position, toggle the Clock/Temperature overlays, and change their alignment on the fly.
+> 
+> **2. Integration Settings (Core Infrastructure):**  
+> For deeper structural changes, navigate to **Settings > Devices & Services > Pixoo64 > Configure**. Here you can safely update:
+> * **API Keys & Credentials:** Add or remove tokens for Spotify, TIDAL, Last.fm, Discogs, or Pollinations AI.
+> * **Hardware Links:** Change the targeted Media Player, Temperature Sensor, or synchronized Ambient Lights / WLED strips.
+> * **Background Engine Rules:** Enable/Disable TV Mode, adjust Playlist Prefetch ranges, and modify OSD (On-Screen Display) timeout durations for volume and pausing.
+
+</details>
+
+---
+
+### 🔑 APIs, Accounts & Costs
+
+<details>
+<summary><strong>💸 Do I need to pay for any API keys or premium subscriptions to use this?</strong></summary>
+
+> **Absolutely not.** The integration is designed to be 100% free out of the box.
+> 
+> * **Built-in Open APIs:** Services like MusicBrainz, Internet Archive, and TheAudioDB are completely open to the public and require zero configuration or keys to function.
+> * **Free Developer Keys:** While you *can* plug in API keys to unlock higher-resolution artwork or specific animated modes (like Spotify, TIDAL, Last.fm, Discogs, and Pollinations AI), generating these developer keys is completely free.
+> * **No Premium Accounts Needed:** You **do not** need a Spotify Premium or TIDAL Hi-Fi subscription to fetch album covers. A standard free tier account is all you need to access their developer portals and generate credentials.
+
+</details>
+
+<details>
+<summary><strong>🔌 Do I have to configure all these APIs? Can I use just one or two, and what is recommended?</strong></summary>
+
+> You are not required to configure *any* API keys if you don't want to! You can pick and choose exactly which services to enable. The integration uses a smart "Waterfall" engine—it skips unconfigured services and moves automatically to the next available one.
+> 
+> Suggested configurations:
+> * **The Minimalist (Zero Setup):** Don't enter any keys. The integration relies on your local Home Assistant media player's artwork and falls back to built-in free databases (MusicBrainz, TheAudioDB, Internet Archive).
+> * **The Recommended "Sweet Spot":** Generate a free **Spotify** API key. It is fast, holds a massive high-resolution library, and unlocks the animated *Spotify Slider* mode.
+> * **The "Never Blank" Setup (Best Experience):** Add **Spotify** (for mainstream hits), **Discogs / Last.fm** (for rare vinyl, B-sides, and indie tracks), and **Pollinations AI** (to dynamically generate conceptual art when a song has no official cover).
+
+</details>
+
+<details>
+<summary><strong>🔗 Where do I get API keys for all the supported services?</strong></summary>
+
+> Here are direct links to obtain developer credentials for every supported metadata provider:
 > 
 > * **Spotify (Client ID & Client Secret):**  
 >   👉 [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)  
@@ -226,34 +291,18 @@ action:
 >   *Log in with your TIDAL account to access your developer dashboard and create client-credentials keys.*
 > 
 > * **TheAudioDB, MusicBrainz & Cover Art Archive:**  
->   * **No keys or tokens required!** These platforms are completely free and open-source. The integration automatically handles compliant rate-limiting for them.
+>   * **No keys or tokens required!** These platforms are free and open-source. The integration handles compliant rate-limiting automatically.
 
 </details>
+
+---
+
+### 🎨 Artwork Engine, Cropping & Visuals
+
 <details>
-<summary><strong>🔌 Q: Do I have to configure all these APIs? Can I use just one or two, and what is recommended?</strong></summary>
+<summary><strong>🌊 What happens if my music doesn't have official album art? (The Fallback Waterfall)</strong></summary>
 
-> You are not required to configure *any* API keys if you don't want to! You can pick and choose exactly which services you want to enable. The integration uses a smart "Waterfall" engine—it will simply skip any service you haven't configured and seamlessly move to the next available one.
-> 
-> Here are a few ways you can set it up:
-> * **The Minimalist (Zero Setup):** Don't enter any keys. The integration will rely on your local Home Assistant media player's artwork and automatically fall back to the built-in free databases (MusicBrainz, TheAudioDB, Internet Archive).
-> * **The Recommended "Sweet Spot":** We highly recommend generating a free **Spotify** API key. It is incredibly fast, holds the largest high-resolution library, and unlocks the animated *Spotify Slider* mode.
-> * **The "Never Blank" Setup (Best Experience):** Add **Spotify** (for mainstream hits), **Discogs / Last.fm** (for rare vinyls, B-sides, and indie tracks), and **Pollinations AI** (to dynamically generate stunning conceptual art when a song truly has no official cover). 
-
-</details>
-<details>
-<summary><strong>💸 Q: Do I need to pay for any API keys or premium subscriptions to use this?</strong></summary>
-
-> **Absolutely not.** The integration is designed to be 100% free out-of-the-box.
-> 
-> * **Built-in Open APIs:** Services like MusicBrainz, Internet Archive, and TheAudioDB are completely open to the public and require zero configuration or keys to function. The integration uses them automatically.
-> * **Free Developer Keys:** While you *can* plug in API keys to unlock higher-resolution artwork or specific animated modes (like Spotify, TIDAL, Last.fm, Discogs, and Pollinations AI), generating these developer keys is completely free. 
-> * **No Premium Accounts Needed:** You **do not** need a Spotify Premium or TIDAL Hi-Fi subscription to use their APIs to fetch album covers. A standard free account is all you need to access their developer portals and generate a Client ID.
-
-</details>
-<details>
-<summary><strong>🌊 Q: What happens if my music doesn't have official album art? (The Fallback Waterfall)</strong></summary>
-
-> Never face an empty display when listening to obscure radio stations, Cast devices, or local files. The integration features an intelligent "waterfall" recovery sequence to ensure something beautiful is always rendered on your screen:
+> Never face an empty display when listening to obscure radio stations, Cast devices, or local files. The integration uses an intelligent "waterfall" recovery sequence to ensure something beautiful is always rendered:
 > 
 > ```text
 > [Media Player Playing]
@@ -281,155 +330,128 @@ action:
 > ```
 
 </details>
+
 <details>
-<summary><strong>🎛️ Q: What settings can I change from my dashboard vs. the integration configuration?</strong></summary>
+<summary><strong>🔀 Why does the integration sometimes show a different album cover than the one I am playing?</strong></summary>
 
-> The integration is designed to give you maximum flexibility, dividing settings into two logical areas:
+> This is normal and intentional to prevent blank screens:
 > 
-> **1. Dashboard UI Controls (Real-Time Visuals):**
-> Once installed, the integration automatically generates several `Select` entities that you can place directly on your Home Assistant dashboard. Changing these updates the Pixoo64 **instantly**:
-> * **Display Mode:** Switch live between Standard, Vinyl, Cassette, Artist Slide, Spotify Slider, Lyrics, or Force AI.
-> * **Image Filter:** Apply real-time processing effects (e.g., Vibrant, Retro Arcade, Cyberpunk Neon).
-> * **Crop Mode:** Toggle between No Crop, Standard Crop, or Extra Crop.
-> * **Layout Controls:** Adjust the typography position, toggle the Clock/Temperature overlays, and change their alignment on the fly.
+> 1. **Multiple Releases:** A song frequently exists across multiple releases (original studio album, single, "Greatest Hits" compilation, or soundtrack).
+> 2. **Smart Search Priority:** When querying external APIs, the integration searches primarily by **Artist Name + Track Title** rather than forcing a strict 1:1 match on the Album Name.
+> 3. **Messy Metadata:** Local files and streaming streams often append tags like *"Deluxe Edition"*, *"Remastered 2023"*, or *"Bonus Track"*. Strict matching would cause the majority of queries to fail.
 > 
-> **2. Integration Settings (Core Infrastructure):**
-> For deeper structural changes, navigate to **Settings > Devices & Services > Pixoo64 > Configure**. Here you can safely update:
-> * **API Keys & Credentials:** Add or remove tokens for Spotify, TIDAL, Last.fm, Discogs, or Pollinations AI.
-> * **Hardware Links:** Change the targeted Media Player, Temperature Sensor, or your synchronized Ambient Lights / WLED strips.
-> * **Background Engine Rules:** Enable/Disable TV Mode, adjust Playlist Prefetch ranges, and modify OSD (On-Screen Display) timeout durations for volume and pausing.
-
-</details>
-<details>
-<summary><strong>📺 Q: How does the Intelligent TV Mode work?</strong></summary>
-
-> Streaming devices and modern smart TVs connected via HDMI eARC often populate media players with metadata like `"TV"`, `"Audio Return Channel"`, or streaming app names rather than music tracks. 
-> 
-> The integration includes an intelligent **TV Mode engine**:
-> 1. **Automatic TV Detection:** Monitors `media_title`, `media_artist`, `app_name`, `source`, and `media_channel`. It immediately recognizes inputs such as HDMI ARC, Netflix, YouTube, Disney+, Prime Video, Apple TV, and Live TV.
-> 2. **Dedicated Visual Display (`TV_IS_ON_ICON`):** When TV Mode is active, music-specific features are automatically suspended. Instead, the screen renders an authentic **Retro Color-Bar Television** with a classic wood-grain cabinet, dual antennas, and a SMPTE rainbow test screen.
+> Prioritizing artist and track name maximizes the odds of finding high-resolution artwork for the track, even if it happens to pull the cover of the single or compilation release.
 
 </details>
 
 <details>
-<summary><strong>🔊 Q: How does the Dynamic Volume HUD Effect work?</strong></summary>
+<summary><strong>🗄️ How does the integration use MusicBrainz & Cover Art Archive?</strong></summary>
 
-> When you adjust the volume on your receiver, soundbar, or TV remote, looking at a small receiver display across the room can be difficult. 
-> 
-> The integration tracks volume changes in real time:
-> * **Instant Visual Feedback:** The moment the `volume_level` attribute changes on your tracked media player, the Pixoo temporarily displays a high-visibility volume level HUD overlay.
-> * **Auto-Revert:** Once volume adjustment stops, the display smoothly returns to the current album artwork or live lyrics without skipping a beat.
-
-</details>
-
-<details>
-<summary><strong>🗄️ Q: How does the integration use MusicBrainz & Cover Art Archive?</strong></summary>
-
-> For music purists, offline CD rips, and vinyl collectors, the integration includes native integration with **MusicBrainz** and the **Internet Archive's Cover Art Archive**:
+> For offline CD rips, vinyl rips, and purists:
 > * **Intelligent Querying:** Queries releases by exact artist and track name using strict metadata filtering.
-> * **Rate-Limit Resilient:** Features a built-in rate-limiting governor compliant with MusicBrainz API policies (1 request per second) to prevent IP throttling.
+> * **Rate-Limit Resilient:** Built-in rate-limiting governor compliant with MusicBrainz API policies (1 request per second) prevents IP throttling.
 > * **Front Cover Priority:** Automatically pulls verified `250px` high-quality front cover art directly from the archive.
 
 </details>
 
 <details>
-<summary><strong>✂️ Q: How does the Crop Engine (Standard vs. Extra Crop) work?</strong></summary>
+<summary><strong>✂️ How does the Crop Engine (Standard vs. Extra Crop) work?</strong></summary>
 
-> Pixoo's 64×64 LED resolution requires specialized image composition. The integration offers two intelligent cropping algorithms:
+> Pixoo's 64×64 LED resolution requires specialized image composition:
 > 
 > * **Standard Crop:** Trims outer black letterboxing, white scanner margins, and pillarbox bars while preserving full album sleeves and typography.
 > * **Extra Crop (Subject Isolation):**
->   * **Nested Container Unwrapping:** Detects when an album has a colored vertical band or card (e.g. *Eurythmics - Sweet Dreams*) and extracts the inner photo without border bleed.
+>   * **Nested Container Unwrapping:** Detects colored vertical bands or card borders (e.g. *Eurythmics - Sweet Dreams*) and extracts the inner photo without border bleed.
 >   * **Subject Clustering:** Detects two or more adjacent subjects (e.g. *Pet Shop Boys*) and groups them together into a unified square, preventing two-person shots from being sliced in half.
->   * **Typographic Framing:** Automatically detects minimalist covers (e.g. *Charli XCX - Brat*) and frames the text with balanced negative space rather than collapsing on hollow letter loops.
+>   * **Typographic Framing:** Detects minimalist covers (e.g. *Charli XCX - Brat*) and frames the text with balanced negative space rather than collapsing on hollow letter loops.
 
 </details>
 
 <details>
-<summary><strong>🔀 Q: Why does the integration sometimes show a different album cover than the one I am actually listening to?</strong></summary>
+<summary><strong>✨ Can I apply visual effects or filters to the album art?</strong></summary>
 
-> This is a completely normal phenomenon and is an intentional design choice to keep your screen active and beautiful!
+> Yes! Downscaling high-res album covers to 64×64 can sometimes make them look soft. The built-in **Image Filter Engine** applies Pillow-based pre-scale and post-scale processing:
 > 
-> **Here is why it happens:**
-> 1. **Multiple Releases:** A single song very often exists across multiple releases. The exact same track might be featured on the original studio album, a "Greatest Hits" compilation, a movie soundtrack, or as a standalone single.
-> 2. **Smart Search Logic:** When the integration falls back to querying external APIs (like Spotify, Last.fm, or TIDAL), it searches primarily using the **Artist Name + Track Title**, rather than strictly forcing an exact match on the Album Name.
-> 3. **Messy Metadata:** Album names provided by streaming services or local files are notoriously messy (often appending tags like *"Deluxe Edition"*, *"Remastered 2023"*, or *"Bonus Track Version"*). If the integration enforced a strict 1:1 album name match, the vast majority of API queries would fail.
+> * **Vibrant:** Boosts saturation, contrast, and sharpness (makes LEDs pop).
+> * **Retro Arcade:** Posterizes the image and reduces bit-depth for a classic 8-bit/16-bit aesthetic.
+> * **Cyberpunk Neon:** Maximizes contrast, auto-levels, and enhances edges for a glowing look.
+> * **Noir B&W:** High-contrast grayscale conversion for a vintage aesthetic.
+> * **Crisp & Sharp:** Applies an unsharp mask to recover fine details lost during downscaling.
+
+</details>
+
+---
+
+### 🎛️ Modes & Smart Features
+
+<details>
+<summary><strong>🖼️ What is the difference between "Spotify Slider" and "Artist Slide" modes?</strong></summary>
+
+> Both replace the static cover with an animated carousel, but they pull different content:
 > 
-> By prioritizing the artist and track name, the engine maximizes the success rate of finding stunning, high-resolution artwork for the song, even if it happens to pull the cover of the single or the greatest hits compilation.
-
-</details>
-<details>
-<summary><strong>🌐 Q: Does this integration require an internet connection?</strong></summary>
-
-> **No, for local playback.** Communication between Home Assistant and the Pixoo64 happens entirely over your local area network (LAN HTTP POST). 
-> Internet access is only required if you use online fallback providers (Spotify, TheAudioDB, MusicBrainz, TIDAL, LRCLIB lyrics, or Pollinations AI).
+> * **Spotify Slider:** Requires your Spotify API credentials. It searches Spotify for the current artist and builds an animated carousel using the **Album Covers** of their top releases (Singles, EPs, Albums).
+> * **Artist Slide:** Requires **no API keys** (completely free). It uses TheAudioDB to fetch high-quality **Artist Fanart, Backgrounds, and Portraits**. Ideal if you want to see the actual band or artist rather than album covers.
 
 </details>
 
 <details>
-<summary><strong>📡 Q: How do I set a static IP for my Pixoo64?</strong></summary>
+<summary><strong>🤖 What is the "Force AI" display mode?</strong></summary>
 
-> It is strongly recommended to assign a permanent **DHCP Reservation** for your Pixoo64 within your home router's admin settings to ensure its LAN IP address never changes.
+> **Force AI** intentionally bypasses traditional album art sources. Instead, it sends the current "Artist" and "Track Title" as a prompt to Pollinations AI to dynamically generate a unique, conceptual pop-art visual for the song. Recommended for obscure indie tracks, DJ sets, or live bootlegs lacking official art.
 
 </details>
 
 <details>
-<summary><strong>🖼️ Q: What is the difference between "Spotify Slider" and "Artist Slide" modes?</strong></summary>
+<summary><strong>📺 How does the Intelligent TV Mode work?</strong></summary>
 
-> Both modes replace the static album cover with a dynamic, animated slideshow, but they use different sources and display different content:
+> Streaming devices and modern smart TVs connected via HDMI eARC often populate media players with metadata like `"TV"`, `"Audio Return Channel"`, or streaming app names rather than music tracks. 
 > 
-> * **Spotify Slider:** Requires your personal Spotify API keys. It searches Spotify for the currently playing artist and builds an animated carousel using the **Album Covers** of their top releases (Singles, EPs, and Albums). 
-> * **Artist Slide:** Requires **NO API keys** (completely free). It uses TheAudioDB to fetch high-quality **Artist Fanart, Backgrounds, and Portraits**. This is perfect if you want to see the actual band/singer on your screen instead of album squares, or if you don't use Spotify at all.
+> The **TV Mode engine**:
+> 1. **Auto-Detects TV Inputs:** Monitors `media_title`, `media_artist`, `app_name`, `source`, and `media_channel` (detects HDMI ARC, Netflix, YouTube, Disney+, Apple TV, etc.).
+> 2. **Renders TV Visual (`TV_IS_ON_ICON`):** Music features are suspended, and the display switches to a **Retro Color-Bar Television** with a classic wood-grain cabinet, dual antennas, and a SMPTE test pattern.
 
 </details>
 
 <details>
-<summary><strong>⏱️ Q: The live lyrics are slightly out of sync with the music. Can I fix this?</strong></summary>
+<summary><strong>🔊 How does the Dynamic Volume HUD Effect work?</strong></summary>
 
-> Yes! Depending on your setup (Bluetooth speakers, AirPlay, or Sonos multi-room), there is often an inherent audio delay. 
-> 
-> You can easily calibrate this by going to the integration's **Configure** menu and adjusting the **Lyrics Sync Offset**. You can add or subtract seconds (e.g., `1.5` or `-0.8`) to perfectly match the text rendering on the Pixoo64 with the audio hitting your ears.
-
-</details>
-<details>
-<summary><strong>✨ Q: Can I apply visual effects or filters to the album art?</strong></summary>
-
-> Yes! Scaling high-resolution album covers down to a 64x64 pixel grid can sometimes make them look soft or slightly washed out. To fix this, the integration includes a dedicated **Image Filter Engine** that applies professional pre-scale and post-scale processing using Python's Pillow library.
-> 
-> You can select from several curated styles directly from the Home Assistant UI:
-> * **Vibrant:** Boosts color saturation, contrast, and sharpness. (Highly recommended to make the LEDs truly pop).
-> * **Retro Arcade:** Posterizes the image and reduces the color bit-depth for a classic 8-bit / 16-bit video game vibe.
-> * **Cyberpunk Neon:** Maximizes contrast, auto-levels, and applies edge enhancement for a glowing, neon-drenched look.
-> * **Noir B&W:** Converts the artwork to high-contrast grayscale for a moody, vintage aesthetic.
-> * **Crisp & Sharp:** Applies an unsharp mask to recover fine details and lines that are usually lost during the extreme downscaling process.
-
-</details>
-<details>
-<summary><strong>💡 Q: How does the ambient lighting (WLED/RGB) sync work? Will it turn on my lights during the day?</strong></summary>
-
-> The integration features a built-in Color Science analyzer that extracts the most prominent and vibrant color palette from the currently playing album art. It then pushes these colors to your selected Home Assistant light entities or WLED strips.
-> 
-> To prevent wasting energy, you can enable the **Only at Night** toggle in the configuration. When enabled, the integration checks the native `sun.sun` state in Home Assistant and will only synchronize your room lights if the sun is below the horizon.
+> When you adjust the volume on your receiver, soundbar, or TV remote:
+> * **Instant Visual Feedback:** The moment the `volume_level` attribute changes on your media player, the Pixoo temporarily displays a high-visibility volume HUD overlay.
+> * **Auto-Revert:** Once volume adjustment stops, the display smoothly returns to the current album artwork or live lyrics.
 
 </details>
 
 <details>
-<summary><strong>🚀 Q: Won't downloading high-res images and running AI models slow down my Home Assistant?</strong></summary>
+<summary><strong>⏱️ The live lyrics are slightly out of sync with the music. Can I fix this?</strong></summary>
 
-> Not at all. The integration uses a highly optimized, asynchronous **Prefetch Engine**. 
+> Yes. Latency from Bluetooth, AirPlay, or Sonos multi-room setups can create slight offsets.
 > 
-> If you enable the **Playlist Prefetch** option, the integration looks ahead into your media player's queue and downloads, crops, and processes the upcoming album art *before* the current song finishes. Everything is stored in a strict, lightweight RAM cache (capped at 40 items), ensuring that the moment the next track starts, the Pixoo transitions instantly with zero delay or loading screens.
+> Navigate to the integration's **Configure** menu and adjust the **Lyrics Sync Offset** (e.g., enter `1.5` or `-0.8` seconds) to align the lyrics on the Pixoo64 with the audio.
 
 </details>
 
 <details>
-<summary><strong>🤖 Q: What is the "Force AI" display mode?</strong></summary>
+<summary><strong>💡 How does ambient lighting (WLED/RGB) sync work? Will it turn on my lights during the day?</strong></summary>
 
-> **Force AI** intentionally bypasses all traditional album art databases (Spotify, Apple Music, Local Files). Instead, it takes the current "Artist" and "Track Title" and sends them as a prompt to the Pollinations AI generative model. 
+> The integration's Color Science analyzer extracts the dominant, vibrant palette from the playing album art and pushes it to your selected Home Assistant lights or WLED strips.
 > 
-> The AI dynamically generates a unique, vibrant, conceptual pop-art representation of the song. This is highly recommended for users who listen to a lot of obscure indie music, live bootlegs, or DJ sets that typically don't have official cover art.
+> To prevent daytime activation, enable the **Only at Night** toggle in configuration. The integration will check Home Assistant's `sun.sun` state and only synchronize room lights when the sun is below the horizon.
 
 </details>
+
+---
+
+### ⚡ Performance & Caching
+
+<details>
+<summary><strong>🚀 Won't downloading high-res images and running AI models slow down my Home Assistant?</strong></summary>
+
+> Not at all. The integration uses a non-blocking asynchronous **Prefetch Engine**.
+> 
+> When **Playlist Prefetch** is enabled, it inspects your media player's queue and downloads, crops, and processes upcoming album covers *before* the current song finishes. Everything is held in a strict, lightweight RAM cache (capped at 40 items), enabling instant track transitions with zero UI delay.
+
+</details>
+
 
 ---
 

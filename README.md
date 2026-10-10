@@ -52,7 +52,7 @@ It is a **100% native Home Assistant custom integration**:
 | :--- | :--- |
 | 🖼️ **Adaptive Crop Engine** | **Standard Crop** trims margins while keeping typography. **Extra Crop** unwraps nested borders, groups multi-person subjects, and frames minimalist text covers. |
 | 🧑‍🎤 **Dynamic Artist Gallery** | A dedicated **Artist Slide** mode (also used as a fallback layer) that parses artist names and fetches high-quality fanart from TheAudioDB. |
-| 💿 **Vintage Animations** | **Vinyl Turntable** and **Cassette Tape** animations with transparent grooves, glossy reflections, and full-width micro-pixel track labels. |
+| 💿 **Vintage Animations** | **Vinyl Turntable** and **Cassette Tape** and **Analog CLock** animations with transparent grooves, glossy reflections, and full-width micro-pixel track labels. |
 | 🌊 **Multi-Tier Fallback** | When artwork is missing: **Local HA ➔ Spotify ➔ Discogs / Last.fm / TIDAL ➔ MusicBrainz / Internet Archive ➔ TheAudioDB ➔ Pollinations AI ➔ Minimalist Slate**. |
 | 🔊 **Real-Time Volume HUD** | Detects volume changes on your AVR, soundbar, or media player and briefly shows a high-visibility volume indicator. |
 | 📺 **Intelligent TV Mode** | Detects HDMI-ARC, streaming apps, and live TV sources, then shows a hand-crafted retro pixel TV with antennas and SMPTE color bars. |

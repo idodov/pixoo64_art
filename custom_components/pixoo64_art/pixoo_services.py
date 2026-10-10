@@ -101,6 +101,8 @@ class Config:
         self.spotify_client_secret = get_val("spotify_client_secret", "")
         self.musicbrainz = get_val("musicbrainz_enabled", True)
         self.internet_archive = get_val("internet_archive_enabled", True)
+        self.audiodb_enabled = get_val("audiodb_enabled", True)
+        self.prefetch_enabled = get_val("prefetch_enabled", False)
         self.tidal_client_id = get_val("tidal_client_id", "")
         self.tidal_client_secret = get_val("tidal_client_secret", "")
         self.lastfm = get_val("lastfm_key", "")
@@ -112,6 +114,7 @@ class Config:
         self.artist_slide = False
         self.vinyl_mode = False
         self.cassette_mode = False
+        self.analog_clock = False
         
         self.show_text = False
         self.clean_title = True
@@ -124,7 +127,7 @@ class Config:
         self.burned = False
         self.crop_borders = True
         self.crop_extra = False
-        self.images_cache = 40  # Strict cap of 40 images
+        self.images_cache = 40
         self.full_control = False
         self.contrast = False
         self.sharpness = False
@@ -873,47 +876,193 @@ class ImageProcessor:
     def _process_image(self, image_data: bytes, media_data: "MediaData") -> Optional[dict]:
         try:
             with Image.open(BytesIO(image_data)) as img:
-                img.load() 
+                img.load()
                 img = ensure_rgb(img)
-                if not img: return None
-                
-                max_dimension = 320
-                if max(img.size) > max_dimension:
-                    scale_factor = max_dimension / max(img.size)
-                    img = img.resize((int(img.width * scale_factor), int(img.height * scale_factor)), Image.Resampling.BILINEAR)
-
-                if (getattr(self.config, 'crop_borders', False) or getattr(self.config, 'special_mode', False)) and not media_data.radio_logo:
-                    img = self.crop_image_borders(img, media_data.radio_logo)
+                if img is None:
+                    return None
 
                 img = self.fixed_size(img)
-                
-                # Pre-scale filter application
+                radio_logo = getattr(media_data, 'radio_logo', False)
+                clean_img = self.crop_image_borders(img, radio_logo)
+
+                val_dict = self.img_values(clean_img)
+                palette = self.get_image_palette(clean_img)
+
+                def _rgb_to_hex(c):
+                    return f"#{int(c[0]):02x}{int(c[1]):02x}{int(c[2]):02x}"
+
+                color1 = _rgb_to_hex(palette[0]) if len(palette) > 0 else "#FFFFFF"
+                color2 = _rgb_to_hex(palette[1]) if len(palette) > 1 else color1
+                color3 = _rgb_to_hex(palette[2]) if len(palette) > 2 else color2
+
+                display_img = clean_img.copy()
                 filter_mode = getattr(self.config, 'image_filter', 'None')
-                img = self.filter_service.apply_pre_scale(img, filter_mode)
+                display_img = self.filter_service.apply_pre_scale(display_img, filter_mode)
+                display_img = display_img.resize((64, 64), Image.Resampling.BILINEAR)
 
-                if getattr(self.config, 'burned', False) and not media_data.radio_logo:
-                    img = img.resize((64, 64), Image.Resampling.BILINEAR)
-                    img = self._draw_burned_text(img, media_data.artist, media_data.title)
-                
                 if getattr(self.config, 'special_mode', False):
-                    img = self.special_mode(img)
+                    display_img = self.special_mode(display_img)
 
-                img = img.resize((64, 64), Image.Resampling.BILINEAR)
+                if getattr(self.config, 'burned', False):
+                    display_img = self._draw_burned_text(display_img, media_data.artist, media_data.title)
 
-                # Post-scale filter application
-                img = self.filter_service.apply_post_scale(img, filter_mode)
+                display_img = self.filter_service.apply_post_scale(display_img, filter_mode)
 
-                vals = self.img_values(img)
+                clean_64 = clean_img.resize((64, 64), Image.Resampling.BILINEAR)
+                is_analog = getattr(self.config, 'analog_clock', False)
+                final_pil = clean_64 if is_analog else display_img
+
                 return {
-                    'pil_image': img, 
-                    'font_color': vals['font_color'], 
-                    'brightness_lower_part': vals['brightness_lower_part'], 
-                    'background_color_rgb': vals['background_color_rgb'],
-                    'background_color': vals['background_color']
+                    'pil_image': final_pil,
+                    'clean_image': clean_64,
+                    'font_color': val_dict.get('font_color', '#FFFFFF'),
+                    'brightness_lower_part': val_dict.get('brightness_lower_part', 0.5),
+                    'background_color_rgb': val_dict.get('background_color_rgb', (0, 0, 0)),
+                    'background_color': val_dict.get('background_color', '#000000'),
+                    'color1': color1,
+                    'color2': color2,
+                    'color3': color3,
                 }
-        except Exception:
+        except Exception as e:
+            _LOGGER.error("Error in _process_image: %s", e)
             return None
 
+    process_image = _process_image
+
+    def _draw_burned_text(self, img: Image.Image, artist: str, title: str) -> Image.Image:
+        if not (artist or title): 
+            return img
+        thumb = img.resize((16, 16), Image.Resampling.BICUBIC)
+        pixels = list(thumb.getdata())
+        bg = tuple(sum(ch) // len(pixels) for ch in zip(*pixels))  
+        
+        def contrast(c1, c2):
+            def _lum(c):
+                r,g,b = [v/255 for v in c]
+                r = r/12.92 if r<=0.03928 else ((r+0.055)/1.055)**2.4
+                g = g/12.92 if g<=0.03928 else ((g+0.055)/1.055)**2.4
+                b = b/12.92 if b<=0.03928 else ((b+0.055)/1.055)**2.4
+                return 0.2126*r + 0.7152*g + 0.0722*b
+            l1, l2 = _lum(c1)+0.05, _lum(c2)+0.05
+            return max(l1,l2)/min(l1,l2)
+            
+        palette = COLOR_PALETTE.copy()
+        random.shuffle(palette)
+        artist_rgb = title_rgb = None
+        for cand in palette:
+            if contrast(cand, bg) > 4.5:
+                if not artist_rgb: artist_rgb = cand
+                elif not title_rgb: title_rgb = cand; break
+                
+        if not artist_rgb: artist_rgb = (255, 255, 255)
+        if not title_rgb: title_rgb = (255, 255, 0)
+
+        artist_shadow = (*tuple(255 - c for c in artist_rgb), 180)
+        title_shadow  = (*tuple(255 - c for c in title_rgb), 180)
+
+        img_copy = img.copy().convert("RGBA")
+        layer = ImageDraw.Draw(img_copy)
+        font = self.config.default_font
+        max_w = img.width - 4
+        
+        def _wrap(text):
+            if not text: return []
+            words = text.split()
+            lines, cur = [], ""
+            for w in words:
+                test = f"{cur} {w}".strip() if cur else w
+                if layer.textbbox((0,0), test, font=font)[2] <= max_w: 
+                    cur = test
+                else:
+                    if cur: lines.append(cur)
+                    cur = w
+            if cur: lines.append(cur)
+            return lines
+
+        artist_lines = _wrap(artist)
+        title_lines = _wrap(title)
+        
+        if not artist_lines and not title_lines: 
+            return img.convert("RGB")
+
+        y = max(2, (img.height - ((len(artist_lines) + len(title_lines)) * 11 + 4)) // 2)
+
+        for line in artist_lines:
+            line_to_draw = get_bidi(line) if has_bidi(line) else line
+            w = layer.textbbox((0,0), line_to_draw, font=font)[2]
+            x = (img.width - w) // 2
+            layer.text((x + 1, y + 1), line_to_draw, font=font, fill=artist_shadow)
+            layer.text((x, y), line_to_draw, font=font, fill=(*artist_rgb, 255))
+            y += 11
+
+        if artist_lines and title_lines: 
+            y += 4
+
+        for line in title_lines:
+            line_to_draw = get_bidi(line) if has_bidi(line) else line
+            w = layer.textbbox((0,0), line_to_draw, font=font)[2]
+            x = (img.width - w) // 2
+            layer.text((x + 1, y + 1), line_to_draw, font=font, fill=title_shadow)
+            layer.text((x, y), line_to_draw, font=font, fill=(*title_rgb, 255))
+            y += 11
+
+        return img_copy.convert("RGB")
+
+    def text_clock_img(self, img: Image.Image, cached_data: dict, media_data: "MediaData") -> Image.Image:
+        if getattr(self.config, 'special_mode', False):
+            return img
+
+        if getattr(self.config, 'show_lyrics', False) and len(media_data.lyrics) > 0 and not getattr(media_data, 'playing_tv', False):
+            if getattr(self.config, 'text_bg', False) and not getattr(media_data, 'playing_radio', False):
+                stat = ImageStat.Stat(img.convert("L"))
+                mean_lum = stat.mean[0] if stat.mean else 100.0
+                factor = max(0.25, min(0.55, 1.0 - (mean_lum / 220.0)))
+                img = ImageEnhance.Brightness(img).enhance(factor)
+                img = ImageEnhance.Contrast(img).enhance(0.65)
+            return img
+
+        is_top = getattr(self.config, 'overlay_top', True)
+        y_start, y_end = (2, 9) if is_top else (55, 62)
+        align_mode = getattr(self.config, 'overlay_align', 'Clock Right, Temp Left')
+
+        if bool(getattr(self.config, 'show_clock', False) and getattr(self.config, 'text_bg', False)):
+            if align_mode == "Clock Left, Temp Right":
+                lpc_clock = (2, y_start, 21, y_end)
+            elif align_mode == "Centered" and not getattr(self.config, 'temperature', False):
+                lpc_clock = (21, y_start, 43, y_end)
+            elif align_mode == "Centered":
+                lpc_clock = (35, y_start, 62, y_end)
+            else: 
+                lpc_clock = (43, y_start, 62, y_end)
+
+            clock_crop = img.crop(lpc_clock)
+            stat = ImageStat.Stat(clock_crop.convert("L"))
+            factor = max(0.2, 1.0 - (stat.mean[0] / 200.0))
+            img.paste(ImageEnhance.Brightness(clock_crop).enhance(factor), lpc_clock)
+
+        if bool(getattr(self.config, 'temperature', False) and getattr(self.config, 'text_bg', False)):
+            if align_mode == "Clock Left, Temp Right":
+                lpc_temp = (47, y_start, 63, y_end)
+            elif align_mode == "Centered" and not getattr(self.config, 'show_clock', False):
+                lpc_temp = (23, y_start, 41, y_end)
+            else: 
+                lpc_temp = (2, y_start, 18, y_end)
+
+            temp_crop = img.crop(lpc_temp)
+            stat = ImageStat.Stat(temp_crop.convert("L"))
+            factor = max(0.2, 1.0 - (stat.mean[0] / 200.0))
+            img.paste(ImageEnhance.Brightness(temp_crop).enhance(factor), lpc_temp)
+
+        if getattr(self.config, 'text_bg', False) and getattr(self.config, 'show_text', False) and not getattr(media_data, 'playing_tv', False) and not getattr(self.config, 'burned', False):
+            lpc = (0, 0, 64, 16) if getattr(self.config, 'top_text', False) else (0, 48, 64, 64)
+            lower_part_img = img.crop(lpc)
+            stat = ImageStat.Stat(lower_part_img.convert("L"))
+            factor = max(0.1, 1.0 - (stat.mean[0] / 180.0))
+            img.paste(ImageEnhance.Brightness(lower_part_img).enhance(factor), lpc)
+
+        return img
+
+    
     def crop_image_borders(self, img: Image.Image, radio_logo: bool) -> Image.Image:
         return self.cropper.crop_image_borders(img, self.config, radio_logo)
 
@@ -1153,6 +1302,19 @@ class ImageProcessor:
     def generate_cassette_frames(self, pil_image: Image.Image, media_data: "MediaData") -> List[str]:
         return CassetteRenderer.render_frames(pil_image, self, media_data)
 
+    def generate_analog_clock_frame(self, pil_image: Image.Image, media_data: "MediaData") -> Optional[str]:
+        try:
+            clean_canvas = pil_image.copy()
+            clock_img = AnalogClockRenderer.render(clean_canvas)
+            
+            filter_mode = getattr(self.config, 'image_filter', 'None')
+            clock_img = self.filter_service.apply_post_scale(clock_img, filter_mode)
+            clock_img = self.text_clock_img(clock_img, {}, media_data)
+            return self.gbase64(clock_img)
+        except Exception as e:
+            _LOGGER.error("Error generating analog clock frame: %s", e)
+            return None
+
 # =========================================================================
 # VINTAGE CASSETTE TAPE ANIMATION RENDERER (MICRO-PIXEL FONT & TRANSLIT)
 # =========================================================================
@@ -1302,6 +1464,7 @@ class CassetteRenderer:
         if len(translit) > max_chars:
             return f"{translit[:int(max_chars) - 2].strip()}.."
         return translit
+    
 
 class VinylRenderer:
     """Generates an ultra-smooth 32-frame spinning vinyl turntable animation
@@ -1907,6 +2070,9 @@ class TheAudioDbProvider:
         self.session = session
 
     async def get_artist_images(self, artist: str) -> List[str]:
+        if not getattr(self.session, "_audiodb_enabled", True):
+            return []
+
         clean_artist = str(artist or "").strip()
         if not clean_artist or clean_artist == "Unknown Artist":
             return []
@@ -2201,7 +2367,7 @@ class FallbackService:
                     media_data.pic_source = provider_name
                     return proc_result
 
-        if not getattr(self.config, 'force_ai', False):
+        if not getattr(self.config, 'force_ai', False) and getattr(self.config, 'audiodb_enabled', True):
             audiodb_urls = await self.audiodb_provider.get_artist_images(media_data.artist)
             if audiodb_urls:
                 for img_url in audiodb_urls:
@@ -3737,3 +3903,111 @@ class ProgressBarManager:
             {"TextId": 20, "type": 22, "x": 0, "y": self.config.progress_bar_y_offset-7, "dir": 0, "font": self.config.progress_bar_font, "TextWidth": 64, "Textheight": 10, "speed": 100, "align": 1, "TextString": self.current_bar_str, "color": color},
             {"TextId": 21, "type": 22, "x": 1, "y": self.config.progress_bar_y_offset-7, "dir": 0, "font": self.config.progress_bar_font, "TextWidth": 64, "Textheight": 10, "speed": 100, "align": 1, "TextString": self.current_bar_str, "color": color}
         ]
+
+class AnalogClockRenderer:
+    """Renderer for classical analog clock on 64x64 pixel display with dimmed album art."""
+
+    CENTER = (31.5, 31.5)
+    RADIUS = 28.0
+
+    # Colors
+    COLOR_BEZEL = (90, 95, 105)
+    COLOR_MAJOR_TICK = (255, 240, 200)
+    COLOR_MINOR_TICK = (160, 165, 175)
+    COLOR_OUTLINE = (0, 0, 0)
+    COLOR_HOUR_HAND = (255, 255, 255)   
+    COLOR_MINUTE_HAND = (255, 205, 50)
+    COLOR_PIN = (230, 230, 235)
+
+    @classmethod
+    def render(cls, album_art: Image.Image, now: datetime | None = None) -> Image.Image:
+        """Draw an analog clock frame over album art."""
+        if now is None:
+            now = datetime.now()
+
+        base = Image.new("RGB", (64, 64), (0, 0, 0))
+
+        art_64 = album_art.convert("RGBA").resize((64, 64), Image.Resampling.BILINEAR)
+        dim_layer = Image.new("RGBA", (64, 64), (0, 0, 0, 135)) 
+        dimmed_art = Image.alpha_composite(art_64, dim_layer)
+
+        circle_mask = Image.new("L", (64, 64), 0)
+        mask_draw = ImageDraw.Draw(circle_mask)
+        cx, cy = cls.CENTER
+        r = cls.RADIUS
+        mask_draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=255)
+
+        base.paste(dimmed_art.convert("RGB"), (0, 0), circle_mask)
+
+        draw = ImageDraw.Draw(base)
+
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=cls.COLOR_BEZEL, width=1)
+
+        cls._draw_ticks(draw, cx, cy, r)
+
+        minute = now.minute
+        hour = now.hour % 12
+        second = now.second
+
+        min_angle = (minute + second / 60.0) * 6.0
+        hour_angle = (hour + minute / 60.0) * 30.0
+
+        cls._draw_hand(
+            draw, cx, cy, hour_angle, length=13.0, width=2,
+            color=cls.COLOR_HOUR_HAND, outline_color=cls.COLOR_OUTLINE
+        )
+
+        cls._draw_hand(
+            draw, cx, cy, min_angle, length=22.0, width=1,
+            color=cls.COLOR_MINUTE_HAND, outline_color=cls.COLOR_OUTLINE
+        )
+
+        draw.ellipse([cx - 1.5, cy - 1.5, cx + 1.5, cy + 1.5], fill=cls.COLOR_PIN)
+        draw.point((int(cx), int(cy)), fill=cls.COLOR_OUTLINE)
+
+        return base
+
+    @classmethod
+    def _draw_ticks(cls, draw: ImageDraw.ImageDraw, cx: float, cy: float, r: float) -> None:
+        """Draw classical hour markers."""
+        for h in range(12):
+            angle_rad = math.radians(h * 30.0 - 90.0)
+            cos_a = math.cos(angle_rad)
+            sin_a = math.sin(angle_rad)
+
+            if h % 3 == 0:
+                r_in = r - 3.5
+                r_out = r - 1.0
+                x1 = cx + r_in * cos_a
+                y1 = cy + r_in * sin_a
+                x2 = cx + r_out * cos_a
+                y2 = cy + r_out * sin_a
+                draw.line([(x1, y1), (x2, y2)], fill=cls.COLOR_MAJOR_TICK, width=1)
+            else:
+                r_dot = r - 2.0
+                x = int(round(cx + r_dot * cos_a))
+                y = int(round(cy + r_dot * sin_a))
+                draw.point((x, y), fill=cls.COLOR_MINOR_TICK)
+
+    @classmethod
+    def _draw_hand(
+        cls,
+        draw: ImageDraw.ImageDraw,
+        cx: float,
+        cy: float,
+        angle_deg: float,
+        length: float,
+        width: int,
+        color: tuple[int, int, int],
+        outline_color: tuple[int, int, int],
+    ) -> None:
+        """Draw clock hand with shadow/outline for high visibility."""
+        angle_rad = math.radians(angle_deg - 90.0)
+        cos_a = math.cos(angle_rad)
+        sin_a = math.sin(angle_rad)
+
+        tip_x = cx + length * cos_a
+        tip_y = cy + length * sin_a
+
+        draw.line([(cx, cy), (tip_x, tip_y)], fill=outline_color, width=width + 2)
+        draw.line([(cx, cy), (tip_x, tip_y)], fill=color, width=width)

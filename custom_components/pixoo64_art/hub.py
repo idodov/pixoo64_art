@@ -8,12 +8,13 @@ from typing import Optional, Tuple, List, Dict
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event, async_call_later
 
-from .const import CONF_PIXOO_IP, CONF_MEDIA_PLAYER, CONF_PLAYLIST_PREFETCH
+from .const import CONF_PIXOO_IP, CONF_MEDIA_PLAYER, CONF_PLAYLIST_PREFETCH, CONF_LIGHT_ENTITY, CONF_WLED_IP
 from .pixoo_services import (
     Config, PixooDevice, ImageProcessor, SpotifyService, FallbackService,
     LyricsProvider, MediaData, ProgressBarManager, NotificationManager,
     has_bidi, get_bidi
 )
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,17 +32,22 @@ class AmbientLightingController:
 
     async def control_light(self, action: str, rgb_color: tuple = None, is_night: bool = True):
         if not is_night and getattr(self.config, 'only_at_night', False):
+            _LOGGER.debug("Ambient light skipped: only_at_night is True and is_night is False")
             return
             
         light_entities = getattr(self.config, 'light_entity', [])
         if not light_entities:
+            _LOGGER.debug("Ambient light skipped: no light entities configured")
             return
             
         entities = light_entities if isinstance(light_entities, list) else [light_entities]
         for entity_id in entities:
             service_data = {"entity_id": entity_id}
             if action == 'on' and rgb_color:
-                service_data["rgb_color"] = rgb_color
+                r, g, b = int(rgb_color[0]), int(rgb_color[1]), int(rgb_color[2])
+                if r == 0 and g == 0 and b == 0:
+                    r, g, b = 255, 255, 255
+                service_data["rgb_color"] = [r, g, b]
                 service_data["transition"] = 1
                 
             try:
@@ -50,6 +56,9 @@ class AmbientLightingController:
                 _LOGGER.error("Failed to control light %s: %s", entity_id, e)
 
     async def control_wled_light(self, action: str, colors: list = None, is_night: bool = True):
+        if not is_night and getattr(self.config, 'only_at_night', False):
+            return
+            
         wled_ip = getattr(self.config, 'wled_ip', None)
         if not wled_ip:
             return
@@ -207,6 +216,10 @@ class PixooHub:
         self.progress_timer_gen_id = 0
         self.scheduler_generation_id = 0
         self.last_progress_str = ""
+        self.clock_timer_gen_id = 0
+        self._current_clock_pil_img = None
+        self._current_clock_song_key = None
+        self.last_progress_str = ""
         
         self.osd_mode = None
         self.last_volume_level = 0.0
@@ -216,6 +229,7 @@ class PixooHub:
         self._prefetch_task = None
         self._playlist_prefetch_task = None
         self._progress_timer_unsub = None
+        self._clock_timer_unsub = None
         self._lyrics_timer_unsub = None
         self._pending_render_unsub = None
         self._prefetch_timer_unsub = None
@@ -258,7 +272,7 @@ class PixooHub:
             '_progress_timer_unsub', '_lyrics_timer_unsub', 
             '_pending_render_unsub', '_prefetch_timer_unsub', 
             '_early_send_timer_unsub', '_pause_timeout_unsub',
-            '_volume_osd_timer_unsub'
+            '_volume_osd_timer_unsub', '_clock_timer_unsub'
         ]
         for attr in (timers or default_timers):
             unsub = getattr(self, attr, None)
@@ -318,7 +332,7 @@ class PixooHub:
         )
         
         state = self.hass.states.get(self.media_player)
-        if state and state.state in ["playing", "on"]:
+        if state and self._is_player_active(state):
             await self.force_update()
             queue, current_idx = await self._fetch_player_queue()
             if queue:
@@ -340,23 +354,58 @@ class PixooHub:
         self.cached_static_items = []
         self.last_text_payload_hash = None
         self.last_progress_str = ""
-        self._active_song_key = None 
+
+        if key == "master_control":
+            if not value:
+                await self._send_off_command()
+            else:
+                self._active_song_key = None
+                await self.force_update()
+            return
+
+        if key == "pause_timeout":
+            if self.osd_mode == "Pause":
+                pause_setting = str(value)
+                if pause_setting in ["Disabled (0s)", "0s", "Disabled"]:
+                    await self._send_off_command()
+                elif pause_setting != "Never":
+                    timeout_val = int(pause_setting.replace("s", "").split()[0])
+                    self._cleanup_timers(['_pause_timeout_unsub'])
+                    self._pause_timeout_unsub = async_call_later(self.hass, timeout_val, self._execute_pause_timeout)
+            return
+
+        image_affecting_keys = {
+            "display_mode", "crop_mode", "image_filter", 
+            "force_ai", "text_background", "text_position"
+        }
+
+        if key not in image_affecting_keys:
+            if self.is_art_visible:
+                if self.lyrics_active_mode:
+                    await self._calculate_and_schedule_next()
+                else:
+                    self.request_text_render(force=True)
+
+                if key == "progress_bar":
+                    self.progress_timer_gen_id += 1
+                    await self._update_progress_bar_loop()
+            return
+
+        self._early_slider_sent_for = None
+        self.image_processor.image_cache.clear()
+        self.image_processor.raw_image_cache.clear()
+        if hasattr(self.fallback_service, "_artwork_cache"):
+            self.fallback_service._artwork_cache.clear()
         
-        if key in ["force_ai", "crop_mode", "text_background", "text_position", "display_mode", "overlay_position", "overlay_align", "image_filter"]:
-            self._early_slider_sent_for = None
-            self.image_processor.image_cache.clear()
-            self.image_processor.raw_image_cache.clear()
-            if hasattr(self.fallback_service, "_artwork_cache"):
-                self.fallback_service._artwork_cache.clear()
-            
-            if hasattr(self, 'media_data'):
-                self.media_data.slider_album_urls = []
-                self.media_data.slider_artist_pic_url = None
-                self.media_data.slider_frames = 0
-                self.media_data.spotify_slide_pass = False
-                self.media_data.artist_slide_pass = False
-                self.media_data.slider_error = None
-            
+        if hasattr(self, 'media_data'):
+            self.media_data.slider_album_urls = []
+            self.media_data.slider_artist_pic_url = None
+            self.media_data.slider_frames = 0
+            self.media_data.spotify_slide_pass = False
+            self.media_data.artist_slide_pass = False
+            self.media_data.slider_error = None
+        
+        self._active_song_key = None 
         await self.force_update()
 
     async def _send_off_command(self):
@@ -376,6 +425,7 @@ class PixooHub:
         self.spotify_slider_last_error = None
         self.playlist_prefetch_status = "Idle"
         
+        self._stop_clock_scheduler()
         self._cleanup_timers(['_prefetch_timer_unsub', '_early_send_timer_unsub', '_pause_timeout_unsub', '_volume_osd_timer_unsub'])
         self._cancel_tasks(['_prefetch_task', '_playlist_prefetch_task'])
         
@@ -433,6 +483,9 @@ class PixooHub:
         
         self.config.musicbrainz = options.get("musicbrainz_enabled", data.get("musicbrainz_enabled", True))
         self.config.internet_archive = options.get("internet_archive_enabled", data.get("internet_archive_enabled", True))
+        self.config.audiodb_enabled = options.get("audiodb_enabled", data.get("audiodb_enabled", True))
+        self.config.prefetch_enabled = options.get("prefetch_enabled", data.get("prefetch_enabled", False))
+        
         self.config.tidal_client_id = options.get("tidal_client_id", data.get("tidal_client_id", ""))
         self.config.tidal_client_secret = options.get("tidal_client_secret", data.get("tidal_client_secret", ""))
         self.config.lastfm = options.get("lastfm_key", data.get("lastfm_key", ""))
@@ -453,6 +506,11 @@ class PixooHub:
         self.config.image_filter = self.ui_state.get("image_filter", "None")
         
         self.config.playlist_prefetch_range = options.get(CONF_PLAYLIST_PREFETCH, data.get(CONF_PLAYLIST_PREFETCH, "Disabled"))
+
+        # Ambient Lighting & WLED Config
+        self.config.light_entity = options.get(CONF_LIGHT_ENTITY, data.get(CONF_LIGHT_ENTITY, []))
+        self.config.wled_ip = options.get(CONF_WLED_IP, data.get(CONF_WLED_IP, ""))
+        self.config.only_at_night = options.get("only_at_night", data.get("only_at_night", True))
 
         crop_mode = self.ui_state.get("crop_mode", "No Crop")
         self.config.crop_mode = crop_mode
@@ -499,6 +557,7 @@ class PixooHub:
         self.config.special_mode = ("special" in m)
         self.config.vinyl_mode = (m == "vinyl")
         self.config.cassette_mode = ("cassette" in m or "tape" in m)
+        self.config.analog_clock = ("analog clock" in m)
         
         self.config.spotify_slide = ("slider" in m and "artist" not in m) and self.is_spotify_available
         self.config.artist_slide = ("artist slide" in m or "artist gallery" in m)
@@ -641,6 +700,12 @@ class PixooHub:
         if not self.media_data or getattr(self.media_data, 'media_duration', 0) <= 0:
             return
 
+        # Prefetch check: allowed if explicitly enabled OR if force_ai is active
+        is_force_ai = getattr(self.config, 'force_ai', False)
+        is_prefetch_enabled = getattr(self.config, 'prefetch_enabled', False)
+        if not is_prefetch_enabled and not is_force_ai:
+            return
+
         pos = self.media_data.media_position
         if self.media_data.media_position_updated_at:
             pos += (datetime.now(timezone.utc) - self.media_data.media_position_updated_at).total_seconds()
@@ -651,7 +716,7 @@ class PixooHub:
             getattr(self.config, 'artist_slide', False) or 
             getattr(self.config, 'vinyl_mode', False) or 
             getattr(self.config, 'cassette_mode', False) or
-            getattr(self.config, 'force_ai', False)
+            is_force_ai
         )
         
         prefetch_offset = 35.0 if is_anim_mode else 20.0
@@ -931,11 +996,6 @@ class PixooHub:
         if not isinstance(queue, list) or not queue:
             return [], None
 
-        if isinstance(queue_pos, int):
-            norm_pos = queue_pos - 1 if queue_pos > 0 else 0
-            if 0 <= norm_pos < len(queue):
-                return queue, norm_pos
-
         curr_title = (self.media_data.title or "").strip().lower()
         curr_artist = (self.media_data.artist or "").strip().lower()
         if curr_title:
@@ -948,7 +1008,12 @@ class PixooHub:
                     if not curr_artist or curr_artist in a or a in curr_artist:
                         return queue, idx
 
-        return queue, 0
+        if isinstance(queue_pos, int) and queue_pos > 0:
+            norm_pos = queue_pos - 1
+            if 0 <= norm_pos < len(queue):
+                return queue, norm_pos
+
+        return queue, None
 
     async def _get_next_song_info(self) -> Optional[Tuple[str, str, str, str]]:
         queue, current_idx = await self._fetch_player_queue()
@@ -969,6 +1034,13 @@ class PixooHub:
         return None
 
     async def _run_playlist_prefetch(self):
+        is_force_ai = getattr(self.config, 'force_ai', False)
+        is_prefetch_enabled = getattr(self.config, 'prefetch_enabled', False)
+        if not is_prefetch_enabled and not is_force_ai:
+            self.playlist_prefetch_status = "Disabled (Prefetch disabled)"
+            self._update_prefetch_sensor_state()
+            return
+
         if getattr(self.config, 'spotify_slide', False) or getattr(self.config, 'artist_slide', False): 
             self.playlist_prefetch_status = "Disabled (Slider active)"
             self._update_prefetch_sensor_state()
@@ -1060,8 +1132,12 @@ class PixooHub:
             return
             
         state = self.hass.states.get(self.media_player)
-        if state and state.state in ["playing", "on"]:
+        if state and self._is_player_active(state):
             await self.media_data.update()
+            if not self.media_data.title and not getattr(self.media_data, 'playing_tv', False):
+                await self._send_off_command()
+                return
+
             self._fetch_external_temperature()
             queue, current_idx = await self._fetch_player_queue()
             if queue:
@@ -1074,7 +1150,7 @@ class PixooHub:
                 return
 
             self.media_data.track_changed = True
-            self._cleanup_timers(['_prefetch_timer_unsub', '_early_send_timer_unsub'])
+            self._cleanup_timers(['_prefetch_timer_unsub', '_early_send_timer_unsub', '_clock_timer_unsub'])
             self._cancel_tasks(['current_task', '_playlist_prefetch_task'])
             
             self.current_task = self.hass.async_create_task(self._process_and_send())
@@ -1110,17 +1186,17 @@ class PixooHub:
         if not new_state:
             return
         
-        osd_enabled = getattr(self.config, 'osd_overlay', "Enabled") == "Enabled"
+        pause_setting = self.ui_state.get("pause_timeout", "15s")
+        is_pause_enabled = pause_setting not in ["Disabled (0s)", "0s", "Disabled"]
 
         if new_state.state == "paused":
-            if osd_enabled:
+            if is_pause_enabled:
                 self._stop_lyrics_scheduler()
                 self.osd_mode = "Pause"
                 self.request_text_render(force=True)
-                pause_timeout_str = getattr(self.config, 'pause_timeout', "15s")
                 self._cleanup_timers(['_pause_timeout_unsub', '_volume_osd_timer_unsub'])
-                if pause_timeout_str != "Never":
-                    timeout_val = int(pause_timeout_str.replace("s", ""))
+                if pause_setting != "Never":
+                    timeout_val = int(pause_setting.replace("s", "").split()[0])
                     self._pause_timeout_unsub = async_call_later(self.hass, timeout_val, self._execute_pause_timeout)
                 return
             else:
@@ -1128,37 +1204,41 @@ class PixooHub:
                 self._stop_lyrics_scheduler()
                 return
 
-        if old_state and old_state.state == "paused" and new_state.state in ["playing", "on"]:
+        if old_state and old_state.state == "paused" and self._is_player_active(new_state):
             self._cleanup_timers(['_pause_timeout_unsub'])
             self.osd_mode = None
             self.request_text_render(force=True)
 
-        if new_state.state not in ["playing", "on"]:
+        if not self._is_player_active(new_state):
             await self._send_off_command()
             self._stop_lyrics_scheduler()
             return
 
         is_volume_change = False
-        if old_state and old_state.state in ["playing", "on"]:
+        if old_state and self._is_player_active(old_state):
             new_vol = new_state.attributes.get("volume_level")
             old_vol = old_state.attributes.get("volume_level")
             if new_vol is not None and old_vol is not None and new_vol != old_vol:
                 is_volume_change = True
                 self.last_volume_level = new_vol
 
-        if is_volume_change and osd_enabled:
-            self.osd_mode = "Volume"
-            self.request_text_render(force=True)
-            vol_duration_str = getattr(self.config, 'volume_osd_duration', "2s")
-            vol_duration = int(vol_duration_str.replace("s", "")) if "s" in vol_duration_str else 2
-            self._cleanup_timers(['_volume_osd_timer_unsub'])
+        vol_setting = self.ui_state.get("volume_osd", "2s")
+        is_volume_osd_enabled = vol_setting not in ["Disabled (0s)", "0s", "Disabled"]
+
+        if is_volume_change:
+            if is_volume_osd_enabled:
+                self.osd_mode = "Volume"
+                self.request_text_render(force=True)
+                vol_duration = int(vol_setting.replace("s", "").split()[0])
+                self._cleanup_timers(['_volume_osd_timer_unsub'])
+                
+                def _clear_vol_osd(now):
+                    if self.osd_mode == "Volume":
+                        self.osd_mode = None
+                        self.request_text_render(force=True)
+                        
+                self._volume_osd_timer_unsub = async_call_later(self.hass, vol_duration, _clear_vol_osd)
             
-            def _clear_vol_osd(now):
-                if self.osd_mode == "Volume":
-                    self.osd_mode = None
-                    self.request_text_render(force=True)
-                    
-            self._volume_osd_timer_unsub = async_call_later(self.hass, vol_duration, _clear_vol_osd)
             old_title = old_state.attributes.get("media_title")
             new_title = new_state.attributes.get("media_title")
             if old_title == new_title:
@@ -1168,6 +1248,11 @@ class PixooHub:
 
         await self.media_data.update()
         self._fetch_external_temperature()
+
+        if not self.media_data.title and not getattr(self.media_data, 'playing_tv', False):
+            await self._send_off_command()
+            self._stop_lyrics_scheduler()
+            return
 
         current_song_key = f"{self.media_data.artist}_{self.media_data.title}".strip().lower()
         if current_song_key and current_song_key == self._active_song_key and self.is_art_visible:
@@ -1179,7 +1264,7 @@ class PixooHub:
             return
 
         is_new_track = True
-        if old_state and old_state.state in ["playing", "on"]:
+        if old_state and self._is_player_active(old_state):
             old_title = old_state.attributes.get("media_title")
             old_artist = old_state.attributes.get("media_artist")
             new_title = new_state.attributes.get("media_title")
@@ -1192,7 +1277,7 @@ class PixooHub:
             self.prefetch_next_artist = None
             self.prefetch_next_title = None
             
-            self._cleanup_timers(['_prefetch_timer_unsub', '_early_send_timer_unsub'])
+            self._cleanup_timers(['_prefetch_timer_unsub', '_early_send_timer_unsub', '_clock_timer_unsub'])
             self._cancel_tasks(['_prefetch_task', '_playlist_prefetch_task', 'current_task'])
             
             self.current_task = self.hass.async_create_task(self._process_and_send())
@@ -1246,10 +1331,16 @@ class PixooHub:
                 color3 = processed_data.get('color3')
 
                 sun_state = self.hass.states.get("sun.sun")
-                is_night = sun_state and sun_state.state == "below_horizon"
+                if sun_state and sun_state.state in ["above_horizon", "below_horizon"]:
+                    is_night = (sun_state.state == "below_horizon")
+                else:
+                    now_hour = datetime.now().hour
+                    is_night = (now_hour >= 18 or now_hour < 7)
+
                 if not getattr(self.media_data, 'playing_tv', False):
                     await self.control_light('on', bg_color_rgb, is_night)
                     await self.control_wled_light('on', [color1, color2, color3], is_night)
+
                 
                 early_slider_match = False
                 is_spotify_slider = getattr(self.config, 'spotify_slide', False) and not getattr(self.media_data, 'radio_logo', False) and not getattr(self.media_data, 'playing_tv', False)
@@ -1271,6 +1362,8 @@ class PixooHub:
                 early_cassette_match = False
                 if is_cassette and self._early_slider_sent_for == f"cassette_{current_song_key}":
                     early_cassette_match = True
+
+                is_analog_clock = getattr(self.config, 'analog_clock', False) and not getattr(self.media_data, 'playing_tv', False)
 
                 self._early_slider_sent_for = None
                 duration = time.perf_counter() - start_time
@@ -1326,6 +1419,14 @@ class PixooHub:
                                 "PicData": b64_frame
                             })
                         early_cassette_match = True
+
+                if is_analog_clock:
+                    pil_img = processed_data.get('pil_image')
+                    clock_b64 = await self.hass.async_add_executor_job(
+                        self.image_processor.generate_analog_clock_frame, pil_img, self.media_data
+                    )
+                    if clock_b64:
+                        base64_image = clock_b64
 
                 if not early_slider_match and not early_vinyl_match and not early_cassette_match:
                     image_cmd = {
@@ -1396,6 +1497,9 @@ class PixooHub:
 
                 await self._update_progress_bar_loop()
                 self._schedule_prefetch()
+
+                if is_analog_clock:
+                    self._schedule_analog_clock_tick(processed_data)
 
                 sensor_attrs = {
                     "artist": self.media_data.artist,
@@ -1477,6 +1581,12 @@ class PixooHub:
         self.scheduler_generation_id += 1
         self.current_lyrics_items = []
 
+    def _stop_clock_scheduler(self):
+        self.clock_timer_gen_id += 1
+        self._current_clock_pil_img = None
+        self._current_clock_song_key = None
+        self._cleanup_timers(['_clock_timer_unsub'])
+
     async def async_handle_notification_service(self, call):
         message = call.data.get("message")
         if not message:
@@ -1518,3 +1628,74 @@ class PixooHub:
                 self._active_song_key = None
             else:
                 await self.pixoo_device.send_command({"Command": "Draw/CommandList", "CommandList": [{"Command": "Draw/ClearHttpText"}, {"Command": "Draw/ResetHttpGifId"}, {"Command": "Channel/OnOffScreen", "OnOff": 1}, {"Command": "Channel/SetIndex", "SelectIndex": previous_channel}]})
+
+    def _schedule_analog_clock_tick(self, processed_data: dict = None):
+        self._cleanup_timers(['_clock_timer_unsub'])
+        if not getattr(self.config, 'analog_clock', False) or not self.is_art_visible:
+            return
+
+        if processed_data is not None:
+            self._current_clock_pil_img = processed_data.get('pil_image')
+            self._current_clock_song_key = self._active_song_key
+
+        if not self._current_clock_pil_img or not self._current_clock_song_key:
+            return
+
+        self.clock_timer_gen_id += 1
+        gen_id = self.clock_timer_gen_id
+
+        now = datetime.now()
+        delay = 60 - now.second - (now.microsecond / 1_000_000.0)
+        if delay <= 0:
+            delay = 60.0
+
+        async def _tick(event_time):
+            self._clock_timer_unsub = None
+            
+            if self.clock_timer_gen_id != gen_id:
+                return
+            if not getattr(self.config, 'analog_clock', False) or not self.is_art_visible:
+                return
+
+            current_song_key = f"{self.media_data.artist}_{self.media_data.title}".strip().lower()
+            if not self._current_clock_pil_img or self._current_clock_song_key != current_song_key:
+                return
+
+            clock_b64 = await self.hass.async_add_executor_job(
+                self.image_processor.generate_analog_clock_frame, self._current_clock_pil_img, self.media_data
+            )
+
+            if self.clock_timer_gen_id != gen_id:
+                return
+            if self._current_clock_song_key != current_song_key:
+                return
+
+            if clock_b64:
+                await self.pixoo_device.send_command({
+                    "Command": "Draw/SendHttpGif",
+                    "PicNum": 1,
+                    "PicWidth": 64,
+                    "PicOffset": 0,
+                    "PicID": 0,
+                    "PicSpeed": 10000,
+                    "PicData": clock_b64
+                })
+                #await self._render_and_send_text_layers(force=True)
+
+            self._schedule_analog_clock_tick()
+
+        self._clock_timer_unsub = async_call_later(self.hass, delay, _tick)
+
+    def _is_player_active(self, state) -> bool:
+        """Determines if the media player is actively outputting media content."""
+        if not state:
+            return False
+        if state.state == "playing":
+            return True
+        if state.state == "on":
+            title = state.attributes.get("media_title") or state.attributes.get("title")
+            app = str(state.attributes.get("app_name") or "").lower()
+            source = str(state.attributes.get("source") or "").lower()
+            is_tv = "tv" in source or "tv" in app or "hdmi" in source
+            return bool((title and str(title).strip()) or is_tv)
+        return False

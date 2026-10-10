@@ -6,6 +6,8 @@ DOMAIN = "pixoo64_art"
 CONF_PIXOO_IP = "pixoo_ip"
 CONF_MEDIA_PLAYER = "media_player"
 CONF_TV_MODE = "tv_mode"
+CONF_PREFETCH_ENABLED = "prefetch_enabled"
+CONF_AUDIODB_ENABLED = "audiodb_enabled"
 
 # Options / Advanced Keys
 CONF_POLLINATIONS_KEY = "pollinations_key"

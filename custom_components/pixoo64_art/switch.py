@@ -1,6 +1,7 @@
 """Switch platform for Pixoo64."""
 import logging
 from homeassistant.components.switch import SwitchEntity
+from homeassistant.const import EntityCategory
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.entity import DeviceInfo
 from .const import DOMAIN
@@ -8,25 +9,26 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 SWITCHES = [
-    ("master_control", "Master Control", True, "mdi:power"),
-    ("full_control", "Full Control", False, "mdi:monitor-off"),
-    ("progress_bar", "Progress Bar", True, "mdi:progress-clock"),
-    ("text_background", "Text Background", True, "mdi:format-color-fill"),
+    # (key, name, default_val, icon, is_config)
+    ("master_control", "Master Control", True, "mdi:power", False),
+    ("progress_bar", "Progress Bar", True, "mdi:progress-clock", False),
+    ("full_control", "Full Control", False, "mdi:monitor-off", True),
+    ("text_background", "Text Background", True, "mdi:format-color-fill", True),
 ]
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the Pixoo64 switches."""
     hub = hass.data[DOMAIN][entry.entry_id]
     entities = [
-        PixooRestoreSwitch(hub, entry, key, name, def_val, icon)
-        for key, name, def_val, icon in SWITCHES
+        PixooRestoreSwitch(hub, entry, key, name, def_val, icon, is_config)
+        for key, name, def_val, icon, is_config in SWITCHES
     ]
     async_add_entities(entities)
 
 class PixooRestoreSwitch(SwitchEntity, RestoreEntity):
     """Representation of a restored Pixoo64 switch entity."""
 
-    def __init__(self, hub, entry, key, name, default_val, icon):
+    def __init__(self, hub, entry, key, name, default_val, icon, is_config: bool):
         """Initialize the switch."""
         self.hub = hub
         self.entry = entry
@@ -35,6 +37,8 @@ class PixooRestoreSwitch(SwitchEntity, RestoreEntity):
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_icon = icon
         self._attr_is_on = default_val
+        if is_config:
+            self._attr_entity_category = EntityCategory.CONFIG
         
         self.hub.ui_state[self.key] = self._attr_is_on
 

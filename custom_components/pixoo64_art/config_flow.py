@@ -3,6 +3,7 @@ import logging
 import voluptuous as vol
 import aiohttp
 from homeassistant import config_entries
+from homeassistant.data_entry_flow import section
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -13,7 +14,8 @@ from .const import (
     CONF_TIDAL_CLIENT_ID, CONF_TIDAL_CLIENT_SECRET,
     CONF_LASTFM_KEY, CONF_DISCOGS_TOKEN,
     CONF_MUSICBRAINZ_ENABLED, CONF_INTERNET_ARCHIVE, CONF_WLED_IP, CONF_LIGHT_ENTITY, CONF_TEMPERATURE_ENTITY,
-    CONF_PLAYLIST_PREFETCH
+    CONF_PLAYLIST_PREFETCH,
+    CONF_PREFETCH_ENABLED, CONF_AUDIODB_ENABLED
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,7 +51,7 @@ async def async_get_pollinations_models(hass) -> list:
     ]
     try:
         session = async_get_clientsession(hass)
-        async with session.get("https://gen.pollinations.ai/models", timeout=4) as response:
+        async with session.get("https://gen.pollinations.ai/models", timeout=5) as response:
             if response.status == 200:
                 data = await response.json()
                 parsed_models = []
@@ -73,6 +75,11 @@ async def async_get_pollinations_models(hass) -> list:
 
 class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1.1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        return Pixoo64OptionsFlowHandler()
 
     def __init__(self):
         self._user_data = {}
@@ -153,17 +160,27 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_lights(self, user_input=None):
         if user_input is not None:
             self._user_data.update(user_input)
-            return await self.async_step_apis()
+            return await self.async_step_free_databases()
 
         schema = vol.Schema({
-            vol.Optional("osd_overlay", default="Disabled"): selector.SelectSelector(selector.SelectSelectorConfig(options=["Enabled", "Disabled"], mode=selector.SelectSelectorMode.DROPDOWN)),
-            vol.Optional("pause_timeout", default="15s"): selector.SelectSelector(selector.SelectSelectorConfig(options=["5s", "15s", "30s", "60s", "Never"], mode=selector.SelectSelectorMode.DROPDOWN)),
-            vol.Optional("volume_osd_duration", default="2s"): selector.SelectSelector(selector.SelectSelectorConfig(options=["1s", "2s", "3s", "5s"], mode=selector.SelectSelectorMode.DROPDOWN)),
             vol.Optional(CONF_LIGHT_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="light", multiple=True)),
             vol.Optional(CONF_WLED_IP): TEXT_SELECTOR,
             vol.Optional("only_at_night", default=True): selector.BooleanSelector(),
         })
         return self.async_show_form(step_id="lights", data_schema=schema)
+
+    async def async_step_free_databases(self, user_input=None):
+        if user_input is not None:
+            self._user_data.update(user_input)
+            return await self.async_step_apis()
+
+        schema = vol.Schema({
+            vol.Optional(CONF_AUDIODB_ENABLED, default=True): selector.BooleanSelector(),
+            vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=True): selector.BooleanSelector(),
+            vol.Optional(CONF_INTERNET_ARCHIVE, default=True): selector.BooleanSelector(),
+            vol.Optional(CONF_PREFETCH_ENABLED, default=False): selector.BooleanSelector(),
+        })
+        return self.async_show_form(step_id="free_databases", data_schema=schema)
 
     async def async_step_apis(self, user_input=None):
         errors = {}
@@ -171,31 +188,34 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors = _validate_api_credentials(user_input)
             if not errors:
                 self._user_data.update(user_input)
-                return self.async_create_entry(title=f"Pixoo64 ({self._user_data.get(CONF_PIXOO_IP)})", data=self._user_data)
+                return self.async_create_entry(
+                    title=f"Pixoo64 ({self._user_data.get(CONF_PIXOO_IP)})", 
+                    data=self._user_data
+                )
 
         dynamic_ai_models = await async_get_pollinations_models(self.hass)
         schema = vol.Schema({
-            vol.Optional("ai_model", default="black-forest-labs/flux.1-schnell"): selector.SelectSelector(selector.SelectSelectorConfig(options=dynamic_ai_models, mode=selector.SelectSelectorMode.DROPDOWN)),
-            vol.Optional(CONF_POLLINATIONS_KEY): PASSWORD_SELECTOR,
-            vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=True): selector.BooleanSelector(),
-            vol.Optional(CONF_INTERNET_ARCHIVE, default=True): selector.BooleanSelector(),
             vol.Optional(CONF_SPOTIFY_CLIENT_ID): TEXT_SELECTOR,
             vol.Optional(CONF_SPOTIFY_CLIENT_SECRET): PASSWORD_SELECTOR,
             vol.Optional(CONF_TIDAL_CLIENT_ID): TEXT_SELECTOR,
             vol.Optional(CONF_TIDAL_CLIENT_SECRET): PASSWORD_SELECTOR,
             vol.Optional(CONF_LASTFM_KEY): PASSWORD_SELECTOR,
             vol.Optional(CONF_DISCOGS_TOKEN): PASSWORD_SELECTOR,
-            vol.Optional(CONF_PLAYLIST_PREFETCH, default="Disabled"): selector.SelectSelector(selector.SelectSelectorConfig(options=["Disabled", "±5 Songs", "±10 Songs"], mode=selector.SelectSelectorMode.DROPDOWN)),
+            vol.Optional(CONF_PLAYLIST_PREFETCH, default="Disabled"): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=["Disabled", "±5 Songs", "±10 Songs"], mode=selector.SelectSelectorMode.DROPDOWN)
+            ),
+            vol.Optional(CONF_POLLINATIONS_KEY): PASSWORD_SELECTOR,
+            vol.Optional("ai_model", default="black-forest-labs/flux.1-schnell"): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=dynamic_ai_models, mode=selector.SelectSelectorMode.DROPDOWN)
+            ),
         })
         return self.async_show_form(step_id="apis", data_schema=schema, errors=errors)
 
-    @staticmethod
-    @callback
-    def async_get_options_flow(config_entry):
-        return Pixoo64OptionsFlowHandler()
-
 
 class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
+    def __init__(self):
+        self._ai_models_cache = []
+
     async def async_step_init(self, user_input=None):
         errors = {}
         entry = self.config_entry
@@ -205,10 +225,15 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
         def get_val(key, default=""):
             return options.get(key, data.get(key, default))
 
+        cleaned_input = {}
         if user_input is not None:
-            cleaned_input = dict(user_input)
+            for k, v in user_input.items():
+                if isinstance(v, dict):
+                    cleaned_input.update(v)
+                else:
+                    cleaned_input[k] = v
 
-            # 1. Spotify Pair Logic: Client ID is the master anchor
+            # 1. Spotify
             s_id = str(cleaned_input.get(CONF_SPOTIFY_CLIENT_ID) or "").strip()
             s_sec = str(cleaned_input.get(CONF_SPOTIFY_CLIENT_SECRET) or "").strip()
             if not s_id:
@@ -218,7 +243,7 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
                 if not s_sec:
                     cleaned_input[CONF_SPOTIFY_CLIENT_SECRET] = get_val(CONF_SPOTIFY_CLIENT_SECRET, "")
 
-            # 2. TIDAL Pair Logic: Client ID is the master anchor
+            # 2. TIDAL
             t_id = str(cleaned_input.get(CONF_TIDAL_CLIENT_ID) or "").strip()
             t_sec = str(cleaned_input.get(CONF_TIDAL_CLIENT_SECRET) or "").strip()
             if not t_id:
@@ -228,13 +253,7 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
                 if not t_sec:
                     cleaned_input[CONF_TIDAL_CLIENT_SECRET] = get_val(CONF_TIDAL_CLIENT_SECRET, "")
 
-            # 3. Single Key Logic (Pollinations, Last.fm, Discogs)
-            single_secret_keys = [
-                CONF_POLLINATIONS_KEY,
-                CONF_LASTFM_KEY,
-                CONF_DISCOGS_TOKEN,
-            ]
-            for s_key in single_secret_keys:
+            for s_key in [CONF_POLLINATIONS_KEY, CONF_LASTFM_KEY, CONF_DISCOGS_TOKEN]:
                 if s_key in cleaned_input:
                     val = str(cleaned_input.get(s_key) or "").strip()
                     if val.lower() in ["delete", "remove", "clear", "none", "-"]:
@@ -243,53 +262,96 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
                         cleaned_input[s_key] = get_val(s_key, "")
 
             errors = _validate_api_credentials(cleaned_input)
+
+            if cleaned_input.get("reload_ai_models", False):
+                self._ai_models_cache = await async_get_pollinations_models(self.hass)
+                cleaned_input["reload_ai_models"] = False
+                return await self._show_options_form(cleaned_input, errors)
+
             if not errors:
+                cleaned_input.pop("reload_ai_models", None)
                 return self.async_create_entry(title="", data=cleaned_input)
 
-        dynamic_ai_models = await async_get_pollinations_models(self.hass)
+
+        return await self._show_options_form(cleaned_input if user_input else None, errors)
+
+    async def _show_options_form(self, current_values: dict = None, errors: dict = None):
+        entry = self.config_entry
+        options = entry.options
+        data = entry.data
+
+        def get_current(key, default=""):
+            if current_values and key in current_values:
+                return current_values[key]
+            return options.get(key, data.get(key, default))
 
         has_streaming_keys = bool(
-            str(get_val(CONF_SPOTIFY_CLIENT_ID, "")).strip() or 
-            str(get_val(CONF_TIDAL_CLIENT_ID, "")).strip() or 
-            str(get_val(CONF_DISCOGS_TOKEN, "")).strip()
+            str(get_current(CONF_SPOTIFY_CLIENT_ID, "")).strip() or 
+            str(get_current(CONF_TIDAL_CLIENT_ID, "")).strip() or 
+            str(get_current(CONF_DISCOGS_TOKEN, "")).strip()
         )
 
-        base_schema = {
-            vol.Optional(CONF_MEDIA_PLAYER, description={"suggested_value": get_val(CONF_MEDIA_PLAYER)}):
-                selector.EntitySelector(selector.EntitySelectorConfig(domain="media_player")),
-            vol.Optional(CONF_TEMPERATURE_ENTITY, description={"suggested_value": get_val(CONF_TEMPERATURE_ENTITY, None)}):
-                selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature")),
-            vol.Optional(CONF_TV_MODE, default=get_val(CONF_TV_MODE, False)): selector.BooleanSelector(),
-            vol.Optional("osd_overlay", default=get_val("osd_overlay", "Disabled")):
-                selector.SelectSelector(selector.SelectSelectorConfig(options=["Enabled", "Disabled"], mode=selector.SelectSelectorMode.DROPDOWN)),
-            vol.Optional("pause_timeout", default=get_val("pause_timeout", "15s")):
-                selector.SelectSelector(selector.SelectSelectorConfig(options=["5s", "15s", "30s", "60s", "Never"], mode=selector.SelectSelectorMode.DROPDOWN)),
-            vol.Optional("volume_osd_duration", default=get_val("volume_osd_duration", "2s")):
-                selector.SelectSelector(selector.SelectSelectorConfig(options=["1s", "2s", "3s", "5s"], mode=selector.SelectSelectorMode.DROPDOWN)),
-            vol.Optional(CONF_LIGHT_ENTITY, description={"suggested_value": get_val(CONF_LIGHT_ENTITY, [])}):
-                selector.EntitySelector(selector.EntitySelectorConfig(domain="light", multiple=True)),
-            vol.Optional(CONF_WLED_IP, description={"suggested_value": get_val(CONF_WLED_IP, "")}): TEXT_SELECTOR,
-            vol.Optional("only_at_night", default=get_val("only_at_night", True)): selector.BooleanSelector(),
-            vol.Optional("ai_model", default=get_val("ai_model", "black-forest-labs/flux.1-schnell")):
-                selector.SelectSelector(selector.SelectSelectorConfig(options=dynamic_ai_models, mode=selector.SelectSelectorMode.DROPDOWN)),
-            vol.Optional(CONF_POLLINATIONS_KEY): PASSWORD_SELECTOR,
-            vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=get_val(CONF_MUSICBRAINZ_ENABLED, True)): selector.BooleanSelector(),
-            vol.Optional(CONF_INTERNET_ARCHIVE, default=get_val(CONF_INTERNET_ARCHIVE, True)): selector.BooleanSelector(),
-            vol.Optional(CONF_SPOTIFY_CLIENT_ID, description={"suggested_value": get_val(CONF_SPOTIFY_CLIENT_ID, "")}): TEXT_SELECTOR,
+        if not self._ai_models_cache:
+            self._ai_models_cache = await async_get_pollinations_models(self.hass)
+
+        streaming_schema = {
+            vol.Optional(CONF_SPOTIFY_CLIENT_ID, description={"suggested_value": get_current(CONF_SPOTIFY_CLIENT_ID, "")}): TEXT_SELECTOR,
             vol.Optional(CONF_SPOTIFY_CLIENT_SECRET): PASSWORD_SELECTOR,
-            vol.Optional(CONF_TIDAL_CLIENT_ID, description={"suggested_value": get_val(CONF_TIDAL_CLIENT_ID, "")}): TEXT_SELECTOR,
+            vol.Optional(CONF_TIDAL_CLIENT_ID, description={"suggested_value": get_current(CONF_TIDAL_CLIENT_ID, "")}): TEXT_SELECTOR,
             vol.Optional(CONF_TIDAL_CLIENT_SECRET): PASSWORD_SELECTOR,
             vol.Optional(CONF_LASTFM_KEY): PASSWORD_SELECTOR,
             vol.Optional(CONF_DISCOGS_TOKEN): PASSWORD_SELECTOR,
         }
-
         if has_streaming_keys:
-            base_schema[vol.Optional(CONF_PLAYLIST_PREFETCH, default=get_val(CONF_PLAYLIST_PREFETCH, "Disabled"))] = selector.SelectSelector(
+            streaming_schema[vol.Optional(CONF_PLAYLIST_PREFETCH, default=get_current(CONF_PLAYLIST_PREFETCH, "Disabled"))] = selector.SelectSelector(
                 selector.SelectSelectorConfig(options=["Disabled", "±5 Songs", "±10 Songs"], mode=selector.SelectSelectorMode.DROPDOWN)
             )
 
-        schema = vol.Schema(base_schema)
-        if user_input:
-            schema = self.add_suggested_values_to_schema(schema, user_input)
+        ai_schema = {
+            vol.Optional(CONF_POLLINATIONS_KEY): PASSWORD_SELECTOR,
+            vol.Optional("ai_model", default=get_current("ai_model", "black-forest-labs/flux.1-schnell")): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=self._ai_models_cache, mode=selector.SelectSelectorMode.DROPDOWN)
+            ),
+            vol.Optional("reload_ai_models", default=False): selector.BooleanSelector(),
+        }
 
-        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
+        schema = vol.Schema({
+            vol.Required("media_section"): section(
+                vol.Schema({
+                    vol.Optional(CONF_MEDIA_PLAYER, description={"suggested_value": get_current(CONF_MEDIA_PLAYER)}):
+                        selector.EntitySelector(selector.EntitySelectorConfig(domain="media_player")),
+                    vol.Optional(CONF_TEMPERATURE_ENTITY, description={"suggested_value": get_current(CONF_TEMPERATURE_ENTITY, None)}):
+                        selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature")),
+                    vol.Optional(CONF_TV_MODE, default=get_current(CONF_TV_MODE, False)): selector.BooleanSelector(),
+                    vol.Optional(CONF_PREFETCH_ENABLED, default=get_current(CONF_PREFETCH_ENABLED, False)): selector.BooleanSelector(),
+                }),
+                {"collapsed": False}
+            ),
+            vol.Required("ambient_section"): section(
+                vol.Schema({
+                    vol.Optional(CONF_LIGHT_ENTITY, description={"suggested_value": get_current(CONF_LIGHT_ENTITY, [])}):
+                        selector.EntitySelector(selector.EntitySelectorConfig(domain="light", multiple=True)),
+                    vol.Optional(CONF_WLED_IP, description={"suggested_value": get_current(CONF_WLED_IP, "")}): TEXT_SELECTOR,
+                    vol.Optional("only_at_night", default=get_current("only_at_night", True)): selector.BooleanSelector(),
+                }),
+                {"collapsed": False}
+            ),
+            vol.Required("free_databases_section"): section(
+                vol.Schema({
+                    vol.Optional(CONF_AUDIODB_ENABLED, default=get_current(CONF_AUDIODB_ENABLED, True)): selector.BooleanSelector(),
+                    vol.Optional(CONF_MUSICBRAINZ_ENABLED, default=get_current(CONF_MUSICBRAINZ_ENABLED, True)): selector.BooleanSelector(),
+                    vol.Optional(CONF_INTERNET_ARCHIVE, default=get_current(CONF_INTERNET_ARCHIVE, True)): selector.BooleanSelector(),
+                }),
+                {"collapsed": False}
+            ),
+            vol.Required("streaming_api_section"): section(
+                vol.Schema(streaming_schema),
+                {"collapsed": False}
+            ),
+            vol.Required("ai_section"): section(
+                vol.Schema(ai_schema),
+                {"collapsed": False}
+            ),
+        })
+
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors or {})

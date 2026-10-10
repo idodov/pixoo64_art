@@ -13,13 +13,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
     hub = hass.data[DOMAIN][entry.entry_id]
 
     selects_config = [
-        # (key, name, options, default_val, icon, is_config)
-        # פקדי Controls (שליטה חיה)
         ("display_mode", "Display Mode", ["Standard", "Vinyl", "Cassette", "Analog Clock", "Lyrics", "Burned", "Special Mode", "Artist Slide"], "Standard", "mdi:monitor-dashboard", False),
         ("volume_osd", "Volume Alert Duration", ["Disabled (0s)", "1s", "2s", "3s", "5s"], "2s", "mdi:volume-high", False),
         ("pause_timeout", "Pause Screen Timeout", ["Disabled (0s)", "5s", "15s", "30s", "60s", "Never"], "15s", "mdi:pause-circle-outline", False),
 
-        # פקדי Configuration (תצורה ועיצוב)
         ("image_filter", "Image Filter", ["None", "Vibrant", "Retro Arcade", "Crisp & Sharp", "Noir B&W", "Cyberpunk Neon"], "None", "mdi:image-filter-hdr", True),
         ("text_position", "Artist & Track Text", ["Hidden", "Top", "Bottom"], "Bottom", "mdi:format-text", True),
         ("overlay_info", "Overlay Info", ["None", "Clock", "Temperature", "Clock + Temp"], "Clock", "mdi:information-outline", True),
@@ -88,6 +85,7 @@ class PixooRestoreSelect(SelectEntity, RestoreEntity):
         else:
             self._attr_current_option = self.options[0]
         self.hub.ui_state[self.key] = self._attr_current_option
+        self.hub._apply_logic_matrix()
 
     async def async_select_option(self, option: str):
         if option in self.options:

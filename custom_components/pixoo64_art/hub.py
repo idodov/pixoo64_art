@@ -325,6 +325,7 @@ class PixooHub:
             self.select_index = 0
             self.last_valid_index = 0
 
+        await asyncio.sleep(0.5)
         self._apply_logic_matrix()
 
         self._unsub_listeners.append(
@@ -376,7 +377,8 @@ class PixooHub:
 
         image_affecting_keys = {
             "display_mode", "crop_mode", "image_filter", 
-            "force_ai", "text_background", "text_position"
+            "force_ai", "text_background", "text_position",
+            "overlay_info", "overlay_position", "overlay_align"
         }
 
         if key not in image_affecting_keys:
@@ -478,6 +480,7 @@ class PixooHub:
         data = self.entry.data
 
         self.config.pollinations = options.get("pollinations_key", data.get("pollinations_key", ""))
+        self.config.ai_fallback = options.get("ai_model", data.get("ai_model", "black-forest-labs/flux.1-schnell"))
         self.config.spotify_client_id = options.get("spotify_client_id", data.get("spotify_client_id", ""))
         self.config.spotify_client_secret = options.get("spotify_client_secret", data.get("spotify_client_secret", ""))
         
@@ -1144,11 +1147,8 @@ class PixooHub:
                 self.media_data.queue_total = len(queue)
             if current_idx is not None:
                 self.media_data.track_number = current_idx + 1
-            
-            song_key = f"{self.media_data.artist}_{self.media_data.title}".strip().lower()
-            if song_key and song_key == self._active_song_key and self.is_art_visible:
-                return
 
+            self._active_song_key = None
             self.media_data.track_changed = True
             self._cleanup_timers(['_prefetch_timer_unsub', '_early_send_timer_unsub', '_clock_timer_unsub'])
             self._cancel_tasks(['current_task', '_playlist_prefetch_task'])
@@ -1443,14 +1443,29 @@ class PixooHub:
                 self.is_art_visible = True
                 self._active_song_key = current_song_key 
                 self.last_text_payload_hash = None 
-                self.last_progress_str = "" 
                 
                 self.media_data.lyrics_font_color = font_color
                 self.media_data.background_color = bg_color_str
-                
-                new_lyrics_found = getattr(self.config, 'show_lyrics', False) and len(self.media_data.lyrics) > 0 and not getattr(self.media_data, 'playing_tv', False)
+
+                if getattr(self.config, 'progress_bar_enabled', False) and getattr(self.media_data, 'show_progress_bar', False):
+                    pos = self.media_data.media_position
+                    if self.media_data.media_position_updated_at:
+                        pos += (datetime.now(timezone.utc) - self.media_data.media_position_updated_at).total_seconds()
+                    bar_str, _ = self.progress_manager.calculate(pos, self.media_data.media_duration)
+                    self.last_progress_str = bar_str
+                else:
+                    self.progress_manager.current_bar_str = ""
+                    self.last_progress_str = ""
+
+                self._fetch_external_temperature()
                 self.cached_static_items = await self._build_text_items_list(font_color, bg_color_str, scope="static")
                 self.progress_timer_gen_id += 1
+
+                new_lyrics_found = (
+                    getattr(self.config, 'show_lyrics', False) 
+                    and len(self.media_data.lyrics) > 0 
+                    and not getattr(self.media_data, 'playing_tv', False)
+                )
 
                 if is_spotify_slider and not early_slider_match:
                     self.spotify_slider_status = f"Loading Live Slider for {self.media_data.artist}..."
@@ -1469,10 +1484,6 @@ class PixooHub:
                         self.spotify_slider_status = f"Live Failed: {self.media_data.slider_error or 'No albums found'}"
                         self.spotify_slider_last_error = self.media_data.slider_error
 
-                    if not new_lyrics_found:
-                        self.last_text_payload_hash = None
-                        await self._render_and_send_text_layers(force=True)
-
                 elif is_artist_slider and not early_slider_match:
                     self.spotify_slider_status = f"Loading Artist Gallery for {self.media_data.artist}..."
                     self.spotify_slider_artist = self.media_data.artist
@@ -1487,13 +1498,11 @@ class PixooHub:
                         self.spotify_slider_status = f"Live Failed: {self.media_data.slider_error or 'No artist images found'}"
                         self.spotify_slider_last_error = self.media_data.slider_error
 
-                    if not new_lyrics_found:
-                        self.last_text_payload_hash = None
-                        await self._render_and_send_text_layers(force=True)
-                else:
-                    if not new_lyrics_found:
-                        self.last_text_payload_hash = None
-                        await self._render_and_send_text_layers(force=True)
+                await asyncio.sleep(0.3)
+
+                if not new_lyrics_found:
+                    self.last_text_payload_hash = None
+                    await self._render_and_send_text_layers(force=True)
 
                 await self._update_progress_bar_loop()
                 self._schedule_prefetch()
@@ -1645,8 +1654,8 @@ class PixooHub:
         gen_id = self.clock_timer_gen_id
 
         now = datetime.now()
-        delay = 60 - now.second - (now.microsecond / 1_000_000.0)
-        if delay <= 0:
+        delay = (60 - now.second - (now.microsecond / 1_000_000.0)) + 0.5
+        if delay <= 0.5:
             delay = 60.0
 
         async def _tick(event_time):
@@ -1672,15 +1681,20 @@ class PixooHub:
 
             if clock_b64:
                 await self.pixoo_device.send_command({
-                    "Command": "Draw/SendHttpGif",
-                    "PicNum": 1,
-                    "PicWidth": 64,
-                    "PicOffset": 0,
-                    "PicID": 0,
-                    "PicSpeed": 10000,
-                    "PicData": clock_b64
+                    "Command": "Draw/CommandList",
+                    "CommandList": [
+                        {"Command": "Draw/ResetHttpGifId"},
+                        {
+                            "Command": "Draw/SendHttpGif",
+                            "PicNum": 1,
+                            "PicWidth": 64,
+                            "PicOffset": 0,
+                            "PicID": 0,
+                            "PicSpeed": 10000,
+                            "PicData": clock_b64
+                        }
+                    ]
                 })
-                #await self._render_and_send_text_layers(force=True)
 
             self._schedule_analog_clock_tick()
 

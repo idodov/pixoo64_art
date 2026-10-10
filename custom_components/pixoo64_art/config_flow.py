@@ -45,25 +45,33 @@ def _validate_api_credentials(user_input: dict) -> dict:
 
     return errors
 
-async def async_get_pollinations_models(hass) -> list:
+async def async_get_pollinations_models(hass, api_key: str = None) -> list:
+    """Fetch available AI models dynamically from Pollinations with optional API key."""
     fallback_models = [
         selector.SelectOptionDict(value="black-forest-labs/flux.1-schnell", label="FLUX.1 Schnell (Black Forest Labs)"),
     ]
     try:
         session = async_get_clientsession(hass)
-        async with session.get("https://gen.pollinations.ai/models", timeout=5) as response:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        if api_key and str(api_key).strip():
+            headers["Authorization"] = f"Bearer {str(api_key).strip()}"
+
+        async with session.get("https://gen.pollinations.ai/models", headers=headers, timeout=5) as response:
             if response.status == 200:
                 data = await response.json()
                 parsed_models = []
                 for model in data:
                     if model.get("category") == "image" or "image" in model.get("output_modalities", []):
                         model_id = model.get("name")
-                        if not model_id: continue
+                        if not model_id: 
+                            continue
                         title = model.get("title", model_id)
                         publisher = model.get("publisher", "Unknown")
                         pricing = model.get("pricing", {})
-                        try: cost = float(pricing.get("completionImageTokens", 0))
-                        except (ValueError, TypeError): cost = 0.0
+                        try: 
+                            cost = float(pricing.get("completionImageTokens", 0))
+                        except (ValueError, TypeError): 
+                            cost = 0.0
                         cost_display = "Free" if cost == 0 else f"{cost:.8f}".rstrip('0').rstrip('.')
                         parsed_models.append({"id": model_id, "label": f"{title} ({publisher}) | 💰 {cost_display}", "cost": cost})
                 parsed_models.sort(key=lambda x: x["cost"])
@@ -74,7 +82,7 @@ async def async_get_pollinations_models(hass) -> list:
     return fallback_models
 
 class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1.1
+    VERSION = 1.2
 
     @staticmethod
     @callback
@@ -233,45 +241,43 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
                 else:
                     cleaned_input[k] = v
 
-            # 1. Spotify
             s_id = str(cleaned_input.get(CONF_SPOTIFY_CLIENT_ID) or "").strip()
             s_sec = str(cleaned_input.get(CONF_SPOTIFY_CLIENT_SECRET) or "").strip()
             if not s_id:
                 cleaned_input[CONF_SPOTIFY_CLIENT_ID] = ""
                 cleaned_input[CONF_SPOTIFY_CLIENT_SECRET] = ""
-            else:
-                if not s_sec:
-                    cleaned_input[CONF_SPOTIFY_CLIENT_SECRET] = get_val(CONF_SPOTIFY_CLIENT_SECRET, "")
+            elif not s_sec:
+                cleaned_input[CONF_SPOTIFY_CLIENT_SECRET] = get_val(CONF_SPOTIFY_CLIENT_SECRET, "")
 
-            # 2. TIDAL
             t_id = str(cleaned_input.get(CONF_TIDAL_CLIENT_ID) or "").strip()
             t_sec = str(cleaned_input.get(CONF_TIDAL_CLIENT_SECRET) or "").strip()
             if not t_id:
                 cleaned_input[CONF_TIDAL_CLIENT_ID] = ""
                 cleaned_input[CONF_TIDAL_CLIENT_SECRET] = ""
-            else:
-                if not t_sec:
-                    cleaned_input[CONF_TIDAL_CLIENT_SECRET] = get_val(CONF_TIDAL_CLIENT_SECRET, "")
+            elif not t_sec:
+                cleaned_input[CONF_TIDAL_CLIENT_SECRET] = get_val(CONF_TIDAL_CLIENT_SECRET, "")
 
             for s_key in [CONF_POLLINATIONS_KEY, CONF_LASTFM_KEY, CONF_DISCOGS_TOKEN]:
-                if s_key in cleaned_input:
-                    val = str(cleaned_input.get(s_key) or "").strip()
-                    if val.lower() in ["delete", "remove", "clear", "none", "-"]:
-                        cleaned_input[s_key] = ""
-                    elif not val:
-                        cleaned_input[s_key] = get_val(s_key, "")
+                val = str(cleaned_input.get(s_key) or "").strip()
+                if val.lower() in ["delete", "remove", "clear", "none", "-"]:
+                    cleaned_input[s_key] = ""
+                elif not val:
+                    cleaned_input[s_key] = get_val(s_key, "")
+
+            if CONF_PLAYLIST_PREFETCH not in cleaned_input:
+                cleaned_input[CONF_PLAYLIST_PREFETCH] = get_val(CONF_PLAYLIST_PREFETCH, "Disabled")
 
             errors = _validate_api_credentials(cleaned_input)
 
             if cleaned_input.get("reload_ai_models", False):
-                self._ai_models_cache = await async_get_pollinations_models(self.hass)
+                api_key = cleaned_input.get(CONF_POLLINATIONS_KEY) or get_val(CONF_POLLINATIONS_KEY, "")
+                self._ai_models_cache = await async_get_pollinations_models(self.hass, api_key=api_key)
                 cleaned_input["reload_ai_models"] = False
                 return await self._show_options_form(cleaned_input, errors)
 
             if not errors:
                 cleaned_input.pop("reload_ai_models", None)
                 return self.async_create_entry(title="", data=cleaned_input)
-
 
         return await self._show_options_form(cleaned_input if user_input else None, errors)
 
@@ -281,7 +287,7 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
         data = entry.data
 
         def get_current(key, default=""):
-            if current_values and key in current_values:
+            if current_values and key in current_values and current_values[key] is not None:
                 return current_values[key]
             return options.get(key, data.get(key, default))
 
@@ -292,15 +298,16 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
         )
 
         if not self._ai_models_cache:
-            self._ai_models_cache = await async_get_pollinations_models(self.hass)
+            pol_key = get_current(CONF_POLLINATIONS_KEY, "")
+            self._ai_models_cache = await async_get_pollinations_models(self.hass, api_key=pol_key)
 
         streaming_schema = {
             vol.Optional(CONF_SPOTIFY_CLIENT_ID, description={"suggested_value": get_current(CONF_SPOTIFY_CLIENT_ID, "")}): TEXT_SELECTOR,
-            vol.Optional(CONF_SPOTIFY_CLIENT_SECRET): PASSWORD_SELECTOR,
+            vol.Optional(CONF_SPOTIFY_CLIENT_SECRET, description={"suggested_value": get_current(CONF_SPOTIFY_CLIENT_SECRET, "")}): PASSWORD_SELECTOR,
             vol.Optional(CONF_TIDAL_CLIENT_ID, description={"suggested_value": get_current(CONF_TIDAL_CLIENT_ID, "")}): TEXT_SELECTOR,
-            vol.Optional(CONF_TIDAL_CLIENT_SECRET): PASSWORD_SELECTOR,
-            vol.Optional(CONF_LASTFM_KEY): PASSWORD_SELECTOR,
-            vol.Optional(CONF_DISCOGS_TOKEN): PASSWORD_SELECTOR,
+            vol.Optional(CONF_TIDAL_CLIENT_SECRET, description={"suggested_value": get_current(CONF_TIDAL_CLIENT_SECRET, "")}): PASSWORD_SELECTOR,
+            vol.Optional(CONF_LASTFM_KEY, description={"suggested_value": get_current(CONF_LASTFM_KEY, "")}): PASSWORD_SELECTOR,
+            vol.Optional(CONF_DISCOGS_TOKEN, description={"suggested_value": get_current(CONF_DISCOGS_TOKEN, "")}): PASSWORD_SELECTOR,
         }
         if has_streaming_keys:
             streaming_schema[vol.Optional(CONF_PLAYLIST_PREFETCH, default=get_current(CONF_PLAYLIST_PREFETCH, "Disabled"))] = selector.SelectSelector(
@@ -308,7 +315,7 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
             )
 
         ai_schema = {
-            vol.Optional(CONF_POLLINATIONS_KEY): PASSWORD_SELECTOR,
+            vol.Optional(CONF_POLLINATIONS_KEY, description={"suggested_value": get_current(CONF_POLLINATIONS_KEY, "")}): PASSWORD_SELECTOR,
             vol.Optional("ai_model", default=get_current("ai_model", "black-forest-labs/flux.1-schnell")): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=self._ai_models_cache, mode=selector.SelectSelectorMode.DROPDOWN)
             ),

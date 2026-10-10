@@ -60,6 +60,7 @@ class PixooRestoreSwitch(SwitchEntity, RestoreEntity):
             self._attr_is_on = last_state.state == "on"
             
         self.hub.ui_state[self.key] = self._attr_is_on
+        self.hub._apply_logic_matrix()
 
     async def async_turn_on(self, **kwargs):
         """Turn the entity on."""

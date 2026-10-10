@@ -1057,7 +1057,8 @@ class ImageProcessor:
             lpc = (0, 0, 64, 16) if getattr(self.config, 'top_text', False) else (0, 48, 64, 64)
             lower_part_img = img.crop(lpc)
             stat = ImageStat.Stat(lower_part_img.convert("L"))
-            factor = max(0.1, 1.0 - (stat.mean[0] / 180.0))
+            mean_lum = stat.mean[0] if stat.mean else 100.0
+            factor = max(0.1, min(0.35, 1.0 - (mean_lum / 180.0)))
             img.paste(ImageEnhance.Brightness(lower_part_img).enhance(factor), lpc)
 
         return img
@@ -1122,130 +1123,6 @@ class ImageProcessor:
             top = (height - new_size) // 2
             return img.crop((left, top, left + new_size, top + new_size))
 
-    def _draw_burned_text(self, img: Image.Image, artist: str, title: str) -> Image.Image:
-        if not (artist or title): return img
-        thumb = img.resize((16, 16), Image.Resampling.BICUBIC)
-        pixels = list(thumb.getdata())
-        bg = tuple(sum(ch) // len(pixels) for ch in zip(*pixels))  
-        
-        def contrast(c1, c2):
-            def _lum(c):
-                r,g,b = [v/255 for v in c]
-                r = r/12.92 if r<=0.03928 else ((r+0.055)/1.055)**2.4
-                g = g/12.92 if g<=0.03928 else ((g+0.055)/1.055)**2.4
-                b = b/12.92 if b<=0.03928 else ((b+0.055)/1.055)**2.4
-                return 0.2126*r + 0.7152*g + 0.0722*b
-            l1, l2 = _lum(c1)+0.05, _lum(c2)+0.05
-            return max(l1,l2)/min(l1,l2)
-            
-        palette = COLOR_PALETTE.copy()
-        random.shuffle(palette)
-        artist_rgb = title_rgb = None
-        for cand in palette:
-            if contrast(cand, bg) > 4.5:
-                if not artist_rgb: artist_rgb = cand
-                elif not title_rgb: title_rgb = cand; break
-                
-        if not artist_rgb: artist_rgb = (255,255,255)
-        if not title_rgb: title_rgb = (255,255,0)
-
-        artist_shadow = (*tuple(255 - c for c in artist_rgb), 180)
-        title_shadow  = (*tuple(255 - c for c in title_rgb), 180)
-
-        img_copy = img.copy().convert("RGBA")
-        layer = ImageDraw.Draw(img_copy)
-        font = self.config.default_font
-        max_w = img.width - 4
-        
-        def _wrap(text):
-            if not text: return []
-            words = text.split()
-            lines, cur = [], ""
-            for w in words:
-                test = f"{cur} {w}".strip() if cur else w
-                if layer.textbbox((0,0), test, font=font)[2] <= max_w: cur = test
-                else:
-                    if cur: lines.append(cur)
-                    cur = w
-            if cur: lines.append(cur)
-            return lines
-
-        artist_lines = _wrap(artist)
-        title_lines = _wrap(title)
-        
-        if not artist_lines and not title_lines: return img.convert("RGB")
-
-        y = max(2, (img.height - ((len(artist_lines) + len(title_lines)) * 11 + 4)) // 2)
-
-        for line in artist_lines:
-            w = layer.textbbox((0,0), line, font=font)[2]
-            x = (img.width - w) // 2
-            layer.text((x + 1, y + 1), line, font=font, fill=artist_shadow)
-            layer.text((x, y), line, font=font, fill=(*artist_rgb, 255))
-            y += 11
-        if artist_lines and title_lines: y += 4
-        for line in title_lines:
-            w = layer.textbbox((0,0), line, font=font)[2]
-            x = (img.width - w) // 2
-            layer.text((x + 1, y + 1), line, font=font, fill=title_shadow)
-            layer.text((x, y), line, font=font, fill=(*title_rgb, 255))
-            y += 11
-
-        return img_copy.convert("RGB")
-
-    def text_clock_img(self, img: Image.Image, cached_data: dict, media_data: "MediaData") -> Image.Image:
-        if getattr(self.config, 'special_mode', False):
-            return img
-
-        if getattr(self.config, 'show_lyrics', False) and len(media_data.lyrics) > 0 and not getattr(media_data, 'playing_tv', False):
-            if getattr(self.config, 'text_bg', False) and not getattr(media_data, 'playing_radio', False):
-                stat = ImageStat.Stat(img.convert("L"))
-                mean_lum = stat.mean[0] if stat.mean else 100.0
-                factor = max(0.25, min(0.55, 1.0 - (mean_lum / 220.0)))
-                img = ImageEnhance.Brightness(img).enhance(factor)
-                img = ImageEnhance.Contrast(img).enhance(0.65)
-            return img
-
-        is_top = getattr(self.config, 'overlay_top', True)
-        y_start, y_end = (2, 9) if is_top else (55, 62)
-        align_mode = getattr(self.config, 'overlay_align', 'Clock Right, Temp Left')
-
-        if bool(getattr(self.config, 'show_clock', False) and getattr(self.config, 'text_bg', False)):
-            if align_mode == "Clock Left, Temp Right":
-                lpc_clock = (2, y_start, 21, y_end)
-            elif align_mode == "Centered" and not getattr(self.config, 'temperature', False):
-                lpc_clock = (21, y_start, 43, y_end)
-            elif align_mode == "Centered":
-                lpc_clock = (35, y_start, 62, y_end)
-            else: 
-                lpc_clock = (43, y_start, 62, y_end)
-
-            clock_crop = img.crop(lpc_clock)
-            stat = ImageStat.Stat(clock_crop.convert("L"))
-            factor = max(0.2, 1.0 - (stat.mean[0] / 200.0))
-            img.paste(ImageEnhance.Brightness(clock_crop).enhance(factor), lpc_clock)
-
-        if bool(getattr(self.config, 'temperature', False) and getattr(self.config, 'text_bg', False)):
-            if align_mode == "Clock Left, Temp Right":
-                lpc_temp = (47, y_start, 63, y_end)
-            elif align_mode == "Centered" and not getattr(self.config, 'show_clock', False):
-                lpc_temp = (23, y_start, 41, y_end)
-            else: 
-                lpc_temp = (2, y_start, 18, y_end)
-
-            temp_crop = img.crop(lpc_temp)
-            stat = ImageStat.Stat(temp_crop.convert("L"))
-            factor = max(0.2, 1.0 - (stat.mean[0] / 200.0))
-            img.paste(ImageEnhance.Brightness(temp_crop).enhance(factor), lpc_temp)
-
-        if getattr(self.config, 'text_bg', False) and getattr(self.config, 'show_text', False) and not getattr(media_data, 'playing_tv', False):
-            lpc = (0, 0, 64, 16) if getattr(self.config, 'top_text', False) else (0, 48, 64, 64)
-            lower_part_img = img.crop(lpc)
-            stat = ImageStat.Stat(lower_part_img.convert("L"))
-            factor = max(0.1, 1.0 - (stat.mean[0] / 180.0))
-            img.paste(ImageEnhance.Brightness(lower_part_img).enhance(factor), lpc)
-
-        return img
 
     def gbase64(self, img: Image.Image) -> Optional[str]:
         try:
@@ -2066,11 +1943,12 @@ class InternetArchiveProvider:
         return None
 
 class TheAudioDbProvider:
-    def __init__(self, session: aiohttp.ClientSession):
+    def __init__(self, session: aiohttp.ClientSession, config: "Config" = None):
         self.session = session
+        self.config = config
 
     async def get_artist_images(self, artist: str) -> List[str]:
-        if not getattr(self.session, "_audiodb_enabled", True):
+        if self.config and not getattr(self.config, 'audiodb_enabled', True):
             return []
 
         clean_artist = str(artist or "").strip()
@@ -2124,7 +2002,7 @@ class FallbackService:
         self.tidal_provider = TidalProvider(config, session)
         self.ai_provider = AiArtProvider(config)
         self.ia_provider = InternetArchiveProvider(session)
-        self.audiodb_provider = TheAudioDbProvider(session)
+        self.audiodb_provider = TheAudioDbProvider(session, config)
 
     async def get_musicbrainz_album_art_url(self, artist: str, title: str):
         return await self.mb_provider.get_album_art_url(artist, title)

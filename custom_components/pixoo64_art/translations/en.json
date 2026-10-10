@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Pixoo64 Setup",
-        "description": "Connect your Divoom Pixoo64 and link it to your Home Assistant media player.",
+        "description": "Connect your Divoom Pixoo64 and link it to your primary media player.",
         "data": {
           "pixoo_ip": "Pixoo64 IP Address",
           "media_player": "Primary Media Player",
@@ -28,53 +28,59 @@
         }
       },
       "lights": {
-        "title": "Preferences & Ambient Lighting",
-        "description": "Customize smart on-screen overlays and synchronize your lights with dominant album colors.",
+        "title": "Ambient Lighting",
+        "description": "Synchronize your room lights and WLED strips with dominant album colors.",
         "data": {
-          "osd_overlay": "Smart OSD Overlays (Volume/Pause)",
-          "pause_timeout": "Pause Screen Timeout",
-          "volume_osd_duration": "Volume Alert Duration",
           "light_entity": "Lights to Sync",
           "wled_ip": "WLED Device IP Address",
           "only_at_night": "Sync Lights Only at Night"
         },
         "data_description": {
-          "osd_overlay": "Pop up sleek, non-intrusive on-screen alerts when you tweak the volume or hit pause.",
-          "pause_timeout": "How long the 'PAUSED' screen chills before the display turns off or returns to your clock.",
-          "volume_osd_duration": "How many seconds the volume bar stays visible before jumping back to your epic album art.",
           "light_entity": "One or more RGB lights that will dynamically match album art colors in real time.",
           "wled_ip": "Optional IP of a WLED controller to mirror album palettes and dynamic effects.",
           "only_at_night": "Only activate room lighting sync when the sun is below the horizon."
         }
       },
-      "apis": {
-        "title": "Cover Art & AI APIs",
-        "description": "Configure external services to find missing album art or generate custom AI covers.",
+      "free_databases": {
+        "title": "Free Artwork Databases (No API Key Required)",
+        "description": "These community and public archives are queried automatically in the background without requiring any personal account or API key.",
         "data": {
-          "ai_model": "AI Art Model",
-          "pollinations_key": "Pollinations AI Secret Key",
+          "audiodb_enabled": "Search TheAudioDB Database",
           "musicbrainz_enabled": "Search MusicBrainz Database",
           "internet_archive_enabled": "Search Internet Archive Database",
+          "prefetch_enabled": "Next Track Pre-fetch (RAM Cache)"
+        },
+        "data_description": {
+          "audiodb_enabled": "Query [TheAudioDB](https://www.theaudiodb.com) for high-quality artist photos and discography album art. Recommended for Artist Gallery mode.",
+          "musicbrainz_enabled": "Query the open [MusicBrainz](https://musicbrainz.org) database if cover art cannot be retrieved directly from your player.",
+          "internet_archive_enabled": "Query the free [Internet Archive](https://archive.org) database for rare tracks, live concerts, and archival artwork.",
+          "prefetch_enabled": "Pre-downloads and processes the next upcoming track's artwork into RAM before the current track finishes for seamless transitions."
+        }
+      },
+      "apis": {
+        "title": "Streaming Services & AI API Keys",
+        "description": "Configure optional API credentials. A Pollinations AI Secret Key is strictly required to enable and generate custom AI album art.",
+        "data": {
           "spotify_client_id": "Spotify Client ID",
           "spotify_client_secret": "Spotify Client Secret",
           "tidal_client_id": "TIDAL Client ID",
           "tidal_client_secret": "TIDAL Client Secret",
           "lastfm_key": "Last.fm API Key",
           "discogs_token": "Discogs Personal Token",
-          "playlist_prefetch_range": "Playlist Queue Pre-fetch (Fast Skip)"
+          "playlist_prefetch_range": "Playlist Queue Pre-fetch (Fast Skip)",
+          "pollinations_key": "Pollinations AI Secret Key",
+          "ai_model": "AI Art Generation Model"
         },
         "data_description": {
-          "ai_model": "AI image model used to generate conceptual album art.",
-          "pollinations_key": "Secret key from [Pollinations.ai](https://pollinations.ai). Required to activate the 'Force AI Art' switch on your dashboard. Leave blank to keep existing key, or type 'clear' to remove.",
-          "musicbrainz_enabled": "Query the free MusicBrainz database if cover art cannot be retrieved from your player.",
-          "internet_archive_enabled": "Query the free Internet Archive database for rare tracks, live concerts, and archival artwork.",
-          "spotify_client_id": "Client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Unlocks artist photos and the animated 'Spotify Slider' gallery mode. Clear this field to completely remove Spotify.",
-          "spotify_client_secret": "Client Secret from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Leave blank to keep existing secret.",
-          "tidal_client_id": "Client ID from the [TIDAL Developer Platform](https://developer.tidal.com) for lossless cover art matching. Clear this field to completely remove TIDAL.",
-          "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com). Leave blank to keep existing secret.",
-          "lastfm_key": "API Key from [Last.fm Accounts](https://www.last.fm/api/account/create) for fallback artwork. Leave blank to keep existing key, or type 'clear' to remove.",
-          "discogs_token": "Personal token from [Discogs Developer Settings](https://www.discogs.com/settings/developers) for physical release lookups. Leave blank to keep existing token, or type 'clear' to remove.",
-          "playlist_prefetch_range": "Pre-fetches artwork for upcoming and recent tracks in the playing queue (±5 or ±10 songs) into RAM for instant skip transitions. Requires streaming APIs (Spotify, TIDAL, or Discogs). Automatically bypassed during Spotify Slider mode to avoid network and RAM overload."
+          "spotify_client_id": "Client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Required for 'Spotify Slider' mode.",
+          "spotify_client_secret": "Client Secret from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).",
+          "tidal_client_id": "Client ID from the [TIDAL Developer Platform](https://developer.tidal.com) for lossless cover matching.",
+          "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com).",
+          "lastfm_key": "API Key from [Last.fm Accounts](https://www.last.fm/api/account/create) for fallback artwork.",
+          "discogs_token": "Personal token from [Discogs Developer Settings](https://www.discogs.com/settings/developers) for physical releases.",
+          "playlist_prefetch_range": "Pre-fetches surrounding queue tracks (±5 or ±10 songs) into RAM. Requires active streaming keys.",
+          "pollinations_key": "⚠️ MANDATORY FOR AI ART: Obtain your secret API key from [Pollinations.ai](https://pollinations.ai). Strictly required for generating AI art. Leave blank if not using AI.",
+          "ai_model": "Select the generative image model used when 'Force AI Art' is switched on."
         }
       }
     },
@@ -89,51 +95,89 @@
   "options": {
     "step": {
       "init": {
-        "title": "Pixoo 64 Options",
-        "description": "Adjust media tracking, smart overlays, ambient lighting, and API credentials.",
-        "data": {
-          "media_player": "Primary Media Player",
-          "temperature_entity": "Temperature Sensor",
-          "tv_mode": "TV Watching Mode",
-          "osd_overlay": "Smart OSD Overlays (Volume/Pause)",
-          "pause_timeout": "Pause Screen Timeout",
-          "volume_osd_duration": "Volume Alert Duration",
-          "light_entity": "Lights to Sync",
-          "wled_ip": "WLED Strip IP Address",
-          "only_at_night": "Sync Lights Only at Night",
-          "ai_model": "AI Art Generation Model",
-          "pollinations_key": "Pollinations AI Secret Key",
-          "musicbrainz_enabled": "Search MusicBrainz Database",
-          "internet_archive_enabled": "Search Internet Archive Database",
-          "spotify_client_id": "Spotify Client ID",
-          "spotify_client_secret": "Spotify Client Secret",
-          "tidal_client_id": "TIDAL Client ID",
-          "tidal_client_secret": "TIDAL Client Secret",
-          "lastfm_key": "Last.fm API Key",
-          "discogs_token": "Discogs Personal Token",
-          "playlist_prefetch_range": "Playlist Queue Pre-fetch (Fast Skip)"
-        },
-        "data_description": {
-          "media_player": "The speaker, soundbar, or media player to track and display album art from.",
-          "temperature_entity": "Sensor to display live room or outdoor temperature on the screen overlay.",
-          "tv_mode": "When ON: Displays a retro TV graphic with color bars during video playback. When OFF: Turns screen off (Full Control) or reverts to your clock channel.",
-          "osd_overlay": "Pop up sleek, non-intrusive on-screen alerts when you tweak the volume or hit pause.",
-          "pause_timeout": "How long the 'PAUSED' screen chills before the display turns off or returns to your clock.",
-          "volume_osd_duration": "How many seconds the volume bar stays visible before jumping back to your epic album art.",
-          "light_entity": "Home Assistant RGB lights that will dynamically match live album art colors.",
-          "wled_ip": "Optional local IP of a WLED controller to mirror album palettes.",
-          "only_at_night": "Only activate room lighting sync when the sun is below the horizon.",
-          "ai_model": "AI image model used to generate conceptual album art.",
-          "pollinations_key": "Secret key from [Pollinations.ai](https://pollinations.ai). Leave blank to keep existing key, or type 'clear' to remove.",
-          "musicbrainz_enabled": "Query the free MusicBrainz database if cover art cannot be retrieved from your player.",
-          "internet_archive_enabled": "Query the free Internet Archive database for rare tracks, live concerts, and archival artwork.",
-          "spotify_client_id": "Client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Required for the animated 'Spotify Slider' display mode. Clear this field to completely remove Spotify.",
-          "spotify_client_secret": "Client Secret from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Leave blank to keep existing secret.",
-          "tidal_client_id": "Client ID from the [TIDAL Developer Platform](https://developer.tidal.com) for fallback artwork. Clear this field to completely remove TIDAL.",
-          "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com). Leave blank to keep existing secret.",
-          "lastfm_key": "API Key from [Last.fm](https://www.last.fm/api/account/create). Leave blank to keep existing key, or type 'clear' to remove.",
-          "discogs_token": "Personal token from [Discogs](https://www.discogs.com/settings/developers). Leave blank to keep existing token, or type 'clear' to remove.",
-          "playlist_prefetch_range": "Pre-fetches artwork for upcoming and recent tracks in the playing queue (±5 or ±10 songs) into RAM for instant skip transitions. Requires streaming APIs (Spotify, TIDAL, or Discogs). Automatically bypassed during Spotify Slider mode to avoid network and RAM overload."
+        "title": "Pixoo64 Settings",
+        "description": "Configure playback tracking, ambient lighting, and external APIs.",
+        "sections": {
+          "media_section": {
+            "name": "Media Player & Screen Tracking",
+            "description": "Configure the active speaker, temperature sensor, retro TV mode, and RAM pre-fetching.",
+            "data": {
+              "media_player": "Primary Media Player",
+              "temperature_entity": "Temperature Sensor",
+              "tv_mode": "TV Watching Mode",
+              "prefetch_enabled": "Next Track Pre-fetch (RAM Cache)"
+            },
+            "data_description": {
+              "media_player": "The speaker, soundbar, or media player to track and display album art from.",
+              "temperature_entity": "Sensor to display live room or outdoor temperature on the screen overlay.",
+              "tv_mode": "When ON: Displays a retro TV graphic with color bars during video playback. When OFF: Turns screen off or reverts to clock.",
+              "prefetch_enabled": "Pre-downloads and caches the next upcoming song in RAM before the current track finishes."
+            }
+          },
+          "ambient_section": {
+            "name": "Ambient Lighting & WLED",
+            "description": "Synchronize smart room lights and WLED addressable strips with live album colors.",
+            "data": {
+              "light_entity": "Lights to Sync",
+              "wled_ip": "WLED Strip IP Address",
+              "only_at_night": "Sync Lights Only at Night"
+            },
+            "data_description": {
+              "light_entity": "Home Assistant RGB lights that will dynamically match live album art colors.",
+              "wled_ip": "Optional local IP of a WLED controller to mirror album palettes and dynamic effects.",
+              "only_at_night": "Only activate room lighting sync when the sun is below the horizon."
+            }
+          },
+          "free_databases_section": {
+            "name": "Free Artwork Databases (No API Required)",
+            "description": "Community-driven open archives queried automatically in the background without needing personal keys.",
+            "data": {
+              "audiodb_enabled": "Search TheAudioDB (Free)",
+              "musicbrainz_enabled": "Search MusicBrainz (Free)",
+              "internet_archive_enabled": "Search Internet Archive (Free)"
+            },
+            "data_description": {
+              "audiodb_enabled": "Query [TheAudioDB](https://www.theaudiodb.com) for artist pictures and discographies. Free and requires no account.",
+              "musicbrainz_enabled": "Query the open [MusicBrainz](https://musicbrainz.org) database for album art. Free and requires no account.",
+              "internet_archive_enabled": "Query the free [Internet Archive](https://archive.org) for rare tracks and live concerts."
+            }
+          },
+          "streaming_api_section": {
+            "name": "Streaming & External API Keys",
+            "description": "Credentials for Spotify, TIDAL, Last.fm, and Discogs for animations and high-resolution art.",
+            "data": {
+              "spotify_client_id": "Spotify Client ID",
+              "spotify_client_secret": "Spotify Client Secret",
+              "tidal_client_id": "TIDAL Client ID",
+              "tidal_client_secret": "TIDAL Client Secret",
+              "lastfm_key": "Last.fm API Key",
+              "discogs_token": "Discogs Personal Token",
+              "playlist_prefetch_range": "Playlist Queue Pre-fetch (Fast Skip)"
+            },
+            "data_description": {
+              "spotify_client_id": "Client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Enables 'Spotify Slider' mode. Leave blank to remove.",
+              "spotify_client_secret": "Client Secret from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Leave blank to keep existing.",
+              "tidal_client_id": "Client ID from the [TIDAL Developer Platform](https://developer.tidal.com) for lossless cover matching. Leave blank to remove.",
+              "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com). Leave blank to keep existing.",
+              "lastfm_key": "API Key from [Last.fm Accounts](https://www.last.fm/api/account/create) for fallback artwork. Leave blank to keep existing key, or type 'clear' to remove.",
+              "discogs_token": "Personal token from [Discogs Developer Settings](https://www.discogs.com/settings/developers) for physical releases. Leave blank to keep existing token, or type 'clear' to remove.",
+              "playlist_prefetch_range": "Pre-fetches surrounding queue tracks (±5 or ±10 songs) into RAM. Requires active streaming keys."
+            }
+          },
+          "ai_section": {
+            "name": "Generative AI Art (Pollinations.ai)",
+            "description": "Configure conceptual pixel art generation. A Pollinations AI key is strictly required to enable this mode.",
+            "data": {
+              "pollinations_key": "Pollinations AI Secret Key",
+              "ai_model": "AI Art Generation Model",
+              "reload_ai_models": "Reload AI Engine Models List"
+            },
+            "data_description": {
+              "pollinations_key": "Get your API key at [Pollinations.ai](https://pollinations.ai). Mandatory for AI art generation. Leave blank to keep existing, or type 'clear' to remove.",
+              "ai_model": "Generative model used to create AI album art when 'Force AI Art' is switched on.",
+              "reload_ai_models": "Switch ON and click Submit to re-fetch the latest models from the Pollinations API on the spot (without changing your key or closing settings)."
+            }
+          }
         }
       }
     },

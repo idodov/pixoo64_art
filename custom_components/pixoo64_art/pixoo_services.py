@@ -841,28 +841,34 @@ class ImageProcessor:
     async def get_image(self, picture: Optional[str], media_data: "MediaData", spotify_slide: bool = False) -> Optional[dict]:
         if not picture: return None
         current_filter = getattr(self.config, 'image_filter', 'None')
-        cache_key = f"{picture}_{media_data.artist}_{media_data.title}_{current_filter}" if getattr(self.config, 'burned', False) else f"{picture}_{current_filter}"
+        
+        # Optimize RAM cache key: separate cache for images with darkened background (when lyrics active)
+        has_lyrics = getattr(self.config, 'show_lyrics', False) and len(media_data.lyrics) > 0 and getattr(self.config, 'text_bg', False)
+        lyrics_suffix = "_lyrics" if has_lyrics else ""
+        
+        cache_key = f"{picture}_{media_data.artist}_{media_data.title}_{current_filter}{lyrics_suffix}" if getattr(self.config, 'burned', False) else f"{picture}_{current_filter}{lyrics_suffix}"
         use_cache = not spotify_slide and not getattr(media_data, 'playing_tv', False)
-        cached_data = None
 
         if use_cache and cache_key in self.image_cache:
             self.image_cache.move_to_end(cache_key)
-            cached_data = self.image_cache[cache_key]
-        else:
-            image_data = await self.get_raw_image_data(picture)
-            if image_data:
-                cached_data = await self.process_image_data(image_data, media_data)
-                if cached_data and not spotify_slide:
+            return self.image_cache[cache_key]
+
+        image_data = await self.get_raw_image_data(picture)
+        if image_data:
+            cached_data = await self.process_image_data(image_data, media_data)
+            if cached_data:
+                final_img = cached_data['pil_image'].copy()
+                final_img = self.text_clock_img(final_img, cached_data, media_data)
+                cached_data['base64_image'] = self.gbase64(final_img)
+                
+                if not spotify_slide:
                     if len(self.image_cache) >= self.cache_size: 
                         self.image_cache.popitem(last=False)
                     self.image_cache[cache_key] = cached_data
-
-        if not cached_data: return None
-        
-        final_img = cached_data['pil_image'].copy()
-        final_img = self.text_clock_img(final_img, cached_data, media_data)
-        
-        return {'base64_image': self.gbase64(final_img), **cached_data}
+                    
+                return cached_data
+                
+        return None
 
     async def process_image_data(self, image_data: bytes, media_data: "MediaData") -> Optional[dict]:
         try:
@@ -1022,6 +1028,9 @@ class ImageProcessor:
             return img
 
         is_top = getattr(self.config, 'overlay_top', True)
+        if getattr(self.config, 'cassette_mode', False):
+            is_top = False  # Force clock/temp shading to the bottom for cassette mode
+            
         y_start, y_end = (2, 9) if is_top else (55, 62)
         align_mode = getattr(self.config, 'overlay_align', 'Clock Right, Temp Left')
 
@@ -1053,7 +1062,7 @@ class ImageProcessor:
             factor = max(0.2, 1.0 - (stat.mean[0] / 200.0))
             img.paste(ImageEnhance.Brightness(temp_crop).enhance(factor), lpc_temp)
 
-        if getattr(self.config, 'text_bg', False) and getattr(self.config, 'show_text', False) and not getattr(media_data, 'playing_tv', False) and not getattr(self.config, 'burned', False):
+        if getattr(self.config, 'text_bg', False) and getattr(self.config, 'show_text', False) and not getattr(media_data, 'playing_tv', False) and not getattr(self.config, 'burned', False) and not getattr(self.config, 'cassette_mode', False):
             lpc = (0, 0, 64, 16) if getattr(self.config, 'top_text', False) else (0, 48, 64, 64)
             lower_part_img = img.crop(lpc)
             stat = ImageStat.Stat(lower_part_img.convert("L"))
@@ -1240,6 +1249,66 @@ class MicroPixelFont:
             cur_x += 4
 
 
+# =========================================================================
+# VINTAGE CASSETTE TAPE ANIMATION RENDERER (MICRO-PIXEL FONT & TRANSLIT)
+# =========================================================================
+
+class MicroPixelFont:
+    """Ultra-compact proportional 5px high font bitmap engine.
+    Widths vary from 1px to 3px to maximize text fit on retro cassette labels."""
+
+    # Glyph arrays represent columns of pixels (from left to right)
+    GLYPHS = {
+        ' ': [0, 0], # 2px wide space
+        'A': [0x1E, 0x05, 0x1E], 'B': [0x1F, 0x15, 0x0A], 'C': [0x0E, 0x11, 0x11],
+        'D': [0x1F, 0x11, 0x0E], 'E': [0x1F, 0x15, 0x11], 'F': [0x1F, 0x05, 0x01],
+        'G': [0x0E, 0x11, 0x1D], 'H': [0x1F, 0x04, 0x1F], 'I': [0x1F], # 1px
+        'J': [0x08, 0x10, 0x0F], 'K': [0x1F, 0x04, 0x1B], 'L': [0x1F, 0x10, 0x10],
+        'M': [0x1F, 0x02, 0x1F], 'N': [0x1F, 0x06, 0x1F], 'O': [0x0E, 0x11, 0x0E],
+        'P': [0x1F, 0x05, 0x02], 'Q': [0x0E, 0x11, 0x1E], 'R': [0x1F, 0x05, 0x1A],
+        'S': [0x12, 0x15, 0x09], 'T': [0x01, 0x1F, 0x01], 'U': [0x0F, 0x10, 0x0F],
+        'V': [0x07, 0x18, 0x07], 'W': [0x1F, 0x08, 0x1F], 'X': [0x1B, 0x04, 0x1B],
+        'Y': [0x03, 0x1C, 0x03], 'Z': [0x19, 0x15, 0x13],
+        '0': [0x0E, 0x15, 0x0E], '1': [0x08, 0x1F], # 2px
+        '2': [0x19, 0x15, 0x12], '3': [0x11, 0x15, 0x0A], '4': [0x07, 0x04, 0x1F],
+        '5': [0x17, 0x15, 0x09], '6': [0x0E, 0x15, 0x09], '7': [0x01, 0x1D, 0x03],
+        '8': [0x0A, 0x15, 0x0A], '9': [0x02, 0x15, 0x0E],
+        '-': [0x04, 0x04], # 2px
+        '.': [0x10], # 1px
+        "'": [0x03], # 1px
+        '&': [0x0A, 0x15, 0x12],
+        '/': [0x10, 0x0C, 0x03],
+        ':': [0x0A], # 1px
+        '(': [0x0E, 0x11], # 2px
+        ')': [0x11, 0x0E], # 2px
+        '!': [0x17], # 1px
+        '?': [0x01, 0x15, 0x02]
+    }
+
+    @classmethod
+    def get_text_width(cls, text: str) -> int:
+        if not text:
+            return 0
+        width = 0
+        for ch in text.upper():
+            glyph = cls.GLYPHS.get(ch, cls.GLYPHS.get('?'))
+            width += len(glyph) + 1 # Character width + 1px spacing
+        return width - 1 # Remove trailing space of the last character
+
+    @classmethod
+    def draw_text(cls, draw: ImageDraw.ImageDraw, x: int, y: int, text: str, color: tuple):
+        cur_x = x
+        for ch in text.upper():
+            glyph = cls.GLYPHS.get(ch, cls.GLYPHS.get('?'))
+            if glyph:
+                for col_idx, col_bits in enumerate(glyph):
+                    for row_idx in range(5):
+                        if (col_bits >> row_idx) & 1:
+                            draw.point((cur_x + col_idx, y + row_idx), fill=color)
+            # Advance proportional to the glyph's actual width + 1px spacing
+            cur_x += len(glyph) + 1
+
+
 class CassetteRenderer:
     """Generates an authentic 6-frame looping vintage audio cassette animation
     utilizing full-width micro-pixel text and album color science for the cassette accents."""
@@ -1248,7 +1317,6 @@ class CassetteRenderer:
     def render_frames(cls, base_img: Image.Image, image_processor: "ImageProcessor", media_data: "MediaData") -> List[str]:
         frames_b64 = []
         try:
-            # 1. Extract dominant color palette from album art for cassette styling
             palette = image_processor.get_image_palette(base_img)
             accent_color = palette[0] if palette else (185, 148, 62)
 
@@ -1262,36 +1330,56 @@ class CassetteRenderer:
             r_spool = 6
             total_frames = 6
 
-            # Max text width across the full label width (columns 6 to 57 = 52 pixels width)
             max_px = 52
             title_text = cls._prepare_text(media_data.title, max_px)
             artist_text = cls._prepare_text(media_data.artist, max_px)
 
+            # --- Build and filter static background once ---
+            base_canvas = Image.new("RGB", (64, 64), (6, 6, 8))
+            draw = ImageDraw.Draw(base_canvas)
+
+            # Cassette body & corner screws
+            draw.rectangle([1, 1, 62, 62], fill=shell_color)
+            for sx, sy in [(3, 3), (60, 3), (3, 60), (60, 60)]:
+                draw.point((sx, sy), fill=(160, 160, 170))
+                draw.point((sx + 1, sy), fill=(100, 100, 110))
+
+            # Top Label Area (Full width from x: 4 to 59)
+            draw.rectangle([4, 3, 59, 18], fill=label_bg)
+            draw.line([(4, 10), (59, 10)], fill=(210, 45, 45), width=1) # Red stripe
+
+            # Full-width micro text lines centered or left-aligned on the label
+            MicroPixelFont.draw_text(draw, 6, 4, title_text, (20, 45, 110))
+            MicroPixelFont.draw_text(draw, 6, 12, artist_text, (35, 35, 40))
+
+            # Center Acrylic Window & Tape
+            draw.rectangle([13, 21, 50, 42], fill=window_bg)
+            draw.rectangle([13, 21, 50, 42], outline=(40, 40, 45), width=1)
+            for mx in [29, 31, 33, 35]:
+                draw.line([(mx, 26), (mx, 37)], fill=(75, 75, 80), width=1)
+
+            # Bottom Accent Bar tinted with album color palette
+            draw.rectangle([4, 45, 59, 49], fill=accent_color)
+            MicroPixelFont.draw_text(draw, 6, 45, "MIX", (255, 255, 255))
+            MicroPixelFont.draw_text(draw, 49, 45, "90", (255, 255, 255))
+
+            # Bottom tape head well
+            draw.polygon([(11, 62), (18, 52), (45, 52), (52, 62)], fill=(28, 28, 32))
+            draw.line([(18, 52), (45, 52)], fill=(45, 45, 50), width=1)
+            draw.ellipse([23, 55, 27, 59], fill=(6, 6, 8))
+            draw.ellipse([36, 55, 40, 59], fill=(6, 6, 8))
+            draw.point((32, 57), fill=(120, 120, 125))
+
+            # Apply filters and clock overlay to static canvas
+            filter_mode = getattr(image_processor.config, 'image_filter', 'None')
+            base_canvas = image_processor.filter_service.apply_post_scale(base_canvas, filter_mode)
+            base_canvas = image_processor.text_clock_img(base_canvas, {}, media_data)
+
+            # --- Loop for dynamic parts (Rotating Spools) ---
             for f in range(total_frames):
-                canvas = Image.new("RGB", (64, 64), (6, 6, 8))
+                canvas = base_canvas.copy()
                 draw = ImageDraw.Draw(canvas)
 
-                # Cassette body & corner screws
-                draw.rectangle([1, 1, 62, 62], fill=shell_color)
-                for sx, sy in [(3, 3), (60, 3), (3, 60), (60, 60)]:
-                    draw.point((sx, sy), fill=(160, 160, 170))
-                    draw.point((sx + 1, sy), fill=(100, 100, 110))
-
-                # Top Label Area (Full width from x: 4 to 59)
-                draw.rectangle([4, 3, 59, 18], fill=label_bg)
-                draw.line([(4, 10), (59, 10)], fill=(210, 45, 45), width=1) # Red stripe
-
-                # Full-width micro text lines centered or left-aligned on the label
-                MicroPixelFont.draw_text(draw, 6, 4, title_text, (20, 45, 110))
-                MicroPixelFont.draw_text(draw, 6, 12, artist_text, (35, 35, 40))
-
-                # Center Acrylic Window & Tape
-                draw.rectangle([13, 21, 50, 42], fill=window_bg)
-                draw.rectangle([13, 21, 50, 42], outline=(40, 40, 45), width=1)
-                for mx in [29, 31, 33, 35]:
-                    draw.line([(mx, 26), (mx, 37)], fill=(75, 75, 80), width=1)
-
-                # Rotating Spools / Cogs (6-tooth drive hubs)
                 rot_deg = f * 10.0
                 rad = math.radians(rot_deg)
 
@@ -1304,23 +1392,6 @@ class CassetteRenderer:
                         tx = scx + int(round(math.cos(t_angle) * 4.5))
                         ty = spool_cy + int(round(math.sin(t_angle) * 4.5))
                         draw.point((tx, ty), fill=(30, 30, 35))
-
-                # Bottom Accent Bar tinted with album color palette
-                draw.rectangle([4, 45, 59, 49], fill=accent_color)
-                MicroPixelFont.draw_text(draw, 6, 45, "MIX", (255, 255, 255))
-                MicroPixelFont.draw_text(draw, 49, 45, "90", (255, 255, 255))
-
-                # Bottom tape head well
-                draw.polygon([(11, 62), (18, 52), (45, 52), (52, 62)], fill=(28, 28, 32))
-                draw.line([(18, 52), (45, 52)], fill=(45, 45, 50), width=1)
-                draw.ellipse([23, 55, 27, 59], fill=(6, 6, 8))
-                draw.ellipse([36, 55, 40, 59], fill=(6, 6, 8))
-                draw.point((32, 57), fill=(120, 120, 125))
-
-                # Filters & text overlays
-                filter_mode = getattr(image_processor.config, 'image_filter', 'None')
-                canvas = image_processor.filter_service.apply_post_scale(canvas, filter_mode)
-                canvas = image_processor.text_clock_img(canvas, {}, media_data)
 
                 b64 = image_processor.gbase64(canvas)
                 if b64:
@@ -1337,14 +1408,30 @@ class CassetteRenderer:
             return ""
         translit = unidecode(str(raw_text)).strip()
         translit = re.sub(r'[^a-zA-Z0-9\s\-\.\'\&\/\:\(\)\!\?]', '', translit)
-        max_chars = max(3, (max_px + 1) / 4)
-        if len(translit) > max_chars:
-            return f"{translit[:int(max_chars) - 2].strip()}.."
-        return translit
+        
+        # Fast path: If the full text fits, return it immediately
+        if MicroPixelFont.get_text_width(translit) <= max_px:
+            return translit
+            
+        # Dynamic truncation based on proportional pixel width
+        dots_width = MicroPixelFont.get_text_width("..")
+        allowed_width = max_px - dots_width
+        
+        truncated = ""
+        current_width = 0
+        
+        for char in translit:
+            char_w = MicroPixelFont.get_text_width(char)
+            if current_width + char_w > allowed_width:
+                break
+            truncated += char
+            current_width += char_w + 1 # Include spacing for next character
+            
+        return f"{truncated.strip()}.."
     
 
 class VinylRenderer:
-    """Generates an ultra-smooth 32-frame spinning vinyl turntable animation
+    """Generates an ultra-smooth 16-frame spinning vinyl turntable animation
     with translucent grooves, soft glossy sheen reflection on Extra Crop, and proportional 1:5 tonearm tracking."""
 
     @classmethod
@@ -1360,7 +1447,11 @@ class VinylRenderer:
                 else:
                     crop_mode = "No Crop"
 
-            total_frames = 32
+            total_frames = 16
+
+            # --- Apply filter once BEFORE the loop ---
+            filter_mode = getattr(image_processor.config, 'image_filter', 'None')
+            filtered_base = image_processor.filter_service.apply_post_scale(base_img.copy(), filter_mode)
 
             if crop_mode == "Extra Crop":
                 cx, cy = 32, 32
@@ -1370,7 +1461,8 @@ class VinylRenderer:
                 sheen_r1 = 30
                 sheen_r2 = 21
 
-                art_full = base_img.resize((64, 64), Image.Resampling.BILINEAR)
+                art_full = filtered_base.resize((64, 64), Image.Resampling.BILINEAR)
+
                 disc_mask = Image.new("L", (64, 64), 0)
                 ImageDraw.Draw(disc_mask).ellipse([0, 0, 63, 63], fill=255)
 
@@ -1394,7 +1486,7 @@ class VinylRenderer:
                 sheen_r1 = 27
                 sheen_r2 = 18
 
-                center_crop = base_img.resize((label_diam, label_diam), Image.Resampling.BILINEAR)
+                center_crop = filtered_base.resize((label_diam, label_diam), Image.Resampling.BILINEAR)
                 label_mask = Image.new("L", (label_diam, label_diam), 0)
                 ImageDraw.Draw(label_mask).ellipse([0, 0, label_diam - 1, label_diam - 1], fill=255)
 
@@ -1408,7 +1500,7 @@ class VinylRenderer:
                 sheen_r1 = 25
                 sheen_r2 = 19
 
-                center_crop = base_img.resize((label_diam, label_diam), Image.Resampling.BILINEAR)
+                center_crop = filtered_base.resize((label_diam, label_diam), Image.Resampling.BILINEAR)
                 label_mask = Image.new("L", (label_diam, label_diam), 0)
                 ImageDraw.Draw(label_mask).ellipse([0, 0, label_diam - 1, label_diam - 1], fill=255)
 
@@ -1432,7 +1524,6 @@ class VinylRenderer:
 
                 if crop_mode == "Extra Crop":
                     rotated_art = art_full.rotate(-angle, resample=Image.Resampling.BILINEAR).convert("RGBA")
-                    
                     rotated_art.alpha_composite(groove_overlay)
 
                     sheen_layer = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
@@ -1450,7 +1541,6 @@ class VinylRenderer:
                     s_draw.arc([cx - sheen_r2, cy - sheen_r2, cx + sheen_r2, cy + sheen_r2], int(304 - sheen_wobble), int(326 - sheen_wobble), fill=color_sub, width=2)
 
                     rotated_art.alpha_composite(sheen_layer)
-
                     canvas.paste(rotated_art.convert("RGB"), (0, 0), disc_mask)
                     draw = ImageDraw.Draw(canvas)
 
@@ -1494,8 +1584,6 @@ class VinylRenderer:
                     draw.rectangle([needle_x - 1, needle_y - 2, needle_x + 2, needle_y + 2], fill=(210, 210, 220))
                     draw.point((needle_x, needle_y + 1), fill=(235, 45, 45))
 
-                filter_mode = getattr(image_processor.config, 'image_filter', 'None')
-                canvas = image_processor.filter_service.apply_post_scale(canvas, filter_mode)
                 canvas = image_processor.text_clock_img(canvas, {}, media_data)
 
                 b64 = image_processor.gbase64(canvas)
@@ -2145,20 +2233,26 @@ class FallbackService:
                 'color3': '#000000'
             }
 
+        # --- Reading from RAM Redundancy Cache ---
         if not getattr(self.config, 'force_ai', False) and song_cache_key in self._artwork_cache:
             cached = self._artwork_cache[song_cache_key]
             if not is_spotify_slider and not is_artist_slider or cached.get('source') in ["Spotify", "Spotify Artist", "Spotify (Artist Profile Image)", "Original"]:
-                media_data.pic_url = cached['url']
-                media_data.pic_source = cached['source']
-                _LOGGER.debug("Reusing resolved artwork for '%s' from %s", song_cache_key, cached['source'])
-                return cached['data']
+                cached_url = cached['url']
+                cached_source = cached['source']
+                is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
+                proc_res = await self.image_processor.get_image(cached_url, media_data, is_slide_pass)
+                if proc_res:
+                    media_data.pic_url = cached_url
+                    media_data.pic_source = cached_source
+                    _LOGGER.debug("Reusing resolved artwork for '%s' from %s", song_cache_key, cached_source)
+                    return proc_res
 
         try:
             if picture and not (getattr(media_data, 'playing_radio', False) and not getattr(media_data, 'radio_logo', False)):
                 is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
                 result = await self.image_processor.get_image(picture, media_data, is_slide_pass)
                 if result:
-                    self._save_to_artwork_cache(song_cache_key, result, picture, "Original")
+                    self._save_to_artwork_cache(song_cache_key, picture, "Original")
                     media_data.pic_source = "Original"
                     media_data.pic_url = picture
                     return result
@@ -2179,7 +2273,7 @@ class FallbackService:
                         is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
                         proc_res = await self.image_processor.get_image(image_url, media_data, is_slide_pass)
                         if proc_res:
-                            self._save_to_artwork_cache(song_cache_key, proc_res, image_url, "Spotify")
+                            self._save_to_artwork_cache(song_cache_key, image_url, "Spotify")
                             media_data.pic_url = image_url
                             media_data.pic_source = "Spotify"
                             return proc_res
@@ -2191,7 +2285,7 @@ class FallbackService:
             is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
             result = await self.image_processor.get_image(self.spotify_artist_pic, media_data, is_slide_pass)
             if result:
-                self._save_to_artwork_cache(song_cache_key, result, self.spotify_artist_pic, "Spotify Artist")
+                self._save_to_artwork_cache(song_cache_key, self.spotify_artist_pic, "Spotify Artist")
                 media_data.pic_source = "Spotify Artist"
                 return result
 
@@ -2199,7 +2293,7 @@ class FallbackService:
             is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
             result = await self.image_processor.get_image(self.spotify_first_album, media_data, is_slide_pass)
             if result:
-                self._save_to_artwork_cache(song_cache_key, result, self.spotify_first_album, "Spotify (Artist Profile Image)")
+                self._save_to_artwork_cache(song_cache_key, self.spotify_first_album, "Spotify (Artist Profile Image)")
                 media_data.pic_url = self.spotify_first_album
                 media_data.pic_source = "Spotify (Artist Profile Image)"
                 return result
@@ -2209,41 +2303,48 @@ class FallbackService:
             media_data.pic_source = "Internal"
             return self._get_fallback_black_image_data(media_data)
 
-        tasks, providers = [], []
-        if getattr(self.config, 'discogs', None):
-            tasks.append(self.discogs_provider.search_album_art(media_data.artist, media_data.title))
-            providers.append("Discogs")
+        tasks = []
 
+        async def fetch_and_process(provider_name, coro):
+            try:
+                url = await coro
+                if url:
+                    is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
+                    proc_res = await self.image_processor.get_image(url, media_data, is_slide_pass)
+                    if proc_res:
+                        return proc_res, url, provider_name
+            except Exception:
+                pass
+            return None
+
+        if getattr(self.config, 'discogs', None):
+            tasks.append(fetch_and_process("Discogs", self.discogs_provider.search_album_art(media_data.artist, media_data.title)))
         if getattr(self.config, 'lastfm', None):
-            tasks.append(self.lastfm_provider.search_album_art(media_data.artist, media_data.title, media_data.album))
-            providers.append("Last.FM")
-            
+            tasks.append(fetch_and_process("Last.FM", self.lastfm_provider.search_album_art(media_data.artist, media_data.title, media_data.album)))
         tidal_id = getattr(self.config, 'tidal_client_id', None)
         tidal_secret = getattr(self.config, 'tidal_client_secret', None)
         if tidal_id and tidal_secret:
-            tasks.append(self.tidal_provider.get_album_art_url(media_data.artist, media_data.title))
-            providers.append("TIDAL")
-            
+            tasks.append(fetch_and_process("TIDAL", self.tidal_provider.get_album_art_url(media_data.artist, media_data.title)))
         if getattr(self.config, 'musicbrainz', False):
-            tasks.append(self.mb_provider.get_album_art_url(media_data.artist, media_data.title))
-            providers.append("MusicBrainz")
-
+            tasks.append(fetch_and_process("MusicBrainz", self.mb_provider.get_album_art_url(media_data.artist, media_data.title)))
         if getattr(self.config, 'internet_archive', False):
-            tasks.append(self.ia_provider.search_artwork(media_data.artist, media_data.title))
-            providers.append("Internet Archive")
+            tasks.append(fetch_and_process("Internet Archive", self.ia_provider.search_artwork(media_data.artist, media_data.title)))
 
         if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for i, result in enumerate(results):
-                if isinstance(result, Exception) or not result: continue
-                provider_name = providers[i]
-                is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
-                proc_result = await self.image_processor.get_image(result, media_data, is_slide_pass)
-                if proc_result:
-                    self._save_to_artwork_cache(song_cache_key, proc_result, result, provider_name)
-                    media_data.pic_url = result
-                    media_data.pic_source = provider_name
-                    return proc_result
+            pending = [asyncio.create_task(t) for t in tasks]
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    res = task.result()
+                    if res:
+                        # Cancel all slower tasks immediately
+                        for p in pending: 
+                            p.cancel()
+                        proc_result, url, provider_name = res
+                        self._save_to_artwork_cache(song_cache_key, url, provider_name)
+                        media_data.pic_url = url
+                        media_data.pic_source = provider_name
+                        return proc_result
 
         if not getattr(self.config, 'force_ai', False) and getattr(self.config, 'audiodb_enabled', True):
             audiodb_urls = await self.audiodb_provider.get_artist_images(media_data.artist)
@@ -2252,7 +2353,7 @@ class FallbackService:
                     is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
                     proc_result = await self.image_processor.get_image(img_url, media_data, is_slide_pass)
                     if proc_result:
-                        self._save_to_artwork_cache(song_cache_key, proc_result, img_url, "TheAudioDB")
+                        self._save_to_artwork_cache(song_cache_key, img_url, "TheAudioDB")
                         media_data.pic_url = img_url
                         media_data.pic_source = "TheAudioDB"
                         return proc_result
@@ -2261,7 +2362,7 @@ class FallbackService:
             result = await self._try_ai_generation(media_data)
             if result: 
                 if media_data.pic_url:
-                    self._save_to_artwork_cache(song_cache_key, result, media_data.pic_url, "AI")
+                    self._save_to_artwork_cache(song_cache_key, media_data.pic_url, "AI")
                 media_data.pic_source = "AI"
                 return result
 
@@ -2269,12 +2370,10 @@ class FallbackService:
         media_data.pic_source = "Internal"
         return self._get_fallback_black_image_data(media_data)
 
-    def _save_to_artwork_cache(self, key: str, data: dict, url: str, source: str):
-        # Strict cap of 40 artwork resolutions in cache
+    def _save_to_artwork_cache(self, key: str, url: str, source: str):
         if len(self._artwork_cache) >= 40:
             self._artwork_cache.popitem(last=False)
         self._artwork_cache[key] = {
-            'data': data,
             'url': url,
             'source': source
         }
@@ -2891,19 +2990,7 @@ class LyricsProvider:
         self.current_frame_index: int = -1  
         self.filler_regex = re.compile(r"(?:[\s\W]+(?:oh+|ooh+|yeah|yea|woah|la+|na+)+[\W]*)+$", re.IGNORECASE)
 
-    async def get_lyrics(self, artist: Optional[str], title: str, album: Optional[str] = None, duration: int = 0) -> list[dict]:
-        if not artist or not title: return []
-        new_key = f"{artist}|{title}".lower()
-        if new_key == self.current_song_key: return self.lyrics_cache.get(new_key, [])
-        self.visual_timeline = []
-        self.current_song_key = new_key
-        
-        if new_key in self.lyrics_cache:
-            self.lyrics_cache.move_to_end(new_key)
-            raw_lyrics = self.lyrics_cache[new_key]
-            self._build_visual_timeline(raw_lyrics) 
-            return raw_lyrics
-
+    async def _fetch_from_api(self, artist: str, title: str, duration: int) -> list[dict]:
         fetched_lyrics = []
         base_url_get = "https://lrclib.net/api/get"
         params = { 'artist_name': artist, 'track_name': title }
@@ -2936,6 +3023,41 @@ class LyricsProvider:
                             if best_candidate:
                                 fetched_lyrics = self._parse_lrc(best_candidate['syncedLyrics'])
             except Exception: pass
+            
+        return fetched_lyrics
+
+    async def prefetch_lyrics(self, artist: str, title: str, duration: int = 0) -> None:
+        """Silently fetch and cache lyrics for the next track in the background."""
+        if not artist or not title: return
+        new_key = f"{artist}|{title}".lower()
+        
+        if new_key in self.lyrics_cache:
+            return
+            
+        fetched_lyrics = await self._fetch_from_api(artist, title, duration)
+        
+        if fetched_lyrics:
+            if len(self.lyrics_cache) >= 40: 
+                self.lyrics_cache.popitem(last=False)
+            self.lyrics_cache[new_key] = fetched_lyrics
+
+    async def get_lyrics(self, artist: Optional[str], title: str, album: Optional[str] = None, duration: int = 0) -> list[dict]:
+        if not artist or not title: return []
+        new_key = f"{artist}|{title}".lower()
+        
+        if new_key == self.current_song_key: 
+            return self.lyrics_cache.get(new_key, [])
+            
+        self.visual_timeline = []
+        self.current_song_key = new_key
+        
+        if new_key in self.lyrics_cache:
+            self.lyrics_cache.move_to_end(new_key)
+            raw_lyrics = self.lyrics_cache[new_key]
+            self._build_visual_timeline(raw_lyrics) 
+            return raw_lyrics
+
+        fetched_lyrics = await self._fetch_from_api(artist, title, duration)
 
         if len(self.lyrics_cache) >= 40: 
             self.lyrics_cache.popitem(last=False)
@@ -2976,31 +3098,62 @@ class LyricsProvider:
         cleaned.append(current_block)
         return cleaned
 
-    def _basic_wrap(self, text: str, width: int) -> list[str]:
+    def _get_text_width(self, text: str) -> int:
+        """Calculate the approximate pixel width of a string for Pixoo font."""
+        width = 0
+        for char in text:
+            if char in 'WM@%A': width += 6
+            elif char in 'mwQO': width += 5
+            elif char in 'Iijl1!.,:;\'"|': width += 2
+            elif char in 'tf()[]{}': width += 3
+            elif char.isspace(): width += 3
+            elif char.isupper(): width += 5
+            elif char.islower(): width += 4
+            elif '\u0590' <= char <= '\u05FF': width += 5  # Hebrew
+            else: width += 4 # Default for numbers/other symbols
+            width += 1 # Add 1px letter spacing
+        return width - 1 if width > 0 else 0
+
+    def _basic_wrap(self, text: str, max_px: int) -> list[str]:
+        # Handle hyphens to break words correctly (adding spacing around hyphens)
+        text = text.replace("-", " - ")
         words = text.split() 
-        lines, current_line, current_len = [], [], 0
+        lines, current_line, current_width = [], [], 0
+        space_width = self._get_text_width(" ") + 1 # Width of space + spacing
+        
         for word in words:
-            word_len = len(word)
-            space = 1 if current_line else 0
-            if current_len + word_len + space <= width:
+            word_width = self._get_text_width(word)
+            if not current_line:
                 current_line.append(word)
-                current_len += word_len + space
+                current_width = word_width
+            elif current_width + space_width + word_width <= max_px:
+                current_line.append(word)
+                current_width += space_width + word_width
             else:
                 lines.append(current_line)
                 current_line = [word]
-                current_len = word_len
-        if current_line: lines.append(current_line)
-        return [" ".join(l) for l in lines]
+                current_width = word_width
+                
+        if current_line: 
+            lines.append(current_line)
+        return [l.replace(" - ", "-") for l in [" ".join(line) for line in lines]]
 
-    def _smart_wrap(self, text: str, width: int) -> list[str]:
-        lines = self._basic_wrap(text, width)
-        if len(lines) <= 6: return lines
+    def _smart_wrap(self, text: str, max_px: int) -> list[str]:
+        strict_max = max_px - 4 
+        
+        for width in range(42, strict_max + 1, 2):
+            lines = self._basic_wrap(text, width)
+            if len(lines) <= 6:
+                return lines
+
         cleaned_text = self.filler_regex.sub("", text).strip()
         if len(cleaned_text) < len(text):
-            lines = self._basic_wrap(cleaned_text, width)
-            if len(lines) <= 6: return lines
-        lines = self._basic_wrap(text, width + 2)
-        if len(lines) <= 6: return lines
+            for width in range(42, strict_max + 1, 2):
+                lines = self._basic_wrap(cleaned_text, width)
+                if len(lines) <= 6: 
+                    return lines
+            
+        lines = self._basic_wrap(text, strict_max)
         return lines[:6]
 
     def _build_visual_timeline(self, raw_lyrics: list[dict]):
@@ -3019,14 +3172,14 @@ class LyricsProvider:
             end_time = next_start if 0 < gap_to_next < 2.5 else min(calculated_end_time, next_start)
             if end_time <= start_time: end_time = start_time + 1.0
 
-            final_width = 10 if has_bidi(text) else 11
+            max_px = 64 # Maximum pixel width of the display
             layout_items = []
             raw_blocks = text.split('\n')
             final_render_lines = []
 
             for block_idx, block in enumerate(raw_blocks):
                 if len(final_render_lines) >= 6: break
-                wrapped = self._smart_wrap(block, final_width)
+                wrapped = self._smart_wrap(block, max_px)
                 slots_remaining = 6 - len(final_render_lines)
                 if len(wrapped) > slots_remaining:
                     if slots_remaining == 1: wrapped = [" ".join(wrapped)]
@@ -3079,21 +3232,23 @@ class LyricsProvider:
         
         if next_event_time != -1: return [], max(0.1, next_event_time - current_pos)
         return [], None
-
+    
 # =========================================================================
 # MEDIA DATA MODEL
 # =========================================================================
 
+import re
+
 class TitleCleaner:
     def __init__(self):
         self._patterns = [
-            re.compile(r'[\(\[][^)\]]*remaster(?:ed)?[^)\]]*[\)\]]', re.IGNORECASE),
-            re.compile(r'[\(\[][^)\]]*remix(?:ed)?[^)\]]*[\)\]]', re.IGNORECASE),
-            re.compile(r'[\(\[][^)\]]*version[^)\]]*[\)\]]', re.IGNORECASE),
-            re.compile(r'[\(\[][^)\]]*feat.[^)\]]*[\)\]]', re.IGNORECASE),
-            re.compile(r'[\(\[][^)\]]*live[^)\]]*[\)\]]', re.IGNORECASE),
             re.compile(r'^\d+\s*[\.-]\s*', re.IGNORECASE),
-            re.compile(r'\.(mp3|m4a|wav|flac)$', re.IGNORECASE)
+            re.compile(r'\.(mp3|m4a|wav|flac|ogg|wma)$', re.IGNORECASE),
+            re.compile(r'[\(\[][^)\]]*(?:remaster|remix|version|feat|ft\.|featuring|live|radio|edit|mix|acoustic|instrumental|cover|bonus|official|video|audio|mono|stereo)[^)\]]*[\)\]]', re.IGNORECASE),
+            re.compile(r'\s+-\s+(?:Remaster(?:ed)?|Remix|Radio Edit|Live|Single|EP|Acoustic|Instrumental|Mono|Stereo)(?:\s+.*)?$', re.IGNORECASE),
+            re.compile(r'\s+(?:feat\.?|ft\.?|featuring)\s+.*$', re.IGNORECASE),
+            re.compile(r'\(\s*\)|\[\s*\]', re.IGNORECASE),
+            re.compile(r'\s*[\-:]\s*$', re.IGNORECASE)
         ]
 
     def clean(self, title: str) -> str: 
@@ -3762,14 +3917,18 @@ class ProgressBarManager:
     def calculate(self, position: float, duration: float) -> tuple[str, float]:
         if duration <= 0: return "", None
         max_chars = self.config.progress_bar_resolution
-        ratio = min(position / duration, 1.0)
+        
+        effective_duration = max(duration - 5.0, 1.0)
+        ratio = min(position / effective_duration, 1.0)
+        
         chars_needed = max(int(ratio * max_chars), 1)
+        
         self.current_bar_str = self.config.progress_bar_character * chars_needed
         
         next_char_index = chars_needed + 1
         delay = None
         if next_char_index <= max_chars:
-            target_time = (next_char_index / max_chars) * duration
+            target_time = (next_char_index / max_chars) * effective_duration
             delay = max(target_time - position, 0.2)
         return self.current_bar_str, delay
 
@@ -3777,9 +3936,12 @@ class ProgressBarManager:
         if not self.config.progress_bar_enabled or not getattr(media_data, 'show_progress_bar', False) or not self.current_bar_str: return []
         color = getattr(media_data, 'lyrics_font_color', "#FFFFFF") if self.config.progress_bar_color == 'match' else self.config.progress_bar_color
         
+        y_pos = self.config.progress_bar_y_offset - 7
+        
         return [
-            {"TextId": 20, "type": 22, "x": 0, "y": self.config.progress_bar_y_offset-7, "dir": 0, "font": self.config.progress_bar_font, "TextWidth": 64, "Textheight": 10, "speed": 100, "align": 1, "TextString": self.current_bar_str, "color": color},
-            {"TextId": 21, "type": 22, "x": 1, "y": self.config.progress_bar_y_offset-7, "dir": 0, "font": self.config.progress_bar_font, "TextWidth": 64, "Textheight": 10, "speed": 100, "align": 1, "TextString": self.current_bar_str, "color": color}
+            {"TextId": 19, "type": 22, "x": 0, "y": y_pos, "dir": 0, "font": self.config.progress_bar_font, "TextWidth": 64, "Textheight": 10, "speed": 0, "align": 1, "TextString": self.current_bar_str, "color": color},
+            {"TextId": 20, "type": 22, "x": 1, "y": y_pos, "dir": 0, "font": self.config.progress_bar_font, "TextWidth": 64, "Textheight": 10, "speed": 0, "align": 1, "TextString": self.current_bar_str, "color": color},
+            {"TextId": 21, "type": 22, "x": 2, "y": y_pos, "dir": 0, "font": self.config.progress_bar_font, "TextWidth": 64, "Textheight": 10, "speed": 0, "align": 1, "TextString": self.current_bar_str, "color": color}
         ]
 
 class AnalogClockRenderer:

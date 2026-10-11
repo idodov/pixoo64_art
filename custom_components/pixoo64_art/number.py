@@ -14,11 +14,11 @@ class PixooLyricsSyncNumber(RestoreNumber):
         self._attr_name = "Pixoo64 Lyrics Sync Offset"
         self._attr_unique_id = f"{entry.entry_id}_{self.key}"
         self._attr_icon = "mdi:timer-sync"
-        self._attr_native_min_value = -5.0
-        self._attr_native_max_value = 5.0
+        self._attr_native_min_value = -10.0
+        self._attr_native_max_value = 10.0
         self._attr_native_step = 0.5
         
-        self._attr_native_value = float(self.hub.ui_state.get(self.key, 0.0))
+        self._attr_native_value = float(self.hub.ui_state.get(self.key, -2.0))
         self.hub.ui_state[self.key] = self._attr_native_value
 
     @property

@@ -234,6 +234,7 @@ class PixooHub:
         self.debounce_task = None
         self._prefetch_task = None
         self._playlist_prefetch_task = None
+        self._early_send_task = None
         self._progress_timer_unsub = None
         self._clock_timer_unsub = None
         self._lyrics_timer_unsub = None
@@ -288,7 +289,7 @@ class PixooHub:
                 setattr(self, attr, None)
 
     def _cancel_tasks(self, tasks=None):
-        default_tasks = ['current_task', 'debounce_task', '_prefetch_task', '_playlist_prefetch_task']
+        default_tasks = ['current_task', 'debounce_task', '_prefetch_task', '_playlist_prefetch_task', '_early_send_task']
         for attr in (tasks or default_tasks):
             task = getattr(self, attr, None)
             if task and not task.done():
@@ -339,14 +340,14 @@ class PixooHub:
             async_track_state_change_event(self.hass, [self.media_player], self.safe_state_change_callback)
         )
         
-        state = self.hass.states.get(self.media_player)
-        if state and self._is_player_active(state):
-            await self.force_update()
-            queue, current_idx = await self._fetch_player_queue()
-            if queue:
-                self.media_data.queue_total = len(queue)
-            if current_idx is not None:
-                self.media_data.track_number = current_idx + 1
+        async def _delayed_startup():
+            await asyncio.sleep(4.0)
+            state = self.hass.states.get(self.media_player)
+            if state and self._is_player_active(state):
+                self._active_song_key = None # Clear this to force a fresh render
+                await self.force_update()
+
+        self.hass.async_create_task(_delayed_startup())
 
     async def terminate(self):
         for unsub in self._unsub_listeners:
@@ -365,17 +366,17 @@ class PixooHub:
 
         if key == "master_control":
             if not value:
-                await self._send_off_command()
+                self.hass.async_create_task(self._send_off_command())
             else:
                 self._active_song_key = None
-                await self.force_update()
+                self.hass.async_create_task(self.force_update())
             return
 
         if key == "pause_timeout":
             if self.osd_mode == "Pause":
                 pause_setting = str(value)
                 if pause_setting in ["Disabled (0s)", "0s", "Disabled"]:
-                    await self._send_off_command()
+                    self.hass.async_create_task(self._send_off_command())
                 elif pause_setting != "Never":
                     timeout_val = int(pause_setting.replace("s", "").split()[0])
                     self._cleanup_timers(['_pause_timeout_unsub'])
@@ -391,13 +392,13 @@ class PixooHub:
         if key not in image_affecting_keys:
             if self.is_art_visible:
                 if self.lyrics_active_mode:
-                    await self._calculate_and_schedule_next()
+                    self.hass.async_create_task(self._calculate_and_schedule_next())
                 else:
                     self.request_text_render(force=True)
 
                 if key == "progress_bar":
                     self.progress_timer_gen_id += 1
-                    await self._update_progress_bar_loop()
+                    self.hass.async_create_task(self._update_progress_bar_loop())
             return
 
         self._early_slider_sent_for = None
@@ -416,7 +417,7 @@ class PixooHub:
         self._last_rendered_artist = None
         
         self._active_song_key = None 
-        await self.force_update()
+        self.hass.async_create_task(self.force_update())
 
     async def _send_off_command(self):
         if self.sensor:
@@ -871,20 +872,22 @@ class PixooHub:
                         self._cleanup_timers(['_early_send_timer_unsub'])
                         async def _early_send_cb(now):
                             self._early_send_timer_unsub = None
+                            self._cancel_tasks(['_early_send_task'])
                             if getattr(self.config, 'spotify_slide', False) or getattr(self.config, 'artist_slide', False):
-                                await self._do_early_slider_send(dummy_media)
+                                self._early_send_task = self.hass.async_create_task(self._do_early_slider_send(dummy_media))
                             elif getattr(self.config, 'vinyl_mode', False):
-                                await self._do_early_vinyl_send(dummy_media)
+                                self._early_send_task = self.hass.async_create_task(self._do_early_vinyl_send(dummy_media))
                             elif getattr(self.config, 'cassette_mode', False):
-                                await self._do_early_cassette_send(dummy_media)
+                                self._early_send_task = self.hass.async_create_task(self._do_early_cassette_send(dummy_media))
                         self._early_send_timer_unsub = async_call_later(self.hass, time_to_early_send, _early_send_cb)
                     elif time_to_early_send > -early_offset:
+                        self._cancel_tasks(['_early_send_task'])
                         if is_slider or is_artist_slider:
-                            self.hass.async_create_task(self._do_early_slider_send(dummy_media))
+                            self._early_send_task = self.hass.async_create_task(self._do_early_slider_send(dummy_media))
                         elif is_vinyl:
-                            self.hass.async_create_task(self._do_early_vinyl_send(dummy_media))
+                            self._early_send_task = self.hass.async_create_task(self._do_early_vinyl_send(dummy_media))
                         elif is_cassette:
-                            self.hass.async_create_task(self._do_early_cassette_send(dummy_media))
+                            self._early_send_task = self.hass.async_create_task(self._do_early_cassette_send(dummy_media))
                             
         except asyncio.CancelledError:
             self.prefetch_status = "Cancelled"
@@ -961,7 +964,7 @@ class PixooHub:
                     "PicWidth": 64,
                     "PicOffset": offset,
                     "PicID": 0,
-                    "PicSpeed": 140,
+                    "PicSpeed": 70 if len(vinyl_frames) > 16 else 140,
                     "PicData": b64_frame
                 })
             self.prefetch_status = "Vinyl Sent Early"
@@ -1169,6 +1172,12 @@ class PixooHub:
             
         state = self.hass.states.get(self.media_player)
         if state and self._is_player_active(state):
+            # --- AGGRESSIVE TEAR DOWN FIRST ---
+            self._stop_lyrics_scheduler()
+            self._stop_clock_scheduler()
+            self._cleanup_timers() 
+            self._cancel_tasks(['current_task', '_playlist_prefetch_task', '_early_send_task'])
+
             await self.media_data.update()
             if not self.media_data.title and not getattr(self.media_data, 'playing_tv', False):
                 await self._send_off_command()
@@ -1183,29 +1192,12 @@ class PixooHub:
 
             self._active_song_key = None
             self.media_data.track_changed = True
-            self._cleanup_timers(['_prefetch_timer_unsub', '_early_send_timer_unsub', '_clock_timer_unsub'])
-            self._cancel_tasks(['current_task', '_playlist_prefetch_task'])
             
             self.current_task = self.hass.async_create_task(self._process_and_send())
             self._playlist_prefetch_task = self.hass.async_create_task(self._run_playlist_prefetch())
         else:
             await self._send_off_command()
 
-    async def safe_state_change_callback(self, event):
-        self._cancel_tasks(['debounce_task'])
-        self.debounce_task = asyncio.create_task(self._run_debounced_callback(event))
-
-    async def _run_debounced_callback(self, event):
-        try:
-            await asyncio.sleep(0.5)
-            await self._handle_media_change(event)
-        except asyncio.CancelledError:
-            pass
-
-    async def _execute_pause_timeout(self, now=None):
-        self._pause_timeout_unsub = None
-        if self.osd_mode == "Pause":
-            await self._send_off_command()
 
     async def _handle_media_change(self, event):
         if self.notification_manager.is_active:
@@ -1279,16 +1271,23 @@ class PixooHub:
                 await self._update_progress_bar_loop()
                 return 
 
+        # --- AGGRESSIVE TEAR DOWN FIRST ---
+        self._stop_lyrics_scheduler()
+        self._stop_clock_scheduler()
+        self._cleanup_timers()
+        self._cancel_tasks(['_prefetch_task', '_playlist_prefetch_task', 'current_task', '_early_send_task'])
+
         await self.media_data.update()
         self._fetch_external_temperature()
 
         if not self.media_data.title and not getattr(self.media_data, 'playing_tv', False):
             await self._send_off_command()
-            self._stop_lyrics_scheduler()
             return
 
         current_song_key = f"{self.media_data.artist}_{self.media_data.title}".strip().lower()
         if current_song_key and current_song_key == self._active_song_key and self.is_art_visible:
+            self.last_text_payload_hash = None
+            self.request_text_render(force=True)
             self.progress_timer_gen_id += 1
             await self._update_progress_bar_loop()
             if self.lyrics_active_mode:
@@ -1305,13 +1304,13 @@ class PixooHub:
             if old_title == new_title and old_artist == new_artist:
                 is_new_track = False
 
+        if not self.is_art_visible:
+            is_new_track = True
+
         if is_new_track or self.media_data.track_changed:
             self.prefetch_status = "Idle"
             self.prefetch_next_artist = None
             self.prefetch_next_title = None
-            
-            self._cleanup_timers(['_prefetch_timer_unsub', '_early_send_timer_unsub', '_clock_timer_unsub'])
-            self._cancel_tasks(['_prefetch_task', '_playlist_prefetch_task', 'current_task'])
             
             self.current_task = self.hass.async_create_task(self._process_and_send())
             self._playlist_prefetch_task = self.hass.async_create_task(self._run_playlist_prefetch())
@@ -1321,6 +1320,23 @@ class PixooHub:
             if self.lyrics_active_mode:
                 await self._calculate_and_schedule_next()
             self._schedule_prefetch()
+
+    async def safe_state_change_callback(self, event):
+        self._cancel_tasks(['debounce_task'])
+        self.debounce_task = asyncio.create_task(self._run_debounced_callback(event))
+
+    async def _run_debounced_callback(self, event):
+        try:
+            await asyncio.sleep(0.5)
+            await self._handle_media_change(event)
+        except asyncio.CancelledError:
+            pass
+
+    async def _execute_pause_timeout(self, now=None):
+        self._pause_timeout_unsub = None
+        if self.osd_mode == "Pause":
+            await self._send_off_command()
+
 
     async def _process_and_send(self):
         self._is_processing_image = True
@@ -1492,7 +1508,7 @@ class PixooHub:
                                 "PicWidth": 64,
                                 "PicOffset": offset,
                                 "PicID": 0,
-                                "PicSpeed": 140,
+                                "PicSpeed": 70 if len(vinyl_frames) > 16 else 140,
                                 "PicData": b64_frame
                             })
                         early_vinyl_match = True
@@ -1689,13 +1705,16 @@ class PixooHub:
             if bar_str != self.last_progress_str or self.last_text_payload_hash is None:
                 self.last_progress_str = bar_str
                 self.request_text_render()
-        if delay is not None:
-            gen_id = self.progress_timer_gen_id
-            async def _pb_timer(now):
-                if self.progress_timer_gen_id == gen_id:
-                    await self._update_progress_bar_loop()
-            self._cleanup_timers(['_progress_timer_unsub'])
-            self._progress_timer_unsub = async_call_later(self.hass, delay, _pb_timer)
+                
+        # --- BULLETPROOF FIX ---
+        safe_delay = delay if delay is not None else 5.0
+        
+        gen_id = self.progress_timer_gen_id
+        async def _pb_timer(now):
+            if self.progress_timer_gen_id == gen_id:
+                await self._update_progress_bar_loop()
+        self._cleanup_timers(['_progress_timer_unsub'])
+        self._progress_timer_unsub = async_call_later(self.hass, safe_delay, _pb_timer)
 
     def _stop_lyrics_scheduler(self):
         self.lyrics_active_mode = False

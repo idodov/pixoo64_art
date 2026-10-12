@@ -783,70 +783,20 @@ class ImageProcessor:
         self.cropper = ImageCropper()
         self.color_analyzer = ColorAnalyzer()
         self.filter_service = ImageFilterService()
-        
 
     def shutdown(self):
         pass
 
-    async def async_prefetch_url(self, picture: str, media_data: "MediaData" = None):
-        if not picture: return
-        if picture.startswith('http'): url = picture
-        else:
-            try: base_url = get_url(self.hass)
-            except Exception: base_url = "http://127.0.0.1:8123"
-            url = f"{base_url}{picture}"
-            
-        if url in self.raw_image_cache or url in self._prefetch_tasks:
-            return
-
-        task = asyncio.create_task(self.get_raw_image_data(url))
-        self._prefetch_tasks[url] = task
-        try:
-            await task
-        finally:
-            self._prefetch_tasks.pop(url, None)
-
-    async def get_raw_image_data(self, url: str) -> Optional[bytes]:
-        if not url: return None
-        if not url.startswith('http'):
-            try: base_url = get_url(self.hass)
-            except Exception: base_url = "http://127.0.0.1:8123"
-            url = f"{base_url}{url}"
-
-        if url in self._prefetch_tasks:
-            try: await self._prefetch_tasks[url]
-            except Exception: pass
-
-        if url in self.raw_image_cache:
-            self.raw_image_cache.move_to_end(url)
-            return self.raw_image_cache[url]
-
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            api_key = getattr(self.config, 'pollinations', "")
-            if "pollinations.ai" in url and api_key:
-                headers["Authorization"] = f"Bearer {str(api_key).strip()}"
-
-            async with self.session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                if response.status == 200:
-                    image_data = await response.read()
-                    if len(self.raw_image_cache) >= self.cache_size:
-                        self.raw_image_cache.popitem(last=False)
-                    self.raw_image_cache[url] = image_data
-                    return image_data
-        except Exception as e:
-            _LOGGER.debug("Failed to download raw image data for %s: %s", url, e)
-        return None
-
     async def get_image(self, picture: Optional[str], media_data: "MediaData", spotify_slide: bool = False) -> Optional[dict]:
-        if not picture: return None
+        if not picture:
+            return None
         current_filter = getattr(self.config, 'image_filter', 'None')
         
-        # Optimize RAM cache key: separate cache for images with darkened background (when lyrics active)
         has_lyrics = getattr(self.config, 'show_lyrics', False) and len(media_data.lyrics) > 0 and getattr(self.config, 'text_bg', False)
         lyrics_suffix = "_lyrics" if has_lyrics else ""
         
-        cache_key = f"{picture}_{media_data.artist}_{media_data.title}_{current_filter}{lyrics_suffix}" if getattr(self.config, 'burned', False) else f"{picture}_{current_filter}{lyrics_suffix}"
+        cache_key = f"{picture}_{media_data.artist}_{media_data.title}_{current_filter}{lyrics_suffix}".strip().lower()
+        
         use_cache = not spotify_slide and not getattr(media_data, 'playing_tv', False)
 
         if use_cache and cache_key in self.image_cache:
@@ -856,11 +806,7 @@ class ImageProcessor:
         image_data = await self.get_raw_image_data(picture)
         if image_data:
             cached_data = await self.process_image_data(image_data, media_data)
-            if cached_data:
-                final_img = cached_data['pil_image'].copy()
-                final_img = self.text_clock_img(final_img, cached_data, media_data)
-                cached_data['base64_image'] = self.gbase64(final_img)
-                
+            if cached_data:              
                 if not spotify_slide:
                     if len(self.image_cache) >= self.cache_size: 
                         self.image_cache.popitem(last=False)
@@ -869,15 +815,6 @@ class ImageProcessor:
                 return cached_data
                 
         return None
-
-    async def process_image_data(self, image_data: bytes, media_data: "MediaData") -> Optional[dict]:
-        try:
-            return await self.hass.async_add_executor_job(
-                self._process_image, image_data, media_data
-            )
-        except Exception as e:
-            _LOGGER.error("Error executing image process job: %s", e)
-            return None
 
     def _process_image(self, image_data: bytes, media_data: "MediaData") -> Optional[dict]:
         try:
@@ -918,7 +855,7 @@ class ImageProcessor:
                 is_analog = getattr(self.config, 'analog_clock', False)
                 final_pil = clean_64 if is_analog else display_img
 
-                return {
+                result_dict = {
                     'pil_image': final_pil,
                     'clean_image': clean_64,
                     'font_color': val_dict.get('font_color', '#FFFFFF'),
@@ -929,11 +866,83 @@ class ImageProcessor:
                     'color2': color2,
                     'color3': color3,
                 }
+                
+                final_img_with_clock = final_pil.copy()
+                final_img_with_clock = self.text_clock_img(final_img_with_clock, result_dict, media_data)
+                
+                result_dict['base64_image'] = self.gbase64(final_img_with_clock)
+
+                return result_dict
+                
         except Exception as e:
             _LOGGER.error("Error in _process_image: %s", e)
             return None
 
-    process_image = _process_image
+    async def async_prefetch_url(self, picture: str, media_data: "MediaData" = None):
+        if not picture: return
+        if picture.startswith('http'): 
+            url = picture
+        else:
+            try: base_url = get_url(self.hass)
+            except Exception: base_url = "http://127.0.0.1:8123"
+            url = f"{base_url}{picture}"
+            
+        if url in self.raw_image_cache or url in self._prefetch_tasks:
+            return
+
+        task = asyncio.create_task(self.get_raw_image_data(url))
+        self._prefetch_tasks[url] = task
+        try:
+            await task
+        finally:
+            self._prefetch_tasks.pop(url, None)
+
+    async def get_raw_image_data(self, url: str) -> Optional[bytes]:
+        if not url: return None
+        
+        if not url.startswith('http'):
+            try: base_url = get_url(self.hass)
+            except Exception: base_url = "http://127.0.0.1:8123"
+            url = f"{base_url}{url}"
+
+        if url in self._prefetch_tasks:
+            try: await self._prefetch_tasks[url]
+            except Exception: pass
+
+        if url in self.raw_image_cache:
+            self.raw_image_cache.move_to_end(url)
+            return self.raw_image_cache[url]
+
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        api_key = getattr(self.config, 'pollinations', "")
+        if "pollinations.ai" in url and api_key:
+            headers["Authorization"] = f"Bearer {str(api_key).strip()}"
+
+        for attempt in range(3):
+            try:
+                async with self.session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    if response.status == 200:
+                        image_data = await response.read()
+                        if image_data and len(image_data) > 0:
+                            if len(self.raw_image_cache) >= self.cache_size:
+                                self.raw_image_cache.popitem(last=False)
+                            self.raw_image_cache[url] = image_data
+                            return image_data
+            except Exception:
+                pass
+            
+            await asyncio.sleep(0.5)
+
+        return None
+
+    async def process_image_data(self, image_data: bytes, media_data: "MediaData") -> Optional[dict]:
+        try:
+            return await self.hass.async_add_executor_job(
+                self._process_image, image_data, media_data
+            )
+        except Exception as e:
+            _LOGGER.error("Error executing image process job: %s", e)
+            return None
 
     def _draw_burned_text(self, img: Image.Image, artist: str, title: str) -> Image.Image:
         if not (artist or title): 
@@ -1182,6 +1191,15 @@ class ImageProcessor:
         except Exception:
             return None
 
+    async def process_image_data(self, image_data: bytes, media_data: "MediaData") -> Optional[dict]:
+        try:
+            return await self.hass.async_add_executor_job(
+                self._process_image, image_data, media_data
+            )
+        except Exception as e:
+            _LOGGER.error("Error executing image process job: %s", e)
+            return None
+
     def generate_vinyl_frames(self, pil_image: Image.Image, media_data: "MediaData") -> List[str]:
         return VinylRenderer.render_frames(pil_image, self, media_data)
 
@@ -1200,55 +1218,7 @@ class ImageProcessor:
         except Exception as e:
             _LOGGER.error("Error generating analog clock frame: %s", e)
             return None
-
-# =========================================================================
-# VINTAGE CASSETTE TAPE ANIMATION RENDERER (MICRO-PIXEL FONT & TRANSLIT)
-# =========================================================================
-
-class MicroPixelFont:
-    """Ultra-compact 3x5 pixel font bitmap engine (3px wide, 5px high).
-    Fits perfectly on retro cassette labels allowing multiple crisp text lines."""
-
-    GLYPHS = {
-        ' ': [0, 0, 0],
-        'A': [0x1E, 0x05, 0x1E], 'B': [0x1F, 0x15, 0x0A], 'C': [0x0E, 0x11, 0x11],
-        'D': [0x1F, 0x11, 0x0E], 'E': [0x1F, 0x15, 0x11], 'F': [0x1F, 0x05, 0x01],
-        'G': [0x0E, 0x11, 0x1D], 'H': [0x1F, 0x04, 0x1F], 'I': [0x11, 0x1F, 0x11],
-        'J': [0x08, 0x10, 0x0F], 'K': [0x1F, 0x04, 0x1B], 'L': [0x1F, 0x10, 0x10],
-        'M': [0x1F, 0x02, 0x1F], 'N': [0x1F, 0x06, 0x1F], 'O': [0x0E, 0x11, 0x0E],
-        'P': [0x1F, 0x05, 0x02], 'Q': [0x0E, 0x11, 0x1E], 'R': [0x1F, 0x05, 0x1A],
-        'S': [0x12, 0x15, 0x09], 'T': [0x01, 0x1F, 0x01], 'U': [0x0F, 0x10, 0x0F],
-        'V': [0x07, 0x18, 0x07], 'W': [0x1F, 0x08, 0x1F], 'X': [0x1B, 0x04, 0x1B],
-        'Y': [0x03, 0x1C, 0x03], 'Z': [0x19, 0x15, 0x13],
-        '0': [0x0E, 0x15, 0x0E], '1': [0x08, 0x1F, 0x00], '2': [0x19, 0x15, 0x12],
-        '3': [0x11, 0x15, 0x0A], '4': [0x07, 0x04, 0x1F], '5': [0x17, 0x15, 0x09],
-        '6': [0x0E, 0x15, 0x09], '7': [0x01, 0x1D, 0x03], '8': [0x0A, 0x15, 0x0A],
-        '9': [0x02, 0x15, 0x0E],
-        '-': [0x04, 0x04, 0x04], '.': [0x00, 0x10, 0x00], "'": [0x00, 0x03, 0x00],
-        '&': [0x0A, 0x15, 0x12], '/': [0x10, 0x0C, 0x03], ':': [0x00, 0x0A, 0x00],
-        '(': [0x0E, 0x11, 0x00], ')': [0x00, 0x11, 0x0E], '!': [0x00, 0x17, 0x00],
-        '?': [0x01, 0x15, 0x02]
-    }
-
-    @classmethod
-    def get_text_width(cls, text: str) -> int:
-        if not text:
-            return 0
-        return len(text) * 4 - 1
-
-    @classmethod
-    def draw_text(cls, draw: ImageDraw.ImageDraw, x: int, y: int, text: str, color: tuple):
-        cur_x = x
-        for ch in text.upper():
-            glyph = cls.GLYPHS.get(ch, cls.GLYPHS.get('?'))
-            if glyph:
-                for col_idx, col_bits in enumerate(glyph):
-                    for row_idx in range(5):
-                        if (col_bits >> row_idx) & 1:
-                            draw.point((cur_x + col_idx, y + row_idx), fill=color)
-            cur_x += 4
-
-
+        
 # =========================================================================
 # VINTAGE CASSETTE TAPE ANIMATION RENDERER (MICRO-PIXEL FONT & TRANSLIT)
 # =========================================================================
@@ -1429,10 +1399,9 @@ class CassetteRenderer:
             
         return f"{truncated.strip()}.."
     
-
 class VinylRenderer:
-    """Generates an ultra-smooth 16-frame spinning vinyl turntable animation
-    with translucent grooves, soft glossy sheen reflection on Extra Crop, and proportional 1:5 tonearm tracking."""
+    """Generates a smooth spinning vinyl turntable animation
+    with 16 frames (standard) or 32 frames (Extra Crop) for ultimate smoothness."""
 
     @classmethod
     def render_frames(cls, base_img: Image.Image, image_processor: "ImageProcessor", media_data: "MediaData") -> List[str]:
@@ -1447,9 +1416,9 @@ class VinylRenderer:
                 else:
                     crop_mode = "No Crop"
 
-            total_frames = 16
+            # --- THE FIX: 32 frames for Extra Crop, 16 otherwise ---
+            total_frames = 32 if crop_mode == "Extra Crop" else 16
 
-            # --- Apply filter once BEFORE the loop ---
             filter_mode = getattr(image_processor.config, 'image_filter', 'None')
             filtered_base = image_processor.filter_service.apply_post_scale(base_img.copy(), filter_mode)
 
@@ -2194,11 +2163,9 @@ class FallbackService:
         self.fallback = False
         media_data.pic_url = None 
         
-        if getattr(self.config, 'burned', False) or not media_data.album:
-            song_cache_key = f"{media_data.artist}_{media_data.title}".strip().lower()
-        else:
-            song_cache_key = f"{media_data.artist}_{media_data.album}".strip().lower()
-
+        # We restore the explicit, simple Cache Key matching the original AppDaemon logic.
+        song_cache_key = f"{media_data.artist}_{media_data.album or media_data.title}".strip().lower()
+        
         is_spotify_slider = (
             getattr(self.config, 'spotify_slide', False) 
             and not getattr(media_data, 'radio_logo', False) 
@@ -2233,7 +2200,7 @@ class FallbackService:
                 'color3': '#000000'
             }
 
-        # --- Reading from RAM Redundancy Cache ---
+        # --- CACHE CHECK (Matching Original Logic) ---
         if not getattr(self.config, 'force_ai', False) and song_cache_key in self._artwork_cache:
             cached = self._artwork_cache[song_cache_key]
             if not is_spotify_slider and not is_artist_slider or cached.get('source') in ["Spotify", "Spotify Artist", "Spotify (Artist Profile Image)", "Original"]:
@@ -2247,6 +2214,7 @@ class FallbackService:
                     _LOGGER.debug("Reusing resolved artwork for '%s' from %s", song_cache_key, cached_source)
                     return proc_res
 
+        # We restore the original, generous processing wrapper
         try:
             if picture and not (getattr(media_data, 'playing_radio', False) and not getattr(media_data, 'radio_logo', False)):
                 is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
@@ -2337,7 +2305,6 @@ class FallbackService:
                 for task in done:
                     res = task.result()
                     if res:
-                        # Cancel all slower tasks immediately
                         for p in pending: 
                             p.cancel()
                         proc_result, url, provider_name = res
@@ -2517,7 +2484,7 @@ class FallbackService:
         )
         image = image.resize((final_width, final_height), Image.Resampling.BILINEAR)
         return image
-  
+
 # =========================================================================
 # SPOTIFY SERVICE
 # =========================================================================
@@ -3257,7 +3224,6 @@ class TitleCleaner:
             title = pattern.sub('', title)
         return ' '.join(title.split())
 
-
 class MediaData:
     def __init__(self, hass: HomeAssistant, config: "Config", image_processor: "ImageProcessor", session: aiohttp.ClientSession):
         self.hass = hass
@@ -3272,6 +3238,7 @@ class MediaData:
         
         self.prev_title: str = ""
         self.prev_artist: str = ""
+        self.prev_picture: Optional[str] = None  # --- THE FIX: Tracking Picture URL changes! ---
         self.track_changed: bool = False 
         
         self.artist: str = ""
@@ -3293,7 +3260,6 @@ class MediaData:
         self.media_position_updated_at: Optional[datetime] = None
         self.temperature: Optional[str] = None
         
-        # Dedicated Isolated Slider State
         self.spotify_slide_pass: bool = False
         self.artist_slide_pass: bool = False
         self.slider_frames: int = 0
@@ -3341,7 +3307,8 @@ class MediaData:
             self._evaluate_radio_mode(raw_title, raw_artist, attributes)
             await self._fetch_lyrics()
 
-            self.track_changed = (self.title != self.prev_title or self.artist != self.prev_artist)
+            # --- THE FIX: We now trigger a re-render if HA updates the picture URL later! ---
+            self.track_changed = (self.title != self.prev_title or self.artist != self.prev_artist or self.picture != self.prev_picture)
             if self.track_changed:
                 self.slider_album_urls = []
                 self.slider_artist_pic_url = None
@@ -3350,6 +3317,7 @@ class MediaData:
                 self.slider_error = None
 
             self.prev_title, self.prev_artist = self.title, self.artist
+            self.prev_picture = self.picture
             return self
             
         except Exception as e:
@@ -3384,8 +3352,9 @@ class MediaData:
         self.lyrics = []
         self.show_progress_bar = False
         
-        self.track_changed = (self.title != self.prev_title or self.artist != self.prev_artist)
+        self.track_changed = (self.title != self.prev_title or self.artist != self.prev_artist or self.picture != self.prev_picture)
         self.prev_title, self.prev_artist = self.title, self.artist
+        self.prev_picture = self.picture
 
     def _set_media_state(self, raw_title: str, raw_artist: str, attributes: dict):
         self.playing_tv = False

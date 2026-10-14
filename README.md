@@ -19,17 +19,17 @@
 
 ## 📑 Table of Contents
 
-- [Overview](#-overview)
-- [Features at a Glance](#-features-at-a-glance)
-- [Installation](#-installation)
-- [Initial Configuration](#️-initial-configuration-ui-config-flow)
-- [Smart Notifications Service](#-smart-notifications-service)
-- [Automation Recipes](#-automation-recipes)
-- [FAQ](#-frequently-asked-questions-faq)
-- [Diagnostics & Troubleshooting](#️-diagnostics--troubleshooting)
-- [Contributing](#-contributing)
-- [License](#-license)
-- [Acknowledgments](#-acknowledgments)
+* [Overview](https://www.google.com/search?q=%23-overview)
+* [Features at a Glance](https://www.google.com/search?q=%23-features-at-a-glance)
+* [Installation](https://www.google.com/search?q=%23-installation)
+* [Initial Configuration](https://www.google.com/search?q=%23%EF%B8%8F-initial-configuration-ui-config-flow)
+* [Smart Notifications Service](https://www.google.com/search?q=%23-smart-notifications-service)
+* [Automation Recipes](https://www.google.com/search?q=%23-automation-recipes)
+* [FAQ](https://www.google.com/search?q=%23-frequently-asked-questions-faq)
+* [Diagnostics & Troubleshooting](https://www.google.com/search?q=%23%EF%B8%8F-diagnostics--troubleshooting)
+* [Contributing](https://www.google.com/search?q=%23-contributing)
+* [License](https://www.google.com/search?q=%23-license)
+* [Acknowledgments](https://www.google.com/search?q=%23-acknowledgments)
 
 ---
 
@@ -39,39 +39,26 @@
 
 It is a **100% native Home Assistant custom integration**:
 
-- **Native performance** — runs inside Home Assistant's asynchronous event loop.
-- **Fully UI-configured** — automatic LAN discovery plus complete setup via Config Flow and Options Flow. No YAML required.
-- **Direct LAN communication** — talks to the Pixoo64 over local HTTP. Core playback is instant, reliable, and cloud-independent.
-- **Multi-purpose visual hub** — album art, artist slideshows, volume HUD, retro TV mode, synced lyrics, ambient light mirroring, and animated notifications with hardware buzzer support.
+* **Native performance** — runs inside Home Assistant's asynchronous event loop.
+* **Fully UI-configured** — automatic LAN discovery plus complete setup via Config Flow and Options Flow. No YAML required.
+* **Direct LAN communication** — talks to the Pixoo64 over local HTTP. Core playback is instant, reliable, and cloud-independent.
+* **Multi-purpose visual hub** — album art, artist slideshows, volume HUD, retro TV mode, synced lyrics, ambient light mirroring, and animated notifications with hardware buzzer support.
 
 ---
 
 ## ✨ Features at a Glance
 
 | Feature | Description |
-| :--- | :--- |
-| 🖼️ **Adaptive Crop Engine** | **Standard Crop** trims margins while keeping typography. **Extra Crop** unwraps nested borders, groups multi-person subjects, and frames minimalist text covers. |
+| --- | --- |
+| 🖼️ **Adaptive Crop Engine** | **Standard Crop** trims margins while keeping typography. **Extra Crop** uses surgical edge-inward peeling, unwraps nested graphical containers, and handles marginal typography without clipping subjects. |
 | 🧑‍🎤 **Dynamic Artist Gallery** | A dedicated **Artist Slide** mode (also used as a fallback layer) that parses artist names and fetches high-quality fanart from TheAudioDB. |
-| 💿 **Vintage Animations** | **Vinyl Turntable** and **Cassette Tape** and **Analog CLock** animations with transparent grooves, glossy reflections, and full-width micro-pixel track labels. |
+| 💿 **Vintage Animations** | **Vinyl Turntable** and **Cassette Tape** and **Analog Clock** animations with transparent grooves, glossy reflections, and full-width micro-pixel track labels. |
 | 🌊 **Multi-Tier Fallback** | When artwork is missing: **Local HA ➔ Spotify ➔ Discogs / Last.fm / TIDAL ➔ MusicBrainz / Internet Archive ➔ TheAudioDB ➔ Pollinations AI ➔ Minimalist Slate**. |
 | 🔊 **Real-Time Volume HUD** | Detects volume changes on your AVR, soundbar, or media player and briefly shows a high-visibility volume indicator. |
 | 📺 **Intelligent TV Mode** | Detects HDMI-ARC, streaming apps, and live TV sources, then shows a hand-crafted retro pixel TV with antennas and SMPTE color bars. |
 | 🎤 **Live Synced Lyrics** | `.lrc` lyrics via LRCLIB with event-driven timing, smart line wrapping, millisecond calibration, and native BiDi (Hebrew/Arabic RTL) layout. |
-| 💡 **Ambient Lighting Sync** | Extracts dominant album colors in real time and syncs **Home Assistant RGB lights** and **WLED** fixtures (with an optional night-only filter). |
+| 💡 **Ambient Lighting Sync** | Extracts dominant album colors in real time from original uncropped art and syncs **Home Assistant RGB lights** and **WLED** fixtures (with an optional night-only filter). |
 | 🔔 **Animated Visual Alerts** | 30+ animated pixel icons (doorbell, laundry, climate, security) with **Pixoo hardware buzzer** chimes. |
-
-<table>
-  <tr>
-    <td><img src="https://github.com/user-attachments/assets/f689500a-509d-491c-8a8f-1cacf897d61e" alt="Pixoo64 demo 3"></td>
-    <td><img src="https://github.com/user-attachments/assets/c073ea7a-0b81-4dd3-9845-dfd0cd679844" alt="Pixoo64 demo 4"></td>
-    <td><img src="https://github.com/user-attachments/assets/ed34c076-76ed-459d-bb78-51b6e39f6045" alt="Pixoo64 demo 5"></td>
-  </tr>
-  <tr>
-    <td><img src="https://github.com/user-attachments/assets/ea74891f-493e-4f10-ae0d-8108d6b371a8" alt="Pixoo64 demo 0"></td>
-    <td><img src="https://github.com/user-attachments/assets/d37e2f34-4023-4e46-9358-8ff618f3da99" alt="Pixoo64 demo 1"></td>
-    <td><img src="https://github.com/user-attachments/assets/07308c9d-a44b-4978-a7ac-ced42f9e6046" alt="Pixoo64 demo 2"></td>
-  </tr>
-</table>
 
 ---
 
@@ -79,13 +66,11 @@ It is a **100% native Home Assistant custom integration**:
 
 ### Option 1: HACS (Recommended)
 
-[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=idodov&repository=pixoo64_art&category=integration)
-
 Or add it manually:
 
 1. Open **HACS** from the Home Assistant sidebar.
 2. Click the **⋮** menu (top-right) and select **Custom repositories**.
-3. Paste the repository URL: `https://github.com/idodov/pixoo64_art`
+3. Paste the repository URL: `[https://github.com/idodov/pixoo64_art](https://github.com/idodov/pixoo64_art)`
 4. Set the category to **Integration** and click **Add**.
 5. Find **Pixoo64 Media Album Art**, click **Download**, and restart Home Assistant.
 
@@ -93,10 +78,11 @@ Or add it manually:
 
 1. Download the latest release from the [Releases page](https://github.com/idodov/pixoo64_art/releases).
 2. Copy the `pixoo64_art` folder into your Home Assistant config directory:
+```text
+config/custom_components/pixoo64_art/
 
-   ```text
-   config/custom_components/pixoo64_art/
-   ```
+```
+
 
 3. Restart Home Assistant.
 
@@ -113,7 +99,7 @@ Everything is configured through the Home Assistant UI — no YAML required.
 ### Step 1 — Device & Media Source
 
 | Option | Key | Description |
-| :--- | :--- | :--- |
+| --- | --- | --- |
 | **Pixoo IP** | `pixoo_ip` | Select the auto-discovered Pixoo64, or enter its LAN IP manually. |
 | **Media Player** | `media_player` | The media player entity to follow (e.g. `media_player.living_room`, Sonos, Apple TV, Cast). |
 | **Temperature Sensor** | `temperature_entity` | *Optional.* Any temperature sensor to display room or outdoor temperature. |
@@ -121,7 +107,7 @@ Everything is configured through the Home Assistant UI — no YAML required.
 ### Step 2 — Ambient Lighting & TV Display
 
 | Option | Key | Description |
-| :--- | :--- | :--- |
+| --- | --- | --- |
 | **Light Entities** | `light_entity` | One or more RGB/RGBW lights that mirror the dominant album colors. |
 | **WLED IP** | `wled_ip` | An addressable WLED strip synced with album colors in real time. |
 | **Only at Night** | `only_at_night` | Limits ambient lighting sync to after sunset. |
@@ -130,7 +116,8 @@ Everything is configured through the Home Assistant UI — no YAML required.
 ### Step 3 — Metadata APIs, MusicBrainz & AI Art
 
 | Option | Key | Description |
-| :--- | :--- | :--- |
+| --- | --- | --- |
+| **Artwork Race Mode** | `artwork_race_mode` | Runs providers in parallel and races them to fetch artwork instantly. *Requires at least one external API key (Spotify, TIDAL, Last.fm, or Discogs) to function.* |
 | **MusicBrainz** | `musicbrainz_enabled` | Free, open-source Cover Art Archive lookups. |
 | **Internet Archive** | `internet_archive_enabled` | Metadata and artwork lookups from archive.org. |
 | **Pollinations AI Key** | `pollinations_key` | Enables prompt-based conceptual artwork generation. |
@@ -139,6 +126,9 @@ Everything is configured through the Home Assistant UI — no YAML required.
 | **TIDAL Credentials** | `tidal_client_id`, `tidal_client_secret` | TIDAL Developer credentials for catalogue artwork. |
 | **Last.fm Key** | `lastfm_key` | Personal API key for album art search. |
 | **Discogs Token** | `discogs_token` | Personal access token for vinyl and release artwork. |
+
+> [!IMPORTANT]
+> **Artwork Race Mode Requirement:** To use *Artwork Race Mode*, you must configure **at least one** external metadata API key (such as Spotify, TIDAL, Last.fm, or Discogs). Without at least one active provider key, the race engine cannot perform external lookups and will fall back to standard sequential mode.
 
 > [!TIP]
 > Every setting can be changed later via **Settings ➔ Devices & Services ➔ Pixoo64 Media Album Art ➔ Configure**.
@@ -159,12 +149,13 @@ data:
   buzzer_active: 400
   buzzer_off: 200
   buzzer_total: 2400
+
 ```
 
 ### Parameters
 
 | Key | Type | Required | Default | Description |
-| :--- | :--- | :---: | :--- | :--- |
+| --- | --- | --- | --- | --- |
 | `message` | string | **Yes** | — | Notification text. English, Hebrew, and Arabic are laid out bi-directionally automatically. |
 | `type` | string | No | `text` | Visual theme and animation profile (see catalog below). |
 | `duration` | int | No | `5` | Seconds to display before returning to media art. |
@@ -177,7 +168,7 @@ data:
 ### Visual Icon Catalog
 
 | Category | Types |
-| :--- | :--- |
+| --- | --- |
 | **Alerts & Status** | `text` (text only), `info`, `success`, `warning`, `error`, `v` (checkmark), `x` (cancel), `alert` (animated bell), `attack` (animated rocket) |
 | **Smart Home** | `door`, `lock`, `boiler`, `shutter`, `washer`, `car`, `trash`, `mail`, `fire`, `water` |
 | **Hardware & Sensors** | `battery`, `wifi` (animated waves), `phone` (animated wiggle), `camera`, `calendar`, `timer` (animated clock hand), `weather` (sun and cloud) |
@@ -205,6 +196,7 @@ action:
       buzzer_active: 250
       buzzer_off: 150
       buzzer_total: 1200
+
 ```
 
 ### 2. Washer / Dryer Cycle Complete
@@ -225,7 +217,9 @@ action:
       buzzer_active: 500
       buzzer_off: 500
       buzzer_total: 3000
+
 ```
+
 
 ---
 
@@ -525,6 +519,7 @@ With **Playlist Prefetch** enabled, it reads your media player's queue and downl
 
 ---
 
+
 ## 🛠️ Diagnostics & Troubleshooting
 
 **Enable debug logging** — add this to `configuration.yaml` and restart Home Assistant:
@@ -534,6 +529,7 @@ logger:
   default: info
   logs:
     custom_components.pixoo64_art: debug
+
 ```
 
 **Network timeouts** — make sure the Pixoo64 is on a stable 2.4 GHz Wi-Fi network and that port `80` isn't blocked between Home Assistant and the device.
@@ -556,19 +552,15 @@ Contributions, feature requests, and bug reports are welcome!
 
 ## 📄 License
 
-Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for details.
+Distributed under the **MIT License**. See [`LICENSE`](https://www.google.com/search?q=LICENSE) for details.
 
 ---
 
 ## 🌟 Acknowledgments
 
-- [Divoom](https://www.divoom.com/) — for the Pixoo64 hardware.
-- [LRCLIB](https://lrclib.net/) — for the free, open-source synced lyrics API.
-- [TheAudioDB](https://www.theaudiodb.com/) — for the artist fanart API.
-- [MusicBrainz](https://musicbrainz.org/) & [Cover Art Archive](https://coverartarchive.org/) — for open music metadata.
-- [Pollinations.ai](https://pollinations.ai/) — for accessible generative AI art APIs.
-- The [Home Assistant Community](https://community.home-assistant.io/) — for continuous testing and feedback.
-
-<p align="center">
-  If this project brightens your Pixoo, consider giving it a ⭐ on GitHub!
-</p>
+* [Divoom](https://www.divoom.com/) — for the Pixoo64 hardware.
+* [LRCLIB](https://lrclib.net/) — for the free, open-source synced lyrics API.
+* [TheAudioDB](https://www.theaudiodb.com/) — for the artist fanart API.
+* [MusicBrainz](https://musicbrainz.org/) & [Cover Art Archive](https://coverartarchive.org/) — for open music metadata.
+* [Pollinations.ai](https://pollinations.ai/) — for accessible generative AI art APIs.
+* The [Home Assistant Community](https://community.home-assistant.io/) — for continuous testing and feedback.

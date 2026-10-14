@@ -5,6 +5,7 @@ import time
 import json
 from datetime import datetime, timezone
 from typing import Optional, Tuple, List, Dict
+from time import perf_counter
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event, async_call_later
 
@@ -17,6 +18,72 @@ from .pixoo_services import (
 
 
 _LOGGER = logging.getLogger(__name__)
+
+# =========================================================================
+# SONG PROFILER
+# =========================================================================
+
+class SongProfiler:
+    def __init__(self, title: str = ""):
+        self.title = title
+        self.start = perf_counter()
+        self.timings = {}
+        self.counters = {}
+        self.first_frame = None
+
+    def add(self, key: str, duration: float):
+        self.timings[key] = (
+            self.timings.get(key, 0.0) + duration
+        )
+
+    def set(self, key: str, value):
+        self.counters[key] = value
+
+    def mark_first_frame(self):
+        if self.first_frame is None:
+            self.first_frame = perf_counter() - self.start
+
+    def build_attributes(self):
+        total = perf_counter() - self.start
+        attrs = {
+            "profile_song": self.title,
+            "profile_total": round(total, 3),
+            "profile_first_frame": (
+                round(self.first_frame, 3)
+                if self.first_frame is not None
+                else None
+            ),
+        }
+        for key, value in self.timings.items():
+            attrs[f"profile_{key}"] = round(value, 3)
+        for key, value in self.counters.items():
+            attrs[f"profile_{key}"] = value
+        return attrs
+
+    def build_log_line(self):
+        total = perf_counter() - self.start
+        parts = [
+            f"song='{self.title}'",
+            f"total={total:.3f}s",
+        ]
+        if self.first_frame is not None:
+            parts.append(
+                f"first_frame={self.first_frame:.3f}s"
+            )
+        for key, value in sorted(
+            self.timings.items()
+        ):
+            parts.append(
+                f"{key}={value:.3f}s"
+            )
+        for key, value in sorted(
+            self.counters.items()
+        ):
+            parts.append(
+                f"{key}={value}"
+            )
+        return "[PROFILE] " + " ".join(parts)
+
 
 # =========================================================================
 # AMBIENT LIGHTING CONTROLLER
@@ -262,6 +329,15 @@ class PixooHub:
         self.playlist_queue_position = None
         self.playlist_cached_count = 0
         self.playlist_window_range = "None"
+        
+        self.profile_data = {}
+
+    @property
+    def extra_state_attributes(self):
+        attrs = dict(self.ui_state)
+        if self.profile_data:
+            attrs.update(self.profile_data)
+        return attrs
 
     async def control_light(self, action: str, rgb_color: tuple = None, is_night: bool = True):
         await self.lighting.control_light(action, rgb_color, is_night)
@@ -964,7 +1040,7 @@ class PixooHub:
                     "PicWidth": 64,
                     "PicOffset": offset,
                     "PicID": 0,
-                    "PicSpeed": 70 if len(vinyl_frames) > 16 else 140,
+                    "PicSpeed": 70 if len(dummy_media.vinyl_frames_b64) > 16 else 140,
                     "PicData": b64_frame
                 })
             self.prefetch_status = "Vinyl Sent Early"
@@ -1341,6 +1417,9 @@ class PixooHub:
     async def _process_and_send(self):
         self._is_processing_image = True
         async with self._image_lock:
+            artist_str = getattr(self.media_data, 'artist', '') or ''
+            title_str = getattr(self.media_data, 'title', '') or ''
+            profiler = SongProfiler(f"{artist_str} - {title_str}")
             try:
                 curr = await self.pixoo_device.get_current_channel_index()
                 if curr != 4:
@@ -1437,7 +1516,16 @@ class PixooHub:
                     return
                 # --- END OF SKIP LOGIC ---
 
-                processed_data = await self.fallback_service.get_final_url(self.media_data.picture, self.media_data)
+                # --- 3. ARTWORK PIPELINE ---
+                t0_art = perf_counter()
+                try:
+                    processed_data = await self.fallback_service.get_final_url(self.media_data.picture, self.media_data)
+                finally:
+                    profiler.add(
+                        "artwork_pipeline",
+                        perf_counter() - t0_art
+                    )
+
 
                 if not processed_data:
                     processed_data = self.fallback_service._get_fallback_black_image_data()
@@ -1487,57 +1575,81 @@ class PixooHub:
                 self._early_slider_sent_for = None
                 duration = time.perf_counter() - start_time
                 
+                # --- 4. EARLY VINYL ---
                 if is_vinyl and not early_vinyl_match:
-                    pil_img = processed_data.get('pil_image')
-                    vinyl_frames = await self.hass.async_add_executor_job(
-                        self.image_processor.generate_vinyl_frames, pil_img, self.media_data
-                    )
-                    if vinyl_frames:
-                        await self.pixoo_device.send_command({
-                            "Command": "Draw/CommandList", 
-                            "CommandList": [
-                                {"Command": "Channel/SetIndex", "SelectIndex": 4},
-                                {"Command": "Channel/OnOffScreen", "OnOff": 1},
-                                {"Command": "Draw/ResetHttpGifId"}
-                            ]
-                        })
-                        for offset, b64_frame in enumerate(vinyl_frames):
-                            await self.pixoo_device.send_command({
-                                "Command": "Draw/SendHttpGif",
-                                "PicNum": len(vinyl_frames),
-                                "PicWidth": 64,
-                                "PicOffset": offset,
-                                "PicID": 0,
-                                "PicSpeed": 70 if len(vinyl_frames) > 16 else 140,
-                                "PicData": b64_frame
-                            })
-                        early_vinyl_match = True
+                    t0_ev = perf_counter()
+                    try:
+                        pil_img = processed_data.get('pil_image')
+                        vinyl_frames = await self.hass.async_add_executor_job(
+                            self.image_processor.generate_vinyl_frames, pil_img, self.media_data
+                        )
+                        if vinyl_frames:
+                            t0_send = perf_counter()
+                            try:
+                                await self.pixoo_device.send_command({
+                                    "Command": "Draw/CommandList", 
+                                    "CommandList": [
+                                        {"Command": "Channel/SetIndex", "SelectIndex": 4},
+                                        {"Command": "Channel/OnOffScreen", "OnOff": 1},
+                                        {"Command": "Draw/ResetHttpGifId"}
+                                    ]
+                                })
+                                for offset, b64_frame in enumerate(vinyl_frames):
+                                    await self.pixoo_device.send_command({
+                                        "Command": "Draw/SendHttpGif",
+                                        "PicNum": len(vinyl_frames),
+                                        "PicWidth": 64,
+                                        "PicOffset": offset,
+                                        "PicID": 0,
+                                        "PicSpeed": 70 if len(vinyl_frames) > 16 else 140,
+                                        "PicData": b64_frame
+                                    })
+                            finally:
+                                profiler.add("pixoo_send", perf_counter() - t0_send)
+                            
+                            profiler.mark_first_frame()
+                            early_vinyl_match = True
+                            profiler.set("vinyl_frames", len(vinyl_frames))
+                    finally:
+                        profiler.add("early_vinyl", perf_counter() - t0_ev)
 
+                # --- 4. EARLY CASSETTE ---
                 if is_cassette and not early_cassette_match:
-                    pil_img = processed_data.get('pil_image')
-                    cassette_frames = await self.hass.async_add_executor_job(
-                        self.image_processor.generate_cassette_frames, pil_img, self.media_data
-                    )
-                    if cassette_frames:
-                        await self.pixoo_device.send_command({
-                            "Command": "Draw/CommandList", 
-                            "CommandList": [
-                                {"Command": "Channel/SetIndex", "SelectIndex": 4},
-                                {"Command": "Channel/OnOffScreen", "OnOff": 1},
-                                {"Command": "Draw/ResetHttpGifId"}
-                            ]
-                        })
-                        for offset, b64_frame in enumerate(cassette_frames):
-                            await self.pixoo_device.send_command({
-                                "Command": "Draw/SendHttpGif",
-                                "PicNum": len(cassette_frames),
-                                "PicWidth": 64,
-                                "PicOffset": offset,
-                                "PicID": 0,
-                                "PicSpeed": 100,
-                                "PicData": b64_frame
-                            })
-                        early_cassette_match = True
+                    t0_ec = perf_counter()
+                    try:
+                        pil_img = processed_data.get('pil_image')
+                        cassette_frames = await self.hass.async_add_executor_job(
+                            self.image_processor.generate_cassette_frames, pil_img, self.media_data
+                        )
+                        if cassette_frames:
+                            t0_send = perf_counter()
+                            try:
+                                await self.pixoo_device.send_command({
+                                    "Command": "Draw/CommandList", 
+                                    "CommandList": [
+                                        {"Command": "Channel/SetIndex", "SelectIndex": 4},
+                                        {"Command": "Channel/OnOffScreen", "OnOff": 1},
+                                        {"Command": "Draw/ResetHttpGifId"}
+                                    ]
+                                })
+                                for offset, b64_frame in enumerate(cassette_frames):
+                                    await self.pixoo_device.send_command({
+                                        "Command": "Draw/SendHttpGif",
+                                        "PicNum": len(cassette_frames),
+                                        "PicWidth": 64,
+                                        "PicOffset": offset,
+                                        "PicID": 0,
+                                        "PicSpeed": 100,
+                                        "PicData": b64_frame
+                                    })
+                            finally:
+                                profiler.add("pixoo_send", perf_counter() - t0_send)
+                            
+                            profiler.mark_first_frame()
+                            early_cassette_match = True
+                            profiler.set("cassette_frames", len(cassette_frames))
+                    finally:
+                        profiler.add("early_cassette", perf_counter() - t0_ec)
 
                 if is_analog_clock:
                     pil_img = processed_data.get('pil_image')
@@ -1557,7 +1669,13 @@ class PixooHub:
                             {"Command": "Draw/SendHttpGif", "PicNum": 1, "PicWidth": 64, "PicOffset": 0, "PicID": 0, "PicSpeed": 10000, "PicData": base64_image}
                         ]
                     }
-                    await self.pixoo_device.send_command(image_cmd)
+                    t0_send = perf_counter()
+                    try:
+                        await self.pixoo_device.send_command(image_cmd)
+                    finally:
+                        profiler.add("pixoo_send", perf_counter() - t0_send)
+                    
+                    profiler.mark_first_frame()
                 
                 self.is_art_visible = True
                 if self._active_song_key != current_song_key:
@@ -1585,37 +1703,48 @@ class PixooHub:
                 self.cached_static_items = await self._build_text_items_list(font_color, bg_color_str, scope="static")
                 self.progress_timer_gen_id += 1
 
-                # Evaluate sliders
+                # --- 5. SPOTIFY SLIDER ---
                 if is_spotify_slider and not early_slider_match:
-                    self.spotify_slider_status = f"Loading Live Slider for {self.media_data.artist}..."
-                    self.spotify_slider_artist = self.media_data.artist
-                    self._update_prefetch_sensor_state()
-                    await self.spotify_service.prepare_slider_for_media(self.media_data)
-                    if getattr(self.config, 'special_mode_spotify_slider', False): 
-                        await self.spotify_service.spotify_album_art_animation(self.pixoo_device, self.media_data, self.select_index)
-                    else: 
-                        await self.spotify_service.spotify_albums_slide(self.pixoo_device, self.media_data, self.select_index)
-                    
-                    if getattr(self.media_data, 'spotify_slide_pass', False):
-                        self.spotify_slider_status = f"Active Live ({self.media_data.slider_frames} frames)"
-                        self.spotify_slider_frames = self.media_data.slider_frames
-                    else:
-                        self.spotify_slider_status = f"Live Failed: {self.media_data.slider_error or 'No albums found'}"
-                        self.spotify_slider_last_error = self.media_data.slider_error
+                    t0_ss = perf_counter()
+                    try:
+                        self.spotify_slider_status = f"Loading Live Slider for {self.media_data.artist}..."
+                        self.spotify_slider_artist = self.media_data.artist
+                        self._update_prefetch_sensor_state()
+                        await self.spotify_service.prepare_slider_for_media(self.media_data)
+                        if getattr(self.config, 'special_mode_spotify_slider', False): 
+                            await self.spotify_service.spotify_album_art_animation(self.pixoo_device, self.media_data, self.select_index)
+                        else: 
+                            await self.spotify_service.spotify_albums_slide(self.pixoo_device, self.media_data, self.select_index)
+                        
+                        if getattr(self.media_data, 'spotify_slide_pass', False):
+                            self.spotify_slider_status = f"Active Live ({self.media_data.slider_frames} frames)"
+                            self.spotify_slider_frames = self.media_data.slider_frames
+                            profiler.set("spotify_frames", self.media_data.slider_frames)
+                        else:
+                            self.spotify_slider_status = f"Live Failed: {self.media_data.slider_error or 'No albums found'}"
+                            self.spotify_slider_last_error = self.media_data.slider_error
+                    finally:
+                        profiler.add("spotify_slider", perf_counter() - t0_ss)
 
+                # --- 6. ARTIST GALLERY SLIDER ---
                 elif is_artist_slider and not early_slider_match:
-                    self.spotify_slider_status = f"Loading Artist Gallery for {self.media_data.artist}..."
-                    self.spotify_slider_artist = self.media_data.artist
-                    self._update_prefetch_sensor_state()
-                    
-                    await self.fallback_service.play_artist_gallery_slide(self.pixoo_device, self.media_data)
-                    
-                    if getattr(self.media_data, 'artist_slide_pass', False):
-                        self.spotify_slider_status = f"Active Live ({self.media_data.slider_frames} frames)"
-                        self.spotify_slider_frames = self.media_data.slider_frames
-                    else:
-                        self.spotify_slider_status = f"Live Failed: {self.media_data.slider_error or 'No artist images found'}"
-                        self.spotify_slider_last_error = self.media_data.slider_error
+                    t0_as = perf_counter()
+                    try:
+                        self.spotify_slider_status = f"Loading Artist Gallery for {self.media_data.artist}..."
+                        self.spotify_slider_artist = self.media_data.artist
+                        self._update_prefetch_sensor_state()
+                        
+                        await self.fallback_service.play_artist_gallery_slide(self.pixoo_device, self.media_data)
+                        
+                        if getattr(self.media_data, 'artist_slide_pass', False):
+                            self.spotify_slider_status = f"Active Live ({self.media_data.slider_frames} frames)"
+                            self.spotify_slider_frames = self.media_data.slider_frames
+                            profiler.set("artist_frames", self.media_data.slider_frames)
+                        else:
+                            self.spotify_slider_status = f"Live Failed: {self.media_data.slider_error or 'No artist images found'}"
+                            self.spotify_slider_last_error = self.media_data.slider_error
+                    finally:
+                        profiler.add("artist_slider", perf_counter() - t0_as)
 
                 await asyncio.sleep(0.3)
 
@@ -1625,31 +1754,50 @@ class PixooHub:
                         # Request the darkened image version for lyrics
                         processed_data = await self.fallback_service.get_final_url(self.media_data.picture, self.media_data)
                         base64_image = processed_data.get('base64_image')
-                        await self.pixoo_device.send_command({
-                            "Command": "Draw/CommandList", 
-                            "CommandList": [
-                                {"Command": "Draw/ResetHttpGifId"}, 
-                                {"Command": "Draw/SendHttpGif", "PicNum": 1, "PicWidth": 64, "PicOffset": 0, "PicID": 0, "PicSpeed": 10000, "PicData": base64_image}
-                            ]
-                        })
-                        await self._calculate_and_schedule_next()
+                        t0_send = perf_counter()
+                        try:
+                            await self.pixoo_device.send_command({
+                                "Command": "Draw/CommandList", 
+                                "CommandList": [
+                                    {"Command": "Draw/ResetHttpGifId"}, 
+                                    {"Command": "Draw/SendHttpGif", "PicNum": 1, "PicWidth": 64, "PicOffset": 0, "PicID": 0, "PicSpeed": 10000, "PicData": base64_image}
+                                ]
+                            })
+                        finally:
+                            profiler.add("pixoo_send", perf_counter() - t0_send)
+
+                        t0_ly = perf_counter()
+                        try:
+                            await self._calculate_and_schedule_next()
+                        finally:
+                            profiler.add("lyrics", perf_counter() - t0_ly)
                     else:
                         # Left lyrics mode, clear tasks before text rendering happens
                         self._stop_lyrics_scheduler()
                 elif self.lyrics_active_mode:
-                    # Same mode, new song, start scheduler
-                    await self._calculate_and_schedule_next()
+                    t0_ly = perf_counter()
+                    try:
+                        await self._calculate_and_schedule_next()
+                    finally:
+                        profiler.add("lyrics", perf_counter() - t0_ly)
 
                 # Always render text if not in lyrics mode, effectively sweeping ghost lyrics out of memory
                 if not self.lyrics_active_mode:
                     self.last_text_payload_hash = None
-                    await self._render_and_send_text_layers(force=True)
+                    t0_rnd = perf_counter()
+                    try:
+                        await self._render_and_send_text_layers(force=True)
+                    finally:
+                        profiler.add("render", perf_counter() - t0_rnd)
 
                 await self._update_progress_bar_loop()
                 self._schedule_prefetch()
 
                 if is_analog_clock:
                     self._schedule_analog_clock_tick(processed_data)
+
+                self.profile_data = profiler.build_attributes()
+                _LOGGER.debug(profiler.build_log_line())
 
                 sensor_attrs = {
                     "artist": self.media_data.artist,
@@ -1677,6 +1825,9 @@ class PixooHub:
                     "slider_frames": self.spotify_slider_frames,
                     "slider_last_error": self.spotify_slider_last_error,
                 }
+                if self.profile_data:
+                    sensor_attrs.update(self.profile_data)
+
                 if self.sensor:
                     self.sensor.update_state(f"{self.media_data.artist} - {self.media_data.title}", sensor_attrs)
 
@@ -1839,3 +1990,4 @@ class PixooHub:
             is_tv = "tv" in source or "tv" in app or "hdmi" in source
             return bool((title and str(title).strip()) or is_tv)
         return False
+    

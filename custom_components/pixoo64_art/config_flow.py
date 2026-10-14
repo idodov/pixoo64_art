@@ -82,7 +82,7 @@ async def async_get_pollinations_models(hass, api_key: str = None) -> list:
     return fallback_models
 
 class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1.2
+    VERSION = 1.3
 
     @staticmethod
     @callback
@@ -209,6 +209,7 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_TIDAL_CLIENT_SECRET): PASSWORD_SELECTOR,
             vol.Optional(CONF_LASTFM_KEY): PASSWORD_SELECTOR,
             vol.Optional(CONF_DISCOGS_TOKEN): PASSWORD_SELECTOR,
+            vol.Optional("artwork_race_mode", default=False): selector.BooleanSelector(),
             vol.Optional(CONF_PLAYLIST_PREFETCH, default="Disabled"): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=["Disabled", "±5 Songs", "±10 Songs"], mode=selector.SelectSelectorMode.DROPDOWN)
             ),
@@ -267,6 +268,9 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
             if CONF_PLAYLIST_PREFETCH not in cleaned_input:
                 cleaned_input[CONF_PLAYLIST_PREFETCH] = get_val(CONF_PLAYLIST_PREFETCH, "Disabled")
 
+            if "artwork_race_mode" not in cleaned_input:
+                cleaned_input["artwork_race_mode"] = get_val("artwork_race_mode", False)
+
             errors = _validate_api_credentials(cleaned_input)
 
             if cleaned_input.get("reload_ai_models", False):
@@ -294,7 +298,8 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
         has_streaming_keys = bool(
             str(get_current(CONF_SPOTIFY_CLIENT_ID, "")).strip() or 
             str(get_current(CONF_TIDAL_CLIENT_ID, "")).strip() or 
-            str(get_current(CONF_DISCOGS_TOKEN, "")).strip()
+            str(get_current(CONF_DISCOGS_TOKEN, "")).strip() or
+            str(get_current(CONF_LASTFM_KEY, "")).strip()
         )
 
         if not self._ai_models_cache:
@@ -310,6 +315,7 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
             vol.Optional(CONF_DISCOGS_TOKEN, description={"suggested_value": get_current(CONF_DISCOGS_TOKEN, "")}): PASSWORD_SELECTOR,
         }
         if has_streaming_keys:
+            streaming_schema[vol.Optional("artwork_race_mode", default=get_current("artwork_race_mode", False))] = selector.BooleanSelector()
             streaming_schema[vol.Optional(CONF_PLAYLIST_PREFETCH, default=get_current(CONF_PLAYLIST_PREFETCH, "Disabled"))] = selector.SelectSelector(
                 selector.SelectSelectorConfig(options=["Disabled", "±5 Songs", "±10 Songs"], mode=selector.SelectSelectorMode.DROPDOWN)
             )
@@ -325,7 +331,7 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
         schema = vol.Schema({
             vol.Required("media_section"): section(
                 vol.Schema({
-                    vol.Optional(CONF_MEDIA_PLAYER, description={"suggested_value": get_current(CONF_MEDIA_PLAYER)}):
+                    vol.Optional(CONF_MEDIA_PLAYER, description={"suggested_value": get_current(CONF_MEDIA_PLAYER, None)}):
                         selector.EntitySelector(selector.EntitySelectorConfig(domain="media_player")),
                     vol.Optional(CONF_TEMPERATURE_ENTITY, description={"suggested_value": get_current(CONF_TEMPERATURE_ENTITY, None)}):
                         selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature")),
@@ -362,3 +368,4 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
         })
 
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors or {})
+    

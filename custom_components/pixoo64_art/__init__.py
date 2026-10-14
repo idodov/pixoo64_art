@@ -61,9 +61,9 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_migrate_entry(hass, config_entry):
     """Migrate old entry to new version."""
-    _LOGGER.debug("Migrating Pixoo64 entry from version %s to 1.2", config_entry.version)
+    _LOGGER.debug("Migrating Pixoo64 entry from version %s to 1.3", config_entry.version)
 
-    if config_entry.version < 1.2:
+    if config_entry.version < 1.3:
         hass.config_entries.async_update_entry(config_entry, version=1.2)
 
     return True

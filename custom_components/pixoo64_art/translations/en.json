@@ -67,6 +67,7 @@
           "tidal_client_secret": "TIDAL Client Secret",
           "lastfm_key": "Last.fm API Key",
           "discogs_token": "Discogs Personal Token",
+          "artwork_race_mode": "Fast Artwork Race Mode (API Priority)",
           "playlist_prefetch_range": "Playlist Queue Pre-fetch (Fast Skip)",
           "pollinations_key": "Pollinations AI Secret Key",
           "ai_model": "AI Art Generation Model"
@@ -78,6 +79,7 @@
           "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com).",
           "lastfm_key": "API Key from [Last.fm Accounts](https://www.last.fm/api/account/create) for fallback artwork.",
           "discogs_token": "Personal token from [Discogs Developer Settings](https://www.discogs.com/settings/developers) for physical releases.",
+          "artwork_race_mode": "Races the local media player proxy and fast streaming APIs in parallel, taking whichever finishes first to eliminate delays.",
           "playlist_prefetch_range": "Pre-fetches surrounding queue tracks (±5 or ±10 songs) into RAM. Requires active streaming keys.",
           "pollinations_key": "⚠️ MANDATORY FOR AI ART: Obtain your secret API key from [Pollinations.ai](https://pollinations.ai). Strictly required for generating AI art. Leave blank if not using AI.",
           "ai_model": "Select the generative image model used when 'Force AI Art' is switched on."
@@ -152,6 +154,7 @@
               "tidal_client_secret": "TIDAL Client Secret",
               "lastfm_key": "Last.fm API Key",
               "discogs_token": "Discogs Personal Token",
+              "artwork_race_mode": "Fast Artwork Race Mode (API Priority)",
               "playlist_prefetch_range": "Playlist Queue Pre-fetch (Fast Skip)"
             },
             "data_description": {
@@ -161,6 +164,7 @@
               "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com). Leave blank to keep existing.",
               "lastfm_key": "API Key from [Last.fm Accounts](https://www.last.fm/api/account/create) for fallback artwork. Leave blank to keep existing key, or type 'clear' to remove.",
               "discogs_token": "Personal token from [Discogs Developer Settings](https://www.discogs.com/settings/developers) for physical releases. Leave blank to keep existing token, or type 'clear' to remove.",
+              "artwork_race_mode": "When ON: Races the local media player proxy and fast streaming APIs in parallel, taking whichever finishes first to eliminate delays. Appears only when API keys are configured (default: OFF).",
               "playlist_prefetch_range": "Pre-fetches surrounding queue tracks (±5 or ±10 songs) into RAM. Requires active streaming keys."
             }
           },

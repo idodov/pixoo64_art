@@ -64,6 +64,6 @@ async def async_migrate_entry(hass, config_entry):
     _LOGGER.debug("Migrating Pixoo64 entry from version %s to 1.3", config_entry.version)
 
     if config_entry.version < 1.3:
-        hass.config_entries.async_update_entry(config_entry, version=1.2)
+        hass.config_entries.async_update_entry(config_entry, version=1.3)
 
     return True

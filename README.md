@@ -11,54 +11,78 @@
   <strong>Turn your Divoom Pixoo64 into an adaptive media display, live volume HUD, and smart-home visual alert center.</strong>
 </p>
 
-<p align="center">
-  <img src="https://github.com/idodov/pixoo64-media-album-art/assets/19820046/71348538-2422-47e3-ac3d-aa1d7329333c" alt="Pixoo64 displaying a gallery of album covers" width="85%">
-</p>
+---
+
+## 📖 Overview & Why Pixoo64 Media Album Art Stands Out
+
+**Pixoo64 Media Album Art** is a 100% native Home Assistant custom integration designed to transform your Divoom Pixoo64 64×64 LED matrix into a studio-grade media companion. 
+
+Unlike most Home Assistant media displays that are strictly bound to a single music streaming platform (typically locked behind Spotify Premium APIs), this integration is built from the ground up for absolute freedom and versatility:
+
+* **100% Music Service Agnostic** — It doesn't care if you're streaming from Sonos, Apple Music, VLC, a local Plex server, or casting from your phone. As long as your media player entity is active, the integration adapts instantly.
+* **Full Live Radio & Stream Support** — Most plugins break or show blank screens when playing live radio stations or unmapped streams. Our multi-tier fallback waterfall and smart radio-logo detection ensure your Pixoo64 always looks alive and purposeful.
+* **Zero Premium Account Requirements** — You don't need paid accounts or complex OAuth tokens just to get album art. Core playback works out-of-the-box using native metadata, while optional free developer keys (Spotify, TIDAL, Discogs, Last.fm) can be layered on for enhanced resolution.
+* **Autonomous Local Performance** — Running directly within Home Assistant’s asynchronous event loop via local LAN HTTP POST requests, it guarantees sub-second responsiveness without relying on external cloud webhooks or third-party servers.
 
 ---
 
-## 📑 Table of Contents
+## 💽 Display Modes Showcase
 
-* [Overview](https://www.google.com/search?q=%23-overview)
-* [Features at a Glance](https://www.google.com/search?q=%23-features-at-a-glance)
-* [Installation](https://www.google.com/search?q=%23-installation)
-* [Initial Configuration](https://www.google.com/search?q=%23%EF%B8%8F-initial-configuration-ui-config-flow)
-* [Smart Notifications Service](https://www.google.com/search?q=%23-smart-notifications-service)
-* [Automation Recipes](https://www.google.com/search?q=%23-automation-recipes)
-* [FAQ](https://www.google.com/search?q=%23-frequently-asked-questions-faq)
-* [Diagnostics & Troubleshooting](https://www.google.com/search?q=%23%EF%B8%8F-diagnostics--troubleshooting)
-* [Contributing](https://www.google.com/search?q=%23-contributing)
-* [License](https://www.google.com/search?q=%23-license)
-* [Acknowledgments](https://www.google.com/search?q=%23-acknowledgments)
+The integration supports multiple immersive visual rendering modes, easily switchable via Lovelace dashboard controls or automation actions:
 
----
-
-## 📖 Overview
-
-**Pixoo64 Media Album Art** brings studio-grade album art rendering to the **Divoom Pixoo64** 64×64 LED matrix — directly from Home Assistant.
-
-It is a **100% native Home Assistant custom integration**:
-
-* **Native performance** — runs inside Home Assistant's asynchronous event loop.
-* **Fully UI-configured** — automatic LAN discovery plus complete setup via Config Flow and Options Flow. No YAML required.
-* **Direct LAN communication** — talks to the Pixoo64 over local HTTP. Core playback is instant, reliable, and cloud-independent.
-* **Multi-purpose visual hub** — album art, artist slideshows, volume HUD, retro TV mode, synced lyrics, ambient light mirroring, and animated notifications with hardware buzzer support.
+| Mode | Description | Preview / GIF |
+| :--- | :--- | :--- |
+| **Standard** | Crisp crop engine rendering album art with adaptive dynamic text overlays. | <img width="64" height="64" alt="pixoo_std_FKA_twigs__Koreless_Drums_of_Death_Cyberpunk_Neon" src="https://github.com/user-attachments/assets/d300f962-d15d-4c9a-b108-155a4307aee4" /> |
+| **Vinyl Record** | Smooth spinning turntable animation with glossy reflections and grooved micro-pixel design. | <img width="64" height="64" alt="pixoo_vinyl_FKA_twigs__Koreless_Drums_of_Death_No_Crop" src="https://github.com/user-attachments/assets/d9bf8683-866d-49c7-b16c-47b11f01977a" /> <img width="64" height="64" alt="pixoo_vinyl_FKA_twigs__Koreless_Drums_of_Death_Extra_Crop" src="https://github.com/user-attachments/assets/f6aedd0f-26db-4e1c-83e0-b742db0909f5" /> |
+| **Cassette Tape** | Vintage cassette mode featuring proportional micro-pixel font labels and animated spools. | <img width="64" height="64" alt="pixoo_cassette_FKA_twigs__Koreless_Drums_of_Death" src="https://github.com/user-attachments/assets/2bc917cf-eff5-4c35-b29a-9a301c26dd61" /> |
+| **Spotify Slider** | Animated carousel cycling through the artist's top album releases. | <img width="64" height="64" alt="pixoo_slider_FKA_twigs__Koreless_Drums_of_Death" src="https://github.com/user-attachments/assets/ee1d9b6e-69ed-4b8e-80c5-b6cdb61a32e4" /> |
+| **Artist Gallery** | Dedicated fallback layer fetching high-quality fanart portraits from TheAudioDB. | <img width="64" height="64" alt="pixoo_artist_gallery_FKA_twigs__Koreless" src="https://github.com/user-attachments/assets/0a083f65-2fcf-43ab-99b6-3c3ff606e9ca" /> |
+| **Synced Lyrics** | Event-driven timing via LRCLIB with smart line-wrapping and BiDi text layout. | — |
+| **Analog Clock** | Classical analog clock face overlaid on dimmed, atmospheric album art. | <img width="64" height="64" alt="pixoo_clock_FKA_twigs__Koreless_Drums_of_Death_Cyberpunk_Neon" src="https://github.com/user-attachments/assets/ad3512d4-992e-486e-8f00-fd484588a843" /> |
+| **Force AI** | Generates unique conceptual pop-art via Pollinations AI for tracks lacking official covers. | <img width="64" height="64" alt="pixoo_std_FKA_twigs__Koreless_Drums_of_Death_Cyberpunk_Neon" src="https://github.com/user-attachments/assets/e0d59056-c783-43c6-8a59-21d7f910da9f" /> |
 
 ---
 
-## ✨ Features at a Glance
+## 🎛️ The Lovelace Card (`pixoo-media-card`)
 
-| Feature | Description |
-| --- | --- |
-| 🖼️ **Adaptive Crop Engine** | **Standard Crop** trims margins while keeping typography. **Extra Crop** uses surgical edge-inward peeling, unwraps nested graphical containers, and handles marginal typography without clipping subjects. |
-| 🧑‍🎤 **Dynamic Artist Gallery** | A dedicated **Artist Slide** mode (also used as a fallback layer) that parses artist names and fetches high-quality fanart from TheAudioDB. |
-| 💿 **Vintage Animations** | **Vinyl Turntable** and **Cassette Tape** and **Analog Clock** animations with transparent grooves, glossy reflections, and full-width micro-pixel track labels. |
-| 🌊 **Multi-Tier Fallback** | When artwork is missing: **Local HA ➔ Spotify ➔ Discogs / Last.fm / TIDAL ➔ MusicBrainz / Internet Archive ➔ TheAudioDB ➔ Pollinations AI ➔ Minimalist Slate**. |
-| 🔊 **Real-Time Volume HUD** | Detects volume changes on your AVR, soundbar, or media player and briefly shows a high-visibility volume indicator. |
-| 📺 **Intelligent TV Mode** | Detects HDMI-ARC, streaming apps, and live TV sources, then shows a hand-crafted retro pixel TV with antennas and SMPTE color bars. |
-| 🎤 **Live Synced Lyrics** | `.lrc` lyrics via LRCLIB with event-driven timing, smart line wrapping, millisecond calibration, and native BiDi (Hebrew/Arabic RTL) layout. |
-| 💡 **Ambient Lighting Sync** | Extracts dominant album colors in real time from original uncropped art and syncs **Home Assistant RGB lights** and **WLED** fixtures (with an optional night-only filter). |
-| 🔔 **Animated Visual Alerts** | 30+ animated pixel icons (doorbell, laundry, climate, security) with **Pixoo hardware buzzer** chimes. |
+To bring the ultimate control experience directly to your Home Assistant dashboards, **Pixoo64 Media Album Art** includes a custom, feature-packed Lovelace card: **`pixoo-media-card`**.
+
+Unlike standard media player cards, this card acts as a **live visual simulator**, mirroring in real-time exactly what is rendering on your Pixoo64 LED matrix—complete with CRT pixel grids, ambient backdrops, dynamic theme glow colors extracted from the artwork, and live prefetch status badges.
+
+### 🌟 Key Card Features & Customization
+* **Live Visual Preview** — See the exact 64×64 pixel canvas, artwork filters, and live animation frames right on your dashboard. Interactive clicking lets you seek through track playback instantly.
+* **Modular Section Reordering** — Fully customizable UI. Using the visual editor or YAML, you can reorder, show, or hide individual dashboard sections (Display, Track Metadata, Next Track Prefetch, Media Controls, Display Modes, Hardware Switches, and Advanced Tuning).
+* **Dynamic Ambient Theme Engine** — Automatically extracts dominant color palettes from active album art or WLED strips to paint your card's ambient background, glow, and borders in real time.
+* **Hardware & Mode Control Suite** — Switch display modes (Standard, Vinyl, Cassette, Spotify Slider, Artist Gallery, Synced Lyrics, Analog Clock, Force AI) on the fly, adjust lyrics sync offset, toggle progress bars, or control Pixoo screen power and brightness directly from the card.
+* **Technical Diagnostics Panel** — Optional collapsible diagnostics view displaying live pipeline durations, RAM image cache utilization, and background worker telemetry.
+
+---
+
+## 🎨 Advanced Image Processing, Filters & Smart Cropping
+
+Getting high-resolution album covers or artist fanart to look crisp, clear, and perfectly composed on a 64×64 LED matrix is no small feat. **Pixoo64 Media Album Art** features an advanced, built-in image processing and composition pipeline designed specifically for retro pixel displays:
+
+### ✂️ Surgical Crop Engine
+Standard resizing often cuts off important artwork elements or leaves ugly black letterboxing. Our smart crop engine offers three distinct modes:
+
+| Crop Mode | Description & Capabilities | Preview / Image |
+| :--- | :--- | :--- |
+| **No Crop** | Retains the full original album sleeve aspect ratio without any automatic framing adjustments. | <img width="64" height="64" alt="pixoo_std_Kate_Bush_Running_Up_That_Hill__A_Deal_With_God__Cyberpunk_Neon" src="https://github.com/user-attachments/assets/9b864c96-1450-44cd-8f17-47eadb533969" /> |
+| **Standard Crop** | Intelligently trims black letterboxing, white scanner margins, and pillarbars while preserving the full core artwork and typography. | <img width="64" height="64" alt="pixoo_std_Kate_Bush_Running_Up_That_Hill__A_Deal_With_God__Cyberpunk_Neon" src="https://github.com/user-attachments/assets/c107e471-58ca-479e-bca1-235b233979fa" /> |
+| **Extra Crop** <br>*(Subject Isolation)* | Advanced computer vision algorithm featuring **Nested Container Unwrapping** (extracts inner photos from bordered sleeves like *Eurythmics*), **Subject Clustering** (keeps duos/groups unified), and **Typographic Framing** for minimalist text covers. | <img width="64" height="64" alt="pixoo_std_Kate_Bush_Running_Up_That_Hill__A_Deal_With_God__Cyberpunk_Neon" src="https://github.com/user-attachments/assets/0899f138-7503-4502-881b-9e583c3e7128" /> |
+
+---
+
+### ✨ Real-Time Image Filters
+Downscaling high-resolution covers to a 64×64 grid can sometimes soften details. The built-in **Image Filter Engine** applies Pillow-powered pre- and post-scale processing to make your LEDs pop:
+
+| Filter Mode | Visual Effect & Purpose | Preview / Image |
+| :--- | :--- | :--- |
+| **Vibrant** | Boosts saturation, contrast, and sharpness for striking, punchy color depth on LEDs. | <img width="64" height="64" alt="pixoo_std_Kate_Bush_Running_Up_That_Hill__A_Deal_With_God__Vibrant" src="https://github.com/user-attachments/assets/161a460c-fa8f-481a-a738-acf24336b210" /> |
+| **Retro Arcade** | Posterizes and reduces bit-depth for a classic 8/16-bit arcade aesthetic. | <img width="64" height="64" alt="pixoo_std_Kate_Bush_Running_Up_That_Hill__A_Deal_With_God__Retro_Arcade" src="https://github.com/user-attachments/assets/a48724e9-457c-4cd3-b79b-fec58602668c" /> |
+| **Cyberpunk Neon** | Maximizes contrast and enhances edges for a glowing, high-contrast sci-fi atmosphere. | <img width="64" height="64" alt="pixoo_std_Kate_Bush_Running_Up_That_Hill__A_Deal_With_God__Cyberpunk_Neon" src="https://github.com/user-attachments/assets/c0722ef3-dbce-45da-b94b-b6a730d082e2" /> |
+| **Noir B&W** | High-contrast grayscale processing for timeless, moody vintage aesthetics. | <img width="64" height="64" alt="pixoo_std_Kate_Bush_Running_Up_That_Hill__A_Deal_With_God__Noir_B_W" src="https://github.com/user-attachments/assets/bf41703b-baf4-4258-bd8d-66eae19ed7cc" /> |
+| **Crisp & Sharp** | Applies an unsharp mask filter to recover fine details lost during downscaling. | <img width="64" height="64" alt="pixoo_std_Kate_Bush_Running_Up_That_Hill__A_Deal_With_God__Crisp___Sharp" src="https://github.com/user-attachments/assets/f216b36f-2776-4932-aea9-7e54463456f4" /> |
 
 ---
 
@@ -66,31 +90,22 @@ It is a **100% native Home Assistant custom integration**:
 
 ### Option 1: HACS (Recommended)
 
-Or add it manually:
-
-1. Open **HACS** from the Home Assistant sidebar.
+1. Open **HACS** from your Home Assistant sidebar.
 2. Click the **⋮** menu (top-right) and select **Custom repositories**.
-3. Paste the repository URL: `[https://github.com/idodov/pixoo64_art](https://github.com/idodov/pixoo64_art)`
+3. Paste the repository URL: `https://github.com/idodov/pixoo64_art`
 4. Set the category to **Integration** and click **Add**.
 5. Find **Pixoo64 Media Album Art**, click **Download**, and restart Home Assistant.
 
 ### Option 2: Manual Installation
 
-1. Download the latest release from the [Releases page](https://github.com/idodov/pixoo64_art/releases).
-2. Copy the `pixoo64_art` folder into your Home Assistant config directory:
-```text
-config/custom_components/pixoo64_art/
-
-```
-
-
+1. Download the latest release package from the [Releases page](https://github.com/idodov/pixoo64_art/releases).
+2. Copy the `pixoo64_art` folder into your Home Assistant custom components directory:
+   `config/custom_components/pixoo64_art/`
 3. Restart Home Assistant.
-
----
 
 ## ⚙️ Initial Configuration (UI Config Flow)
 
-Everything is configured through the Home Assistant UI — no YAML required.
+Everything is configured directly through the Home Assistant UI — no YAML required.
 
 1. Go to **Settings ➔ Devices & Services ➔ Add Integration**.
 2. Search for **Pixoo64 Media Album Art**.
@@ -99,15 +114,15 @@ Everything is configured through the Home Assistant UI — no YAML required.
 ### Step 1 — Device & Media Source
 
 | Option | Key | Description |
-| --- | --- | --- |
+| :--- | :--- | :--- |
 | **Pixoo IP** | `pixoo_ip` | Select the auto-discovered Pixoo64, or enter its LAN IP manually. |
-| **Media Player** | `media_player` | The media player entity to follow (e.g. `media_player.living_room`, Sonos, Apple TV, Cast). |
+| **Media Player** | `media_player` | The media player entity to follow (e.g., `media_player.living_room`, Sonos, Apple TV, Cast). |
 | **Temperature Sensor** | `temperature_entity` | *Optional.* Any temperature sensor to display room or outdoor temperature. |
 
 ### Step 2 — Ambient Lighting & TV Display
 
 | Option | Key | Description |
-| --- | --- | --- |
+| :--- | :--- | :--- |
 | **Light Entities** | `light_entity` | One or more RGB/RGBW lights that mirror the dominant album colors. |
 | **WLED IP** | `wled_ip` | An addressable WLED strip synced with album colors in real time. |
 | **Only at Night** | `only_at_night` | Limits ambient lighting sync to after sunset. |
@@ -116,12 +131,12 @@ Everything is configured through the Home Assistant UI — no YAML required.
 ### Step 3 — Metadata APIs, MusicBrainz & AI Art
 
 | Option | Key | Description |
-| --- | --- | --- |
-| **Artwork Race Mode** | `artwork_race_mode` | Runs providers in parallel and races them to fetch artwork instantly. *Requires at least one external API key (Spotify, TIDAL, Last.fm, or Discogs) to function.* |
+| :--- | :--- | :--- |
+| **Artwork Race Mode** | `artwork_race_mode` | Runs providers in parallel and races them to fetch artwork instantly. *Requires at least one external API key to function.* |
 | **MusicBrainz** | `musicbrainz_enabled` | Free, open-source Cover Art Archive lookups. |
 | **Internet Archive** | `internet_archive_enabled` | Metadata and artwork lookups from archive.org. |
 | **Pollinations AI Key** | `pollinations_key` | Enables prompt-based conceptual artwork generation. |
-| **AI Model** | `ai_model` | Preferred image model (e.g. `flux.1-schnell`, `turbo`, `vector`). |
+| **AI Model** | `ai_model` | Preferred image model (e.g., `flux.1-schnell`, `turbo`, `vector`). |
 | **Spotify Credentials** | `spotify_client_id`, `spotify_client_secret` | High-res artwork lookups and the animated multi-album carousel. |
 | **TIDAL Credentials** | `tidal_client_id`, `tidal_client_secret` | TIDAL Developer credentials for catalogue artwork. |
 | **Last.fm Key** | `lastfm_key` | Personal API key for album art search. |
@@ -132,7 +147,6 @@ Everything is configured through the Home Assistant UI — no YAML required.
 
 > [!TIP]
 > Every setting can be changed later via **Settings ➔ Devices & Services ➔ Pixoo64 Media Album Art ➔ Configure**.
-
 ---
 
 ## 🔔 Smart Notifications Service
@@ -159,7 +173,7 @@ data:
 | `message` | string | **Yes** | — | Notification text. English, Hebrew, and Arabic are laid out bi-directionally automatically. |
 | `type` | string | No | `text` | Visual theme and animation profile (see catalog below). |
 | `duration` | int | No | `5` | Seconds to display before returning to media art. |
-| `color` | string | No | Theme default | Custom HEX color override (e.g. `#FF0055`). |
+| `color` | string | No | Theme default | Custom HEX color override (e.g., `#FF0055`). |
 | `play_buzzer` | boolean | No | `false` | Trigger the Pixoo64's onboard buzzer. |
 | `buzzer_active` | int | No | `500` | Beep length per cycle (ms). |
 | `buzzer_off` | int | No | `500` | Silence between beeps (ms). |
@@ -173,53 +187,6 @@ data:
 | **Smart Home** | `door`, `lock`, `boiler`, `shutter`, `washer`, `car`, `trash`, `mail`, `fire`, `water` |
 | **Hardware & Sensors** | `battery`, `wifi` (animated waves), `phone` (animated wiggle), `camera`, `calendar`, `timer` (animated clock hand), `weather` (sun and cloud) |
 | **Ambience** | `music`, `sun`, `moon` / `sleep` |
-
----
-
-## 💡 Automation Recipes
-
-### 1. Smart Doorbell with Buzzer Chime
-
-```yaml
-alias: "Pixoo - Front Doorbell Alert"
-trigger:
-  - platform: state
-    entity_id: binary_sensor.doorbell_ringing
-    to: "on"
-action:
-  - action: pixoo64_art.send_notification
-    data:
-      message: "Visitor at Front Door"
-      type: "door"
-      duration: 6
-      play_buzzer: true
-      buzzer_active: 250
-      buzzer_off: 150
-      buzzer_total: 1200
-
-```
-
-### 2. Washer / Dryer Cycle Complete
-
-```yaml
-alias: "Pixoo - Laundry Alert"
-trigger:
-  - platform: state
-    entity_id: sensor.washing_machine_status
-    to: "finished"
-action:
-  - action: pixoo64_art.send_notification
-    data:
-      message: "Laundry is done!"
-      type: "washer"
-      duration: 10
-      play_buzzer: true
-      buzzer_active: 500
-      buzzer_off: 500
-      buzzer_total: 3000
-
-```
-
 
 ---
 
@@ -254,8 +221,8 @@ Create a **DHCP reservation** for the Pixoo64 in your router's admin settings so
 
 Both toggles affect how the integration behaves, but on different layers:
 
-- **Master Control (software level)** — the integration's main kill switch. When off, it stops fetching artwork, polling lyrics, and sending HTTP payloads. The Pixoo64 stays on and reverts to whatever clock or channel you set in the Divoom app.
-- **Full Control (hardware override)** — the integration takes ownership of the screen's power. When music starts, it turns the LED matrix **on**; when playback stops, it turns it **off** (fully black). This bypasses the Divoom app entirely — ideal if you only want the Pixoo active while music is playing.
+* **Master Control (software level)** — the integration's main kill switch. When off, it stops fetching artwork, polling lyrics, and sending HTTP payloads. The Pixoo64 stays on and reverts to whatever clock or channel you set in the Divoom app.
+* **Full Control (hardware override)** — the integration takes ownership of the screen's power. When music starts, it turns the LED matrix **on**; when playback stops, it turns it **off** (fully black). This bypasses the Divoom app entirely — ideal if you only want the Pixoo active while music is playing.
 
 </details>
 
@@ -268,18 +235,18 @@ Both toggles affect how the integration behaves, but on different layers:
 
 The integration creates several `select` entities you can add to any dashboard. Changes apply to the Pixoo64 **instantly**:
 
-- **Display Mode** — Standard, Vinyl, Cassette, Artist Slide, Spotify Slider, Lyrics, or Force AI.
-- **Image Filter** — real-time effects such as Vibrant, Retro Arcade, or Cyberpunk Neon.
-- **Crop Mode** — No Crop, Standard Crop, or Extra Crop.
-- **Layout Controls** — text position, Clock/Temperature overlays, and their alignment.
+* **Display Mode** — Standard, Vinyl, Cassette, Artist Slide, Spotify Slider, Lyrics, or Force AI.
+* **Image Filter** — real-time effects such as Vibrant, Retro Arcade, or Cyberpunk Neon.
+* **Crop Mode** — No Crop, Standard Crop, or Extra Crop.
+* **Layout Controls** — text position, Clock/Temperature overlays, and their alignment.
 
 **2. Integration settings (core infrastructure)**
 
 Go to **Settings ➔ Devices & Services ➔ Pixoo64 ➔ Configure** to update:
 
-- **API keys & credentials** — Spotify, TIDAL, Last.fm, Discogs, Pollinations AI.
-- **Hardware links** — media player, temperature sensor, ambient lights, WLED strips.
-- **Engine rules** — TV Mode, Playlist Prefetch range, and OSD timeouts for volume and pause.
+* **API keys & credentials** — Spotify, TIDAL, Last.fm, Discogs, Pollinations AI.
+* **Hardware links** — media player, temperature sensor, ambient lights, WLED strips.
+* **Engine rules** — TV Mode, Playlist Prefetch range, and OSD timeouts for volume and pause.
 
 </details>
 
@@ -294,9 +261,9 @@ Go to **Settings ➔ Devices & Services ➔ Pixoo64 ➔ Configure** to update:
 
 **No.** The integration is 100% free out of the box.
 
-- **Built-in open APIs** — MusicBrainz, Internet Archive, and TheAudioDB work with zero configuration and no keys.
-- **Free developer keys** — Spotify, TIDAL, Last.fm, Discogs, and Pollinations AI keys unlock higher-resolution artwork and extra modes, and are free to generate.
-- **No premium accounts** — you **don't** need Spotify Premium or a paid TIDAL plan to fetch album covers. A free account is enough to access their developer portals.
+* **Built-in open APIs** — MusicBrainz, Internet Archive, and TheAudioDB work with zero configuration and no keys.
+* **Free developer keys** — Spotify, TIDAL, Last.fm, Discogs, and Pollinations AI keys unlock higher-resolution artwork and extra modes, and are free to generate.
+* **No premium accounts** — you **don't** need Spotify Premium or a paid TIDAL plan to fetch album covers. A free account is enough to access their developer portals.
 
 </details>
 
@@ -322,7 +289,7 @@ You don't have to configure *any* keys. The "waterfall" engine skips unconfigure
 
 | Service | What you need | Where to get it | How |
 | :--- | :--- | :--- | :--- |
-| **Spotify** | Client ID & Client Secret | [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) | Create an app, enter a Redirect URI (required by the form, e.g. `http://127.0.0.1:8888/callback`), then copy the Client ID and Secret. |
+| **Spotify** | Client ID & Client Secret | [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) | Create an app, enter a Redirect URI (required by the form, e.g., `http://127.0.0.1:8888/callback`), then copy the Client ID and Secret. |
 | **Pollinations AI** | API Key | [Pollinations.ai Dashboard](https://enter.pollinations.ai/) | Sign in and generate an API key. |
 | **Discogs** | Personal Access Token | [Discogs Developer Settings](https://www.discogs.com/settings/developers) | Sign in and click **Generate new token**. |
 | **Last.fm** | API Key | [Last.fm API Account](https://www.last.fm/api/account/create) | Enter an application name and description to receive your key. |
@@ -365,10 +332,9 @@ Obscure radio stations, Cast devices, and local files never leave you with an em
          │ (Disabled / no key)
          ▼
  7. Internal geometric canvas ──────────► Minimalist slate
+
 ```
-
 </details>
-
 <details>
 <summary><strong>🔀 Why does it sometimes show a different cover than the album I'm playing?</strong></summary>
 
@@ -391,9 +357,9 @@ Prioritizing artist and track maximizes the chance of finding high-resolution ar
 
 Built for CD rips, vinyl rips, and purists:
 
-- **Precise querying** — searches releases by artist and track name with strict metadata filtering.
-- **Rate-limit compliant** — a built-in governor follows MusicBrainz's policy (1 request/second) to prevent IP throttling.
-- **Front-cover priority** — pulls verified 250 px front-cover images directly from the archive.
+* **Precise querying** — searches releases by artist and track name with strict metadata filtering.
+* **Rate-limit compliant** — a built-in governor follows MusicBrainz's policy (1 request/second) to prevent IP throttling.
+* **Front-cover priority** — pulls verified 250 px front-cover images directly from the archive.
 
 </details>
 
@@ -404,11 +370,11 @@ Built for CD rips, vinyl rips, and purists:
 
 A 64×64 LED canvas needs specialized composition:
 
-- **Standard Crop** — trims black letterboxing, white scanner margins, and pillarbox bars while preserving the full sleeve and typography.
-- **Extra Crop (subject isolation)**
-  - **Nested container unwrapping** — detects colored bands or card borders (e.g. *Eurythmics – Sweet Dreams*) and extracts the inner photo without border bleed.
-  - **Subject clustering** — groups two or more adjacent people (e.g. *Pet Shop Boys*) into one square so duos aren't sliced in half.
-  - **Typographic framing** — frames minimalist text covers (e.g. *Charli XCX – Brat*) with balanced negative space instead of zooming into hollow letter shapes.
+* **Standard Crop** — trims black letterboxing, white scanner margins, and pillarbox bars while preserving the full sleeve and typography.
+* **Extra Crop (subject isolation)**
+  * **Nested container unwrapping** — detects colored bands or card borders (e.g., *Eurythmics – Sweet Dreams*) and extracts the inner photo without border bleed.
+  * **Subject clustering** — groups two or more adjacent people (e.g., *Pet Shop Boys*) into one square so duos aren't sliced in half.
+  * **Typographic framing** — frames minimalist text covers (e.g., *Charli XCX – Brat*) with balanced negative space instead of zooming into hollow letter shapes.
 
 </details>
 
@@ -475,8 +441,8 @@ The **TV Mode engine**:
 
 <br>
 
-- **Instant feedback** — as soon as the media player's `volume_level` attribute changes (receiver, soundbar, or TV remote), the Pixoo shows a high-visibility volume overlay.
-- **Auto-revert** — once you stop adjusting, the display returns to the album art or live lyrics.
+* **Instant feedback** — as soon as the media player's `volume_level` attribute changes (receiver, soundbar, or TV remote), the Pixoo shows a high-visibility volume overlay.
+* **Auto-revert** — once you stop adjusting, the display returns to the album art or live lyrics.
 
 </details>
 
@@ -487,7 +453,7 @@ The **TV Mode engine**:
 
 Yes. Bluetooth, AirPlay, and Sonos multi-room setups can introduce latency.
 
-Open the integration's **Configure** menu and adjust **Lyrics Sync Offset** (e.g. `1.5` or `-2.0` seconds) until the lyrics match the audio.
+Open the integration's **Configure** menu and adjust **Lyrics Sync Offset** (e.g., `1.5` or `-2.0` seconds) until the lyrics match the audio.
 
 </details>
 
@@ -517,42 +483,35 @@ With **Playlist Prefetch** enabled, it reads your media player's queue and downl
 
 </details>
 
----
-
-
 ## 🛠️ Diagnostics & Troubleshooting
 
-**Enable debug logging** — add this to `configuration.yaml` and restart Home Assistant:
+* **Enable Debug Logging** — Add this to your `configuration.yaml` and restart Home Assistant to inspect the pipeline telemetry:
+  ```yaml
+  logger:
+    default: info
+    logs:
+      custom_components.pixoo64_art: debug```
 
-```yaml
-logger:
-  default: info
-  logs:
-    custom_components.pixoo64_art: debug
-
-```
-
-**Network timeouts** — make sure the Pixoo64 is on a stable 2.4 GHz Wi-Fi network and that port `80` isn't blocked between Home Assistant and the device.
-
-**Still stuck?** [Open an issue](https://github.com/idodov/pixoo64_art/issues) and include your debug logs, Home Assistant version, and media player type.
+* **Network Timeouts** — Ensure your Pixoo64 is connected to a stable 2.4 GHz Wi-Fi network and that port `80` is not blocked between Home Assistant and the device.
+* **Still stuck?** [Open an issue](https://github.com/idodov/pixoo64_art/issues) and include your debug logs, Home Assistant version, and media player type.
 
 ---
 
 ## 🤝 Contributing
 
-Contributions, feature requests, and bug reports are welcome!
+Contributions, feature requests, and bug reports are always welcome!
 
 1. Fork the project.
-2. Create a feature branch: `git checkout -b feature/AmazingFeature`
+2. Create your feature branch: `git checkout -b feature/AmazingFeature`
 3. Commit your changes: `git commit -m "Add some AmazingFeature"`
-4. Push the branch: `git push origin feature/AmazingFeature`
+4. Push to the branch: `git push origin feature/AmazingFeature`
 5. Open a Pull Request.
 
 ---
 
 ## 📄 License
 
-Distributed under the **MIT License**. See [`LICENSE`](https://www.google.com/search?q=LICENSE) for details.
+Distributed under the **MIT License**. See [`LICENSE`](https://www.google.com/search?q=https://github.com/idodov/pixoo64_art/blob/main/LICENSE) for details.
 
 ---
 
@@ -563,4 +522,6 @@ Distributed under the **MIT License**. See [`LICENSE`](https://www.google.com/se
 * [TheAudioDB](https://www.theaudiodb.com/) — for the artist fanart API.
 * [MusicBrainz](https://musicbrainz.org/) & [Cover Art Archive](https://coverartarchive.org/) — for open music metadata.
 * [Pollinations.ai](https://pollinations.ai/) — for accessible generative AI art APIs.
-* The [Home Assistant Community](https://community.home-assistant.io/) — for continuous testing and feedback.
+* The [Home Assistant Community](https://community.home-assistant.io/) — for continuous testing, ideas, and feedback.
+
+

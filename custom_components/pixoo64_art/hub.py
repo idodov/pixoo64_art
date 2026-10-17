@@ -402,6 +402,9 @@ class PixooHub:
             if conf:
                 if "LightSwitch" in conf:
                     self.device_screen_on = (conf.get("LightSwitch", 1) == 1)
+                    if not self.device_screen_on:
+                        self.is_art_visible = False
+
                 if "Brightness" in conf:
                     try:
                         self.device_brightness = int(conf["Brightness"])
@@ -413,6 +416,11 @@ class PixooHub:
                 if curr_ch is not None and 0 <= curr_ch <= 3:
                     self.last_valid_index = curr_ch
                     self.select_index = curr_ch
+                    self.is_art_visible = False
+                elif curr_ch == 4 and self.device_screen_on:
+                    pass
+                else:
+                    self.is_art_visible = False
 
             if self.sensor:
                 attrs = dict(self.sensor._attr_extra_state_attributes or {})
@@ -912,13 +920,12 @@ class PixooHub:
             getattr(self.config, 'cassette_mode', False) or
             is_force_ai
         )
-        is_prefetch_enabled = getattr(self.config, 'prefetch_enabled', False)
-        if not is_prefetch_enabled and not is_anim_mode:
-            return
 
         pos = self._get_current_media_position()
         dur = float(self.media_data.media_duration)
-        prefetch_offset = 30.0 if is_anim_mode else 20.0
+        
+        # 25s buffer for heavy animations, exactly 10s for standard/lyrics
+        prefetch_offset = 25.0 if is_anim_mode else 10.0
         delay = (dur - pos) - prefetch_offset
 
         if delay > 0:
@@ -1470,6 +1477,7 @@ class PixooHub:
         current_title = str(self.media_data.title or "").strip().lower()
         current_artist = str(self.media_data.artist or "").strip().lower()
 
+        # If the track is STILL the same (e.g., seeking/skipping forward or attribute update)
         if cleaned_new_title and cleaned_new_title == current_title and new_track_artist == current_artist:
             try:
                 self.media_data.media_position = float(new_state.attributes.get('media_position', self.media_data.media_position))
@@ -1489,7 +1497,8 @@ class PixooHub:
                 self.progress_timer_gen_id += 1
                 await self._update_progress_bar_loop()
                 
-                if not self._prefetch_timer_unsub and self.prefetch_status in ["Idle", "No next song detected"]:
+                # ALWAYS reschedule prefetch to account for seeking/skipping forward!
+                if self.prefetch_status in ["Idle", "No next song detected", "Cancelled", ""]:
                     self._schedule_prefetch()
                 return
 

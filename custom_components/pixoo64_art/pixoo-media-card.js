@@ -521,7 +521,7 @@ class PixooMediaCard extends HTMLElement {
     } catch { return null; }
   }
   _applyTheme() {
-    const sA = this._config?.entity_sensor ? this._hass?.states[this._config.entity_sensor]?.attributes : {};
+    const sA = (this._config?.entity_sensor ? this._hass?.states[this._config.entity_sensor]?.attributes : null) || {};
     let t = this._persistentTheme || this._imageExtractedTheme || { bgColor: '#111420', primaryColor: '#00ffcc', color1: 'rgba(0,255,204,.35)', color2: 'rgba(56,189,248,.30)', color3: 'rgba(129,140,248,.25)' };
     
     if (Array.isArray(sA.wled_colors) && sA.wled_colors.length >= 3) {

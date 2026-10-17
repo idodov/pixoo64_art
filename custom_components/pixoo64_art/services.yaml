@@ -128,3 +128,23 @@ send_notification:
       required: false
       selector:
         text:
+
+send_command:
+  name: Send Pixoo Command
+  description: Send a raw or structured command directly to the Pixoo64 device API.
+  fields:
+    command:
+      name: Command / Action
+      description: The API command path (e.g. 'Channel/SetBrightness', 'Channel/SetIndex', 'Device/SetHighLightMode').
+      required: true
+      example: "Channel/SetBrightness"
+      selector:
+        text:
+    payload:
+      name: Command Payload Parameters
+      description: Optional JSON dictionary of additional parameters required by the Pixoo command.
+      required: false
+      example: '{"Brightness": 80}'
+      selector:
+        object:
+        

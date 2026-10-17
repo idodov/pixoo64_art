@@ -14,6 +14,7 @@ import textwrap
 import colorsys
 import urllib.parse
 import difflib
+import os
 from collections import Counter, OrderedDict, deque
 from datetime import datetime, timezone
 from io import BytesIO
@@ -193,17 +194,27 @@ class PixooDevice:
                     if attempt < retries: await asyncio.sleep(0.15 * attempt)
             return False
 
-    async def get_current_channel_index(self) -> int: 
-        if self.session.closed or not self.config.pixoo_url: return 0
+    async def get_current_channel_index(self) -> Optional[int]: 
+        if self.session.closed or not self.config.pixoo_url:
+            return None
         try:
-            async with self.session.post(self.config.pixoo_url, headers=self.headers, json={"Command": "Channel/GetIndex"}, timeout=5) as response:
-                response_data = await response.json()
-                return response_data.get('SelectIndex', 0)
-        except Exception: return 0
+            async with self.session.post(
+                self.config.pixoo_url,
+                headers=self.headers,
+                json={"Command": "Channel/GetIndex"},
+                timeout=4
+            ) as response:
+                if response.status == 200:
+                    response_data = await response.json(content_type=None)
+                    if isinstance(response_data, dict) and "SelectIndex" in response_data:
+                        return int(response_data["SelectIndex"])
+        except Exception as e:
+            _LOGGER.debug("Failed to get current channel index: %s", e)
+        return None
 
-    async def get_screen_on_state(self) -> bool: 
-        if self.session.closed or not self.config.pixoo_url: 
-            return True
+    async def get_all_conf(self) -> dict:
+        if self.session.closed or not self.config.pixoo_url:
+            return {}
         try:
             async with self.session.post(
                 self.config.pixoo_url, 
@@ -212,10 +223,17 @@ class PixooDevice:
                 timeout=4
             ) as response:
                 if response.status == 200:
-                    data = await response.json()
-                    return data.get("LightSwitch", 1) == 1
-        except Exception:
-            pass
+                    data = await response.json(content_type=None)
+                    if isinstance(data, dict):
+                        return data
+        except Exception as e:
+            _LOGGER.debug("Failed to fetch device config: %s", e)
+        return {}
+
+    async def get_screen_on_state(self) -> bool: 
+        conf = await self.get_all_conf()
+        if conf and "LightSwitch" in conf:
+            return conf.get("LightSwitch", 1) == 1
         return True
 
 # =========================================================================
@@ -275,21 +293,19 @@ class ImageFilterService:
 # =========================================================================
 
 class ColorAnalyzer:
-    # פלטות אווירה לעטיפות שחור/לבן/אפור (מונוכרום) כדי להימנע מתאורה לבנה/אפורה משעממת
     MONO_PALETTE_DARK = [
-        (30, 60, 210),    # Deep Midnight Blue (נורה ראשית + WLED 1)
+        (30, 60, 210),    # Deep Midnight Blue 
         (110, 35, 200),   # Atmospheric Violet (WLED 2)
         (20, 150, 220),   # Cyber Teal/Cyan (WLED 3)
     ]
     MONO_PALETTE_BRIGHT = [
-        (65, 105, 225),   # Royal Steel Blue (נורה ראשית + WLED 1)
+        (65, 105, 225),   # Royal Steel Blue
         (135, 80, 215),   # Soft Electric Purple (WLED 2)
         (255, 165, 70),   # Warm Amber Accent (WLED 3)
     ]
 
     @classmethod
     def _optimize_for_led(cls, h: float, s: float, v: float) -> Tuple[int, int, int]:
-        """מנרמל רוויה ובהירות כך שהנורה וה-WLED תמיד יקבלו צבע חי ועשיר ולא לבן/חיוור."""
         opt_s = min(1.0, max(0.58, s * 1.25))
         opt_v = min(0.90, max(0.55, v))
         r, g, b = colorsys.hsv_to_rgb(h, opt_s, opt_v)
@@ -297,11 +313,6 @@ class ColorAnalyzer:
 
     @classmethod
     def get_image_palette(cls, img: Image.Image) -> list:
-        """
-        מחלץ 3 צבעים דומיננטיים, חיים ושונים זה מזה מהתמונה המקורית (רץ ב-1ms על Proxy של 48x48).
-        - צבע [0] הוא הבולט ביותר (משמש לנורה הראשית + WLED 1).
-        - צבעים [0, 1, 2] משמשים יחד ל-WLED.
-        """
         if not img:
             return list(cls.MONO_PALETTE_DARK)
 
@@ -317,11 +328,9 @@ class ColorAnalyzer:
             h, s, v = colorsys.rgb_to_hsv(rf, gf, bf)
             total_lum += v
 
-            # סינון פיקסלים שחורים (כבויים) או לבנים/בהירים מדי שמסנוורים
             if v < 0.12 or (v > 0.90 and s < 0.22):
                 continue
 
-            # ספירת פיקסלים שיש בהם צבע אמיתי (לא אפור/שחור/לבן)
             if s >= 0.16 and v >= 0.18:
                 chromatic_pixels += 1
 
@@ -337,7 +346,6 @@ class ColorAnalyzer:
         avg_lum = total_lum / max(1, len(pixels))
         chromatic_ratio = chromatic_pixels / max(1, len(pixels))
 
-        # זיהוי עטיפה מונוכרומטית (שחור/לבן/אפור או נקודת צבע זעירה < 3.5%)
         if chromatic_ratio < 0.035 or not buckets:
             return list(cls.MONO_PALETTE_BRIGHT if avg_lum > 0.55 else cls.MONO_PALETTE_DARK)
 
@@ -352,7 +360,6 @@ class ColorAnalyzer:
             if s < 0.15:
                 continue
 
-            # שקלול שכיחות הצבע בעטיפה מול רוויה גבוהה ומניעת צבעים בהירים/חיוורים מדי
             freq_weight = cnt ** 0.65
             sat_weight = max(0.1, s) ** 1.45
             val_weight = 1.0 if 0.22 <= v <= 0.84 else 0.50
@@ -367,7 +374,6 @@ class ColorAnalyzer:
 
         scored_candidates.sort(key=lambda c: c["score"], reverse=True)
 
-        # בחירת 3 צבעים שונים בגוון שלהם (כדי לא לקבל 3 גוונים כמעט זהים ב-WLED)
         selected_hsv: List[Tuple[float, float, float]] = []
         selected_rgb: List[Tuple[int, int, int]] = []
 
@@ -386,7 +392,6 @@ class ColorAnalyzer:
                 if len(selected_rgb) == 3:
                     break
 
-        # השלמת פלטה ל-3 צבעים אם העטיפה מינימליסטית (בעלת צבע אחד או שניים בלבד)
         while len(selected_rgb) < 3:
             base_h, base_s, base_v = selected_hsv[0]
             if len(selected_rgb) == 1:
@@ -449,10 +454,6 @@ class ColorAnalyzer:
         config: "Config",
         cropped_img: Optional[Image.Image] = None,
     ) -> dict:
-        """
-        מקבלת את התמונה המקורית (img) לחילוץ צבעי התאורה וה-WLED,
-        ואת התמונה החתוכה (cropped_img) לחישוב צבע הפונט והבהירות על מסך ה-Pixoo.
-        """
         display_target = cropped_img if cropped_img is not None else img
         palette = cls.get_image_palette(img)
         prime_color = palette[0] if palette else (30, 60, 210)
@@ -1063,7 +1064,10 @@ class ImageProcessor:
 
         if use_cache and cache_key in self.image_cache:
             self.image_cache.move_to_end(cache_key)
-            return self.image_cache[cache_key]
+            cached_data = self.image_cache[cache_key]
+            if cached_data and cached_data.get('live_display_url'):
+                media_data.live_display_url = cached_data['live_display_url']
+            return cached_data
 
         image_data = await self.get_raw_image_data(picture)
         if image_data:
@@ -1073,6 +1077,8 @@ class ImageProcessor:
                     if len(self.image_cache) >= self.cache_size: 
                         self.image_cache.popitem(last=False)
                     self.image_cache[cache_key] = cached_data
+                if cached_data.get('live_display_url'):
+                    media_data.live_display_url = cached_data['live_display_url']
                     
                 return cached_data
                 
@@ -1148,10 +1154,19 @@ class ImageProcessor:
                 result_dict['base64_image'] = self.gbase64(final_img_with_clock)
                 t_final_prep = time.perf_counter() - t0
 
-                _LOGGER.debug(
-                    "[PROFILE_IMAGE] open=%.3fs fixed=%.3fs crop=%.3fs analysis=%.3fs filter_scale=%.3fs prep_b64=%.3fs total_proc=%.3fs",
-                    t_open, t_fixed, t_crop, t_analysis, t_filter_scale, t_final_prep, time.perf_counter() - t_total_proc
+                is_animated_or_clock = (
+                    getattr(self.config, 'vinyl_mode', False) or
+                    getattr(self.config, 'cassette_mode', False) or
+                    getattr(self.config, 'analog_clock', False) or
+                    getattr(self.config, 'spotify_slide', False) or
+                    getattr(self.config, 'artist_slide', False)
                 )
+
+                if not is_animated_or_clock:
+                    static_key = f"std_{media_data.artist}_{media_data.title}_{filter_mode}"
+                    result_dict['live_display_url'] = self.save_live_display_gif([final_img_with_clock], 1000, static_key)
+                    media_data.live_display_url = result_dict['live_display_url']
+
                 return result_dict
                 
         except Exception as e:
@@ -1510,10 +1525,63 @@ class ImageProcessor:
             filter_mode = getattr(self.config, 'image_filter', 'None')
             clock_img = self.filter_service.apply_post_scale(clock_img, filter_mode)
             clock_img = self.text_clock_img(clock_img, {}, media_data)
+            
+            c_key = f"clock_{media_data.artist}_{media_data.title}_{filter_mode}"
+            media_data.live_display_url = self.save_live_display_gif([clock_img], 1000, c_key)
+            
             return self.gbase64(clock_img)
         except Exception as e:
             _LOGGER.error("Error generating analog clock frame: %s", e)
             return None
+
+    def save_live_display_gif(self, pil_frames: List[Image.Image], duration_ms: int, cache_key: str) -> Optional[str]:
+        """Saves PIL frames as animated or static GIF in www/pixoo_cache for Lovelace card display."""
+        if not pil_frames:
+            return None
+        try:
+            cache_dir = self.hass.config.path("www", "pixoo_cache")
+            os.makedirs(cache_dir, exist_ok=True)
+
+            safe_key = "".join(c if c.isalnum() or c in "-_" else "_" for c in cache_key).strip("_")
+            filename = f"pixoo_{safe_key}.gif"
+            file_path = os.path.join(cache_dir, filename)
+
+            first_frame = pil_frames[0].convert("RGBA")
+            rest_frames = [f.convert("RGBA") for f in pil_frames[1:]]
+
+            first_frame.save(
+                file_path,
+                save_all=True,
+                append_images=rest_frames,
+                duration=duration_ms,
+                loop=0,
+                disposal=2,
+                optimize=False
+            )
+
+            existing_files = sorted(
+                [os.path.join(cache_dir, f) for f in os.listdir(cache_dir) if f.startswith("pixoo_")],
+                key=os.path.getmtime
+            )
+            while len(existing_files) > self.cache_size:
+                oldest = existing_files.pop(0)
+                try:
+                    os.remove(oldest)
+                except Exception:
+                    pass
+
+            # Millisecond timestamp guarantees instantaneous cache-busting on the frontend
+            mtime = int(time.time() * 1000)
+            return f"/local/pixoo_cache/{filename}?t={mtime}"
+        except Exception as e:
+            _LOGGER.error("Failed to save live display GIF: %s", e)
+            return None
+
+    async def async_save_live_display_gif(self, pil_frames: List[Image.Image], duration_ms: int, cache_key: str) -> Optional[str]:
+        """Asynchronous wrapper for saving live display GIF without blocking the event loop."""
+        return await self.hass.async_add_executor_job(
+            self.save_live_display_gif, pil_frames, duration_ms, cache_key
+        )
         
 # =========================================================================
 # VINTAGE CASSETTE TAPE ANIMATION RENDERER (MICRO-PIXEL FONT & TRANSLIT)
@@ -1582,6 +1650,7 @@ class CassetteRenderer:
     @classmethod
     def render_frames(cls, base_img: Image.Image, image_processor: "ImageProcessor", media_data: "MediaData") -> List[str]:
         frames_b64 = []
+        pil_frames = []
         try:
             palette = image_processor.get_image_palette(base_img)
             accent_color = palette[0] if palette else (185, 148, 62)
@@ -1600,68 +1669,62 @@ class CassetteRenderer:
             title_text = cls._prepare_text(media_data.title, max_px)
             artist_text = cls._prepare_text(media_data.artist, max_px)
 
-            # --- Build and filter static background once ---
             base_canvas = Image.new("RGB", (64, 64), (6, 6, 8))
             draw = ImageDraw.Draw(base_canvas)
 
-            # Cassette body & corner screws
             draw.rectangle([1, 1, 62, 62], fill=shell_color)
             for sx, sy in [(3, 3), (60, 3), (3, 60), (60, 60)]:
                 draw.point((sx, sy), fill=(160, 160, 170))
                 draw.point((sx + 1, sy), fill=(100, 100, 110))
 
-            # Top Label Area (Full width from x: 4 to 59)
             draw.rectangle([4, 3, 59, 18], fill=label_bg)
-            draw.line([(4, 10), (59, 10)], fill=(210, 45, 45), width=1) # Red stripe
+            draw.line([(4, 10), (59, 10)], fill=(210, 45, 45), width=1)
 
-            # Full-width micro text lines centered or left-aligned on the label
             MicroPixelFont.draw_text(draw, 6, 4, title_text, (20, 45, 110))
             MicroPixelFont.draw_text(draw, 6, 12, artist_text, (35, 35, 40))
 
-            # Center Acrylic Window & Tape
             draw.rectangle([13, 21, 50, 42], fill=window_bg)
             draw.rectangle([13, 21, 50, 42], outline=(40, 40, 45), width=1)
             for mx in [29, 31, 33, 35]:
                 draw.line([(mx, 26), (mx, 37)], fill=(75, 75, 80), width=1)
 
-            # Bottom Accent Bar tinted with album color palette
             draw.rectangle([4, 45, 59, 49], fill=accent_color)
             MicroPixelFont.draw_text(draw, 6, 45, "MIX", (255, 255, 255))
             MicroPixelFont.draw_text(draw, 49, 45, "90", (255, 255, 255))
 
-            # Bottom tape head well
             draw.polygon([(11, 62), (18, 52), (45, 52), (52, 62)], fill=(28, 28, 32))
             draw.line([(18, 52), (45, 52)], fill=(45, 45, 50), width=1)
             draw.ellipse([23, 55, 27, 59], fill=(6, 6, 8))
             draw.ellipse([36, 55, 40, 59], fill=(6, 6, 8))
             draw.point((32, 57), fill=(120, 120, 125))
 
-            # Apply filters and clock overlay to static canvas
             filter_mode = getattr(image_processor.config, 'image_filter', 'None')
             base_canvas = image_processor.filter_service.apply_post_scale(base_canvas, filter_mode)
             base_canvas = image_processor.text_clock_img(base_canvas, {}, media_data)
 
-            # --- Loop for dynamic parts (Rotating Spools) ---
             for f in range(total_frames):
                 canvas = base_canvas.copy()
                 draw = ImageDraw.Draw(canvas)
-
                 rot_deg = f * 10.0
                 rad = math.radians(rot_deg)
 
                 for scx in [left_cx, right_cx + 9]:
                     draw.ellipse([scx - r_spool, spool_cy - r_spool, scx + r_spool, spool_cy + r_spool], fill=spool_outer)
                     draw.ellipse([scx - 3, spool_cy - 3, scx + 3, spool_cy + 3], fill=(8, 8, 10))
-
                     for tooth_idx in range(6):
                         t_angle = rad + (tooth_idx * math.pi / 3.0)
                         tx = scx + int(round(math.cos(t_angle) * 4.5))
                         ty = spool_cy + int(round(math.sin(t_angle) * 4.5))
                         draw.point((tx, ty), fill=(30, 30, 35))
 
+                pil_frames.append(canvas.copy())
                 b64 = image_processor.gbase64(canvas)
                 if b64:
                     frames_b64.append(b64)
+
+            if pil_frames:
+                c_key = f"cassette_{media_data.artist}_{media_data.title}"
+                media_data.live_display_url = image_processor.save_live_display_gif(pil_frames, 100, c_key)
 
         except Exception as e:
             _LOGGER.error("Error generating vintage cassette animation frames: %s", e)
@@ -1702,6 +1765,7 @@ class VinylRenderer:
     @classmethod
     def render_frames(cls, base_img: Image.Image, image_processor: "ImageProcessor", media_data: "MediaData") -> List[str]:
         frames_b64 = []
+        pil_frames = []
         try:
             crop_mode = getattr(image_processor.config, 'crop_mode', None)
             if not crop_mode:
@@ -1712,7 +1776,6 @@ class VinylRenderer:
                 else:
                     crop_mode = "No Crop"
 
-            # --- THE FIX: 32 frames for Extra Crop, 16 otherwise ---
             total_frames = 32 if crop_mode == "Extra Crop" else 16
 
             filter_mode = getattr(image_processor.config, 'image_filter', 'None')
@@ -1733,12 +1796,9 @@ class VinylRenderer:
 
                 groove_overlay = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
                 g_draw = ImageDraw.Draw(groove_overlay)
-                
                 g_draw.ellipse([0, 0, 63, 63], outline=(0, 0, 0, 70), width=1)
-                
                 for r in [28, 24, 20, 16, 12]:
                     g_draw.ellipse([32 - r, 32 - r, 32 + r, 32 + r], outline=(0, 0, 0, 45), width=1)
-                
                 g_draw.ellipse([25, 25, 39, 39], outline=(0, 0, 0, 60), width=1)
 
             elif crop_mode == "Crop":
@@ -1784,7 +1844,6 @@ class VinylRenderer:
             for i in range(total_frames):
                 angle = i * (360.0 / total_frames)
                 canvas = Image.new("RGB", (64, 64), deck_bg)
-
                 sheen_wobble = math.sin(i * 2.0 * math.pi / total_frames) * 6.0
 
                 if crop_mode == "Extra Crop":
@@ -1793,9 +1852,8 @@ class VinylRenderer:
 
                     sheen_layer = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
                     s_draw = ImageDraw.Draw(sheen_layer)
-
-                    sheen_alpha_main = int(85 + math.sin(i * math.pi / (total_frames / 2.0)) * 25)  
-                    sheen_alpha_sub = int(45 + math.sin(i * math.pi / (total_frames / 2.0)) * 15)   
+                    sheen_alpha_main = int(85 + math.sin(i * math.pi / (total_frames / 2.0)) * 25)
+                    sheen_alpha_sub = int(45 + math.sin(i * math.pi / (total_frames / 2.0)) * 15)
 
                     color_main = (255, 255, 255, sheen_alpha_main)
                     color_sub = (230, 240, 255, sheen_alpha_sub)
@@ -1807,8 +1865,6 @@ class VinylRenderer:
 
                     rotated_art.alpha_composite(sheen_layer)
                     canvas.paste(rotated_art.convert("RGB"), (0, 0), disc_mask)
-                    draw = ImageDraw.Draw(canvas)
-
                 else:
                     draw = ImageDraw.Draw(canvas)
                     draw.ellipse([cx - record_radius - 1, cy - record_radius - 1, cx + record_radius + 1, cy + record_radius + 1], fill=(28, 28, 32))
@@ -1829,31 +1885,35 @@ class VinylRenderer:
                     draw.arc([cx - sheen_r2, cy - sheen_r2, cx + sheen_r2, cy + sheen_r2], int(124 - sheen_wobble), int(146 - sheen_wobble), fill=sheen_color_sub, width=2)
                     draw.arc([cx - sheen_r2, cy - sheen_r2, cx + sheen_r2, cy + sheen_r2], int(304 - sheen_wobble), int(326 - sheen_wobble), fill=sheen_color_sub, width=2)
 
+                draw = ImageDraw.Draw(canvas)
                 draw.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=(10, 10, 12), outline=(180, 180, 190))
 
                 if show_arm:
                     arm_wobble_x = int(round(math.sin(i * 2.0 * math.pi / total_frames) * 0.6))
                     arm_wobble_y = int(round(math.cos(i * 2.0 * math.pi / total_frames) * 0.4))
-
                     needle_x = base_needle_x + arm_wobble_x
                     needle_y = base_needle_y + arm_wobble_y
 
                     draw.ellipse([55, 6, 61, 12], fill=(80, 80, 90), outline=(160, 160, 170))
                     draw.point((58, 9), fill=(220, 220, 230))
-                    
                     joint_x = int(round(54 - (side_index * 1.0))) + (arm_wobble_x // 2)
                     joint_y = int(round(20 + (side_index * 0.8)))
                     draw.line([(57, 11), (joint_x, joint_y)], fill=(170, 170, 180), width=1)
                     draw.line([(joint_x, joint_y), (needle_x + 1, needle_y - 1)], fill=(190, 190, 200), width=1)
-
                     draw.rectangle([needle_x - 1, needle_y - 2, needle_x + 2, needle_y + 2], fill=(210, 210, 220))
                     draw.point((needle_x, needle_y + 1), fill=(235, 45, 45))
 
                 canvas = image_processor.text_clock_img(canvas, {}, media_data)
+                pil_frames.append(canvas.copy())
 
                 b64 = image_processor.gbase64(canvas)
                 if b64:
                     frames_b64.append(b64)
+
+            if pil_frames:
+                speed_ms = 70 if len(pil_frames) > 16 else 140
+                v_key = f"vinyl_{media_data.artist}_{media_data.title}_{crop_mode}"
+                media_data.live_display_url = image_processor.save_live_display_gif(pil_frames, speed_ms, v_key)
 
         except Exception as e:
             _LOGGER.error("Error generating enhanced vinyl animation frames: %s", e)
@@ -2618,16 +2678,17 @@ class TheAudioDbProvider:
         return list(OrderedDict.fromkeys(urls))
 
 # =========================================================================
-# FALLBACK COORDINATOR SERVICE
+# FALLBACK COORDINATOR SERVICE (FIXED RACE ENGINE & ROBUST FALLBACK)
 # =========================================================================
 
 class FallbackService:
-    def __init__(self, config: "Config", image_processor: "ImageProcessor", session: aiohttp.ClientSession, spotify_service: "SpotifyService", pixoo_device: "PixooDevice"): 
+    def __init__(self, config: "Config", image_processor: "ImageProcessor", session: aiohttp.ClientSession, spotify_service: "SpotifyService", pixoo_device: "PixooDevice", hub: Optional[Any] = None): 
         self.config = config
         self.image_processor = image_processor
         self.session = session
         self.spotify_service = spotify_service
         self.pixoo_device = pixoo_device
+        self.hub = hub
         self.fail_txt = False
         self.fallback = False
         self._artwork_cache: OrderedDict[str, dict] = OrderedDict()
@@ -2656,71 +2717,74 @@ class FallbackService:
     async def get_tidal_access_token(self):
         return await self.tidal_provider.get_access_token()
 
-    async def play_artist_gallery_slide(self, pixoo_device: "PixooDevice", media_data: "MediaData") -> None:
+    async def play_artist_gallery_slide(self, pixoo_device: Optional["PixooDevice"], media_data: "MediaData", send_to_device: bool = True) -> None:
         media_data.artist_slide_pass = False
         try:
-            urls = getattr(media_data, 'slider_album_urls', None)
-            if not urls:
-                urls = await self.audiodb_provider.get_artist_images(media_data.artist)
-                
-            if not urls or len(urls) < 2:
-                media_data.slider_error = "Not enough artist images found"
-                return
+            frames_b64 = getattr(media_data, 'slider_frames_b64', None)
+            if not frames_b64 or len(frames_b64) < 2:
+                urls = getattr(media_data, 'slider_album_urls', None)
+                if not urls:
+                    urls = await self.audiodb_provider.get_artist_images(media_data.artist)
+                    
+                if not urls or len(urls) < 2:
+                    media_data.slider_error = "Not enough artist images found"
+                    return
 
-            media_data.slider_album_urls = urls
+                media_data.slider_album_urls = urls
 
-            try:
-                preview_raw = await self.image_processor.get_raw_image_data(urls[0])
-                if preview_raw:
-                    preview_b64 = await self.image_processor.process_slide_image(preview_raw, media_data)
-                    if preview_b64:
-                        await pixoo_device.send_command({
-                            "Command": "Draw/CommandList", 
-                            "CommandList": [
-                                {"Command": "Draw/ResetHttpGifId"},
-                                {"Command": "Draw/SendHttpGif", "PicNum": 1, "PicWidth": 64, "PicOffset": 0, "PicID": 0, "PicSpeed": 1000, "PicData": preview_b64}
-                            ]
-                        })
-            except Exception as e:
-                _LOGGER.debug("Artist Slide preview error: %s", e)
+                sem = asyncio.Semaphore(5)
+                async def process_pipeline(url):
+                    async with sem:
+                        try:
+                            raw_data = await self.image_processor.get_raw_image_data(url)
+                            if raw_data:
+                                with Image.open(BytesIO(raw_data)) as img:
+                                    img = ensure_rgb(img)
+                                    img = self.image_processor.fixed_size(img)
+                                    filter_mode = getattr(self.config, 'image_filter', 'None')
+                                    img = self.image_processor.filter_service.apply_pre_scale(img, filter_mode)
+                                    img = img.resize((64, 64), Image.Resampling.BILINEAR)
+                                    img = self.image_processor.filter_service.apply_post_scale(img, filter_mode)
+                                    img = self.image_processor.text_clock_img(img, {}, media_data)
+                                    b64 = self.image_processor.gbase64(img)
+                                    return b64, img.copy()
+                        except Exception as err:
+                            _LOGGER.error("Artist Slide pipeline error: %s", err)
+                        return None, None
 
-            sem = asyncio.Semaphore(5)
-            async def process_pipeline(url):
-                async with sem:
-                    try:
-                        raw_data = await self.image_processor.get_raw_image_data(url)
-                        if raw_data:
-                            return await self.image_processor.process_slide_image(raw_data, media_data)
-                    except Exception as err:
-                        _LOGGER.error("Artist Slide pipeline error: %s", err)
-                    return None
+                tasks = [process_pipeline(u) for u in urls[:10]]
+                results = await asyncio.gather(*tasks)
+                frames_b64 = [f[0] for f in results if f[0]]
+                gallery_pil_frames = [f[1] for f in results if f[1]]
 
-            tasks = [process_pipeline(u) for u in urls[:10]]
-            frames_b64 = await asyncio.gather(*tasks)
-            frames_b64 = [f for f in frames_b64 if f]
+                if len(frames_b64) < 2:
+                    media_data.slider_error = "Failed to process enough frames"
+                    return
 
-            if len(frames_b64) < 2:
-                media_data.slider_error = "Failed to process enough frames"
-                return
+                media_data.slider_frames_b64 = frames_b64
+                if gallery_pil_frames:
+                    ag_key = f"artist_gallery_{media_data.artist}"
+                    media_data.live_display_url = self.image_processor.save_live_display_gif(gallery_pil_frames, 5000, ag_key)
 
             media_data.artist_slide_pass = True
             media_data.slider_frames = len(frames_b64)
-            
-            await pixoo_device.send_command({
-                "Command": "Draw/CommandList", 
-                "CommandList": [{"Command": "Draw/ResetHttpGifId"}]
-            })
-            
-            for pic_offset, b64_frame in enumerate(frames_b64):
+
+            if send_to_device and pixoo_device:
                 await pixoo_device.send_command({
-                    "Command": "Draw/SendHttpGif", 
-                    "PicNum": len(frames_b64), 
-                    "PicWidth": 64, 
-                    "PicOffset": pic_offset, 
-                    "PicID": 0, 
-                    "PicSpeed": 5000, 
-                    "PicData": b64_frame
+                    "Command": "Draw/CommandList", 
+                    "CommandList": [{"Command": "Draw/ResetHttpGifId"}]
                 })
+                
+                for pic_offset, b64_frame in enumerate(frames_b64):
+                    await pixoo_device.send_command({
+                        "Command": "Draw/SendHttpGif", 
+                        "PicNum": len(frames_b64), 
+                        "PicWidth": 64, 
+                        "PicOffset": pic_offset, 
+                        "PicID": 0, 
+                        "PicSpeed": 5000, 
+                        "PicData": b64_frame
+                    })
         except Exception as e:
             media_data.slider_error = str(e)
             _LOGGER.error("Artist Gallery Slide Error: %s", e)
@@ -2765,6 +2829,7 @@ class FallbackService:
             and not getattr(media_data, 'playing_tv', False)
         )
         
+        # 1. Force AI check
         if not is_spotify_slider and not is_artist_slider and getattr(self.config, 'force_ai', False) and getattr(self.config, 'pollinations', None) and not getattr(media_data, 'radio_logo', False) and not getattr(media_data, 'playing_tv', False):
             t0 = time.perf_counter()
             ai_res = await self._try_ai_generation(media_data)
@@ -2779,6 +2844,8 @@ class FallbackService:
             tv_icon_img = self.create_tv_icon_image()
             tv_icon_base64 = self.image_processor.gbase64(tv_icon_img)
             return { 
+                'pil_image': tv_icon_img,
+                'clean_image': tv_icon_img,
                 'base64_image': tv_icon_base64,
                 'font_color': '#FF00FF',
                 'brightness': 0.67,
@@ -2790,13 +2857,14 @@ class FallbackService:
                 'color3': '#000000'
             }
 
-        # --- CACHE CHECK ---
+        is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
+
+        # 2. RAM / Artwork Cache Check
         if not getattr(self.config, 'force_ai', False) and song_cache_key in self._artwork_cache:
             cached = self._artwork_cache[song_cache_key]
             if not is_spotify_slider and not is_artist_slider or cached.get('source') in ["Spotify", "Spotify Artist", "Spotify (Artist Profile Image)", "Original"]:
                 cached_url = cached['url']
                 cached_source = cached['source']
-                is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
                 t0 = time.perf_counter()
                 proc_res = await self.image_processor.get_image(cached_url, media_data, is_slide_pass)
                 _LOGGER.debug("[PROFILE] fallback_step=cache_hit source=%s duration=%.3fs", cached_source, time.perf_counter() - t0)
@@ -2811,30 +2879,28 @@ class FallbackService:
             media_data.pic_source = "Internal"
             return self._get_fallback_black_image_data(media_data)
 
-        has_api_keys = bool(
+        has_providers = bool(
             (getattr(self.config, 'spotify_client_id', None) and getattr(self.config, 'spotify_client_secret', None))
             or (getattr(self.config, 'tidal_client_id', None) and getattr(self.config, 'tidal_client_secret', None))
             or getattr(self.config, 'lastfm', None)
             or getattr(self.config, 'discogs', None)
+            or getattr(self.config, 'musicbrainz', False)
+            or getattr(self.config, 'internet_archive', False)
         )
 
-        use_race_mode = getattr(self.config, 'artwork_race_mode', False) and has_api_keys
+        use_race_mode = getattr(self.config, 'artwork_race_mode', False) and has_providers
 
         if use_race_mode:
             # =========================================================================
-            # QUALITY-AWARE SMART RACE ENGINE (Tier 1 = Digital/Clean, Tier 2 = Physical/Discogs)
+            # TRUE SMART RACE ENGINE
             # =========================================================================
             tasks = []
 
             async def fetch_original_picture():
                 if picture and not (getattr(media_data, 'playing_radio', False) and not getattr(media_data, 'radio_logo', False)):
-                    is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
                     t0 = time.perf_counter()
                     try:
-                        result = await asyncio.wait_for(
-                            self.image_processor.get_image(picture, media_data, is_slide_pass),
-                            timeout=2.5
-                        )
+                        result = await self.image_processor.get_image(picture, media_data, is_slide_pass)
                         dur = time.perf_counter() - t0
                         _LOGGER.debug("[PROFILE] fallback_step=original_picture duration=%.3fs", dur)
                         if result:
@@ -2850,7 +2916,7 @@ class FallbackService:
                     t0_sp = time.perf_counter()
                     try:
                         album_id, first_album = await self.spotify_service.get_spotify_album_id(media_data)
-                        sp_tier = 1  # Spotify is always digital master quality
+                        sp_tier = getattr(self.spotify_service, 'last_match_tier', 1)
                         img_url = None
                         if album_id:
                             img_url = await self.spotify_service.get_spotify_album_image_url(album_id)
@@ -2858,7 +2924,6 @@ class FallbackService:
                             img_url = await self.spotify_service.get_spotify_album_image_url(first_album)
                         
                         if img_url:
-                            is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
                             proc_res = await self.image_processor.get_image(img_url, media_data, is_slide_pass)
                             _LOGGER.debug("[PROFILE] fallback_step=spotify duration=%.3fs", time.perf_counter() - t0_sp)
                             if proc_res:
@@ -2866,18 +2931,19 @@ class FallbackService:
                     except Exception as e:
                         _LOGGER.error("Spotify fallback failed: %s", e)
                     return None
+
                 tasks.append(fetch_spotify())
 
             async def fetch_and_process(provider_name, coro, default_tier=1):
                 t_sub = time.perf_counter()
                 try:
                     res_data = await coro
-                    url, provider_base_tier = res_data if isinstance(res_data, tuple) else (res_data, 1)
-                    # Force Discogs and IA into Tier 2 so clean digital masters from Spotify/Tidal win priority
+                    if not res_data:
+                        return None
+                    url, provider_base_tier = res_data if isinstance(res_data, tuple) else (res_data, default_tier)
                     final_tier = 2 if provider_name in ("Discogs", "Internet Archive") else provider_base_tier
                     
                     if url:
-                        is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
                         proc_res = await self.image_processor.get_image(url, media_data, is_slide_pass)
                         dur = time.perf_counter() - t_sub
                         _LOGGER.debug("[PROFILE] fallback_step=%s tier=%d duration=%.3fs", provider_name.lower().replace('.', '_'), final_tier, dur)
@@ -2935,7 +3001,7 @@ class FallbackService:
                                     if best_tier2_fallback is None:
                                         best_tier2_fallback = (proc_result, url, provider_name)
                                     if tier2_deadline is None:
-                                        tier2_deadline = time.monotonic() + 0.8
+                                        tier2_deadline = time.monotonic() + 0.5
                         except Exception:
                             pass
 
@@ -2948,13 +3014,13 @@ class FallbackService:
                     media_data.pic_url = url
                     media_data.pic_source = provider_name
                     return proc_result
+
         else:
             # =========================================================================
             # TRADITIONAL SEQUENTIAL MODE
             # =========================================================================
             try:
                 if picture and not (getattr(media_data, 'playing_radio', False) and not getattr(media_data, 'radio_logo', False)):
-                    is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
                     t0 = time.perf_counter()
                     result = await self.image_processor.get_image(picture, media_data, is_slide_pass)
                     dur = time.perf_counter() - t0
@@ -2967,19 +3033,18 @@ class FallbackService:
             except Exception as e: 
                 _LOGGER.error("Original picture processing failed: %s", e) 
 
-            self.spotify_first_album = None
-            self.spotify_artist_pic = None
+            spotify_first_album = None
+            spotify_artist_pic = None
 
             if getattr(self.config, 'spotify_client_id', None) and getattr(self.config, 'spotify_client_secret', None):
                 try:
                     t0_sp = time.perf_counter()
                     album_id, first_album = await self.spotify_service.get_spotify_album_id(media_data)
                     if first_album:
-                        self.spotify_first_album = await self.spotify_service.get_spotify_album_image_url(first_album)
+                        spotify_first_album = await self.spotify_service.get_spotify_album_image_url(first_album)
                     if album_id:
                         image_url = await self.spotify_service.get_spotify_album_image_url(album_id)
                         if image_url:
-                            is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
                             proc_res = await self.image_processor.get_image(image_url, media_data, is_slide_pass)
                             _LOGGER.debug("[PROFILE] fallback_step=spotify duration=%.3fs", time.perf_counter() - t0_sp)
                             if proc_res:
@@ -2987,41 +3052,38 @@ class FallbackService:
                                 media_data.pic_url = image_url
                                 media_data.pic_source = "Spotify"
                                 return proc_res
-                    self.spotify_artist_pic = await self.spotify_service.get_spotify_artist_image_url_by_name(media_data.artist)
+                    spotify_artist_pic = await self.spotify_service.get_spotify_artist_image_url_by_name(media_data.artist)
                 except Exception as e: 
                     _LOGGER.error("Spotify fallback failed: %s", e) 
 
-            if self.spotify_artist_pic:
+            if spotify_artist_pic:
                 t0 = time.perf_counter()
-                is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
-                result = await self.image_processor.get_image(self.spotify_artist_pic, media_data, is_slide_pass)
+                result = await self.image_processor.get_image(spotify_artist_pic, media_data, is_slide_pass)
                 _LOGGER.debug("[PROFILE] fallback_step=spotify_artist duration=%.3fs", time.perf_counter() - t0)
                 if result:
-                    self._save_to_artwork_cache(song_cache_key, self.spotify_artist_pic, "Spotify Artist")
+                    self._save_to_artwork_cache(song_cache_key, spotify_artist_pic, "Spotify Artist")
                     media_data.pic_source = "Spotify Artist"
                     return result
 
-            if self.spotify_first_album:
+            if spotify_first_album:
                 t0 = time.perf_counter()
-                is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
-                result = await self.image_processor.get_image(self.spotify_first_album, media_data, is_slide_pass)
+                result = await self.image_processor.get_image(spotify_first_album, media_data, is_slide_pass)
                 _LOGGER.debug("[PROFILE] fallback_step=spotify_first_album duration=%.3fs", time.perf_counter() - t0)
                 if result:
-                    self._save_to_artwork_cache(song_cache_key, self.spotify_first_album, "Spotify (Artist Profile Image)")
-                    media_data.pic_url = self.spotify_first_album
+                    self._save_to_artwork_cache(song_cache_key, spotify_first_album, "Spotify (Artist Profile Image)")
+                    media_data.pic_url = spotify_first_album
                     media_data.pic_source = "Spotify (Artist Profile Image)"
                     return result
 
             tasks = []
 
-            async def fetch_and_process(provider_name, coro):
+            async def fetch_and_process_seq(provider_name, coro):
                 t_sub = time.perf_counter()
                 try:
                     res_data = await coro
                     url, provider_base_tier = res_data if isinstance(res_data, tuple) else (res_data, 1)
                     final_tier = 2 if provider_name in ("Discogs", "Internet Archive") else provider_base_tier
                     if url:
-                        is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
                         proc_res = await self.image_processor.get_image(url, media_data, is_slide_pass)
                         dur = time.perf_counter() - t_sub
                         _LOGGER.debug("[PROFILE] fallback_step=%s tier=%d duration=%.3fs url=%s", provider_name.lower().replace('.', '_'), final_tier, dur, url)
@@ -3032,17 +3094,17 @@ class FallbackService:
                 return None
 
             if getattr(self.config, 'discogs', None):
-                tasks.append(fetch_and_process("Discogs", self.discogs_provider.search_album_art(media_data.artist, media_data.title, known_album, return_tier=True)))
+                tasks.append(fetch_and_process_seq("Discogs", self.discogs_provider.search_album_art(media_data.artist, media_data.title, known_album, return_tier=True)))
             if getattr(self.config, 'lastfm', None):
-                tasks.append(fetch_and_process("Last.FM", self.lastfm_provider.search_album_art(media_data.artist, media_data.title, known_album, return_tier=True)))
+                tasks.append(fetch_and_process_seq("Last.FM", self.lastfm_provider.search_album_art(media_data.artist, media_data.title, known_album, return_tier=True)))
             tidal_id = getattr(self.config, 'tidal_client_id', None)
             tidal_secret = getattr(self.config, 'tidal_client_secret', None)
             if tidal_id and tidal_secret:
-                tasks.append(fetch_and_process("TIDAL", self.tidal_provider.get_album_art_url(media_data.artist, media_data.title, known_album, return_tier=True)))
+                tasks.append(fetch_and_process_seq("TIDAL", self.tidal_provider.get_album_art_url(media_data.artist, media_data.title, known_album, return_tier=True)))
             if getattr(self.config, 'musicbrainz', False):
-                tasks.append(fetch_and_process("MusicBrainz", self.mb_provider.get_album_art_url(media_data.artist, media_data.title, known_album, return_tier=True)))
+                tasks.append(fetch_and_process_seq("MusicBrainz", self.mb_provider.get_album_art_url(media_data.artist, media_data.title, known_album, return_tier=True)))
             if getattr(self.config, 'internet_archive', False):
-                tasks.append(fetch_and_process("Internet Archive", self.ia_provider.search_artwork(media_data.artist, media_data.title, known_album, return_tier=True)))
+                tasks.append(fetch_and_process_seq("Internet Archive", self.ia_provider.search_artwork(media_data.artist, media_data.title, known_album, return_tier=True)))
 
             if tasks:
                 pending = {asyncio.create_task(t) for t in tasks}
@@ -3069,12 +3131,12 @@ class FallbackService:
                     media_data.pic_source = provider_name
                     return proc_result
 
+        # 3. TheAudioDB
         if not getattr(self.config, 'force_ai', False) and getattr(self.config, 'audiodb_enabled', True):
             t0 = time.perf_counter()
             audiodb_urls = await self.audiodb_provider.get_artist_images(media_data.artist)
             if audiodb_urls:
                 for img_url in audiodb_urls:
-                    is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
                     proc_result = await self.image_processor.get_image(img_url, media_data, is_slide_pass)
                     if proc_result:
                         _LOGGER.debug("[PROFILE] fallback_step=audiodb duration=%.3fs", time.perf_counter() - t0)
@@ -3083,6 +3145,7 @@ class FallbackService:
                         media_data.pic_source = "TheAudioDB"
                         return proc_result
 
+        # 4. AI Generation
         if not getattr(self.config, 'force_ai', False) and getattr(self.config, 'pollinations', None):
             t0 = time.perf_counter()
             result = await self._try_ai_generation(media_data)
@@ -3093,10 +3156,11 @@ class FallbackService:
                 media_data.pic_source = "AI"
                 return result
 
+        # 5. Fallback Black Image
         media_data.pic_url = "Fallback Image"
         media_data.pic_source = "Internal"
         return self._get_fallback_black_image_data(media_data)
-    
+
     def _save_to_artwork_cache(self, key: str, url: str, source: str):
         if len(self._artwork_cache) >= 40:
             self._artwork_cache.popitem(last=False)
@@ -3109,30 +3173,40 @@ class FallbackService:
         ai_url = self.ai_provider.format_prompt_url(media_data.artist, media_data.title)
         if not ai_url: return None
         
-        max_retries = 2
-        for attempt in range(max_retries + 1):
-            try:
-                is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
-                result = await asyncio.wait_for(
-                    self.image_processor.get_image(ai_url, media_data, is_slide_pass),
-                    timeout=25
-                )
-                
-                if result: 
-                    _LOGGER.info("Successfully generated AI album art on attempt %s", attempt + 1)
-                    media_data.pic_url = ai_url
-                    media_data.pic_source = "AI"
-                    return result
-                    
-            except asyncio.TimeoutError:
-                _LOGGER.warning("AI generation timed out (Attempt %s/%s)", attempt + 1, max_retries + 1)
-            except Exception as e:
-                _LOGGER.warning("AI generation failed: %s (Attempt %s/%s)", e, attempt + 1, max_retries + 1)
+        is_live = not getattr(media_data, 'is_prefetch', False)
+        if is_live and self.hub and hasattr(self.hub, 'set_ai_generating'):
+            self.hub.set_ai_generating(True, "Generating AI Artwork...")
             
-            if attempt < max_retries: 
-                await asyncio.sleep(1.5)
+        max_retries = 2
+        try:
+            for attempt in range(max_retries + 1):
+                try:
+                    if is_live and self.hub and hasattr(self.hub, 'set_ai_generating') and attempt > 0:
+                        self.hub.set_ai_generating(True, f"Retrying AI Art ({attempt + 1}/{max_retries + 1})...")
+
+                    is_slide_pass = getattr(media_data, 'spotify_slide_pass', False) or getattr(media_data, 'artist_slide_pass', False)
+                    result = await asyncio.wait_for(
+                        self.image_processor.get_image(ai_url, media_data, is_slide_pass),
+                        timeout=25
+                    )
+                    
+                    if result: 
+                        _LOGGER.info("Successfully generated AI album art on attempt %s", attempt + 1)
+                        media_data.pic_url = ai_url
+                        media_data.pic_source = "AI"
+                        return result
+                        
+                except asyncio.TimeoutError:
+                    _LOGGER.warning("AI generation timed out (Attempt %s/%s)", attempt + 1, max_retries + 1)
+                except Exception as e:
+                    _LOGGER.warning("AI generation failed: %s (Attempt %s/%s)", e, attempt + 1, max_retries + 1)
                 
-        return None
+                if attempt < max_retries: 
+                    await asyncio.sleep(1.5)
+            return None
+        finally:
+            if is_live and self.hub and hasattr(self.hub, 'set_ai_generating'):
+                self.hub.set_ai_generating(False, "Idle")
 
     def _get_fallback_black_image_data(self, media_data: Optional["MediaData"] = None) -> dict: 
         self.fail_txt = True
@@ -3157,6 +3231,8 @@ class FallbackService:
                 img = self.image_processor._draw_burned_text(img, artist, title)
                 
         return { 
+            'pil_image': img,
+            'clean_image': img,
             'base64_image': self.image_processor.gbase64(img),
             'font_color': '#FFFFFF', 
             'brightness_lower_part': 0.5,
@@ -3244,7 +3320,7 @@ class FallbackService:
         )
         image = image.resize((final_width, final_height), Image.Resampling.BILINEAR)
         return image
-
+    
 # =========================================================================
 # SPOTIFY SERVICE
 # =========================================================================
@@ -3453,54 +3529,75 @@ class SpotifyService:
             "PicData": pic_data
         })
 
-    async def spotify_albums_slide(self, pixoo_device: "PixooDevice", media_data: "MediaData", prev_channel: int) -> None: 
+    async def spotify_albums_slide(self, pixoo_device: Optional["PixooDevice"], media_data: "MediaData", prev_channel: int = 0, send_to_device: bool = True) -> None: 
         media_data.spotify_slide_pass = False 
         try:
-            album_urls = getattr(media_data, 'slider_album_urls', None) or await self.prepare_slider_for_media(media_data)
-            if not album_urls or len(album_urls) < 2: 
-                return
+            album_urls_b64 = getattr(media_data, 'slider_frames_b64', None)
+            if not album_urls_b64 or len(album_urls_b64) < 2:
+                album_urls = getattr(media_data, 'slider_album_urls', None) or await self.prepare_slider_for_media(media_data)
+                if not album_urls or len(album_urls) < 2: 
+                    return
 
-            artist_pic_url = getattr(media_data, 'slider_artist_pic_url', None) or await self.get_spotify_artist_image_url_by_name(media_data.artist)
-            if artist_pic_url:
-                preview_b64 = await self.get_slide_img(artist_pic_url, media_data)
-                if preview_b64:
-                    await pixoo_device.send_command({
-                        "Command": "Draw/CommandList", 
-                        "CommandList": [
-                            {"Command": "Draw/ResetHttpGifId"},
-                            {"Command": "Draw/SendHttpGif", "PicNum": 1, "PicWidth": 64, "PicOffset": 0, "PicID": 0, "PicSpeed": 1000, "PicData": preview_b64}
-                        ]
-                    })
+                if send_to_device and pixoo_device:
+                    artist_pic_url = getattr(media_data, 'slider_artist_pic_url', None) or await self.get_spotify_artist_image_url_by_name(media_data.artist)
+                    if artist_pic_url:
+                        preview_b64 = await self.get_slide_img(artist_pic_url, media_data)
+                        if preview_b64:
+                            await pixoo_device.send_command({
+                                "Command": "Draw/CommandList", 
+                                "CommandList": [
+                                    {"Command": "Draw/ResetHttpGifId"},
+                                    {"Command": "Draw/SendHttpGif", "PicNum": 1, "PicWidth": 64, "PicOffset": 0, "PicID": 0, "PicSpeed": 1000, "PicData": preview_b64}
+                                ]
+                            })
 
-            async def process_pipeline(url):
-                async with self._semaphore:
-                    try:
-                        raw_data = await self.image_processor.get_raw_image_data(url)
-                        if raw_data:
-                            return await self.image_processor.process_slide_image(raw_data, media_data)
-                    except Exception as err: 
-                        _LOGGER.error("Slide image pipeline error: %s", err)
-                    return None
+                async def process_pipeline(url):
+                    async with self._semaphore:
+                        try:
+                            raw_data = await self.image_processor.get_raw_image_data(url)
+                            if raw_data:
+                                with Image.open(BytesIO(raw_data)) as img:
+                                    img = ensure_rgb(img)
+                                    img = self.image_processor.fixed_size(img)
+                                    filter_mode = getattr(self.config, 'image_filter', 'None')
+                                    img = self.image_processor.filter_service.apply_pre_scale(img, filter_mode)
+                                    img = img.resize((64, 64), Image.Resampling.BILINEAR)
+                                    if getattr(self.config, 'special_mode', False):
+                                        img = self.image_processor.special_mode(img)
+                                    img = self.image_processor.filter_service.apply_post_scale(img, filter_mode)
+                                    img = self.image_processor.text_clock_img(img, {}, media_data)
+                                    b64 = self.image_processor.gbase64(img)
+                                    return b64, img.copy()
+                        except Exception as err: 
+                            _LOGGER.error("Slide image pipeline error: %s", err)
+                        return None, None
 
-            tasks = [process_pipeline(url) for url in album_urls[:10]]
-            album_urls_b64 = await asyncio.gather(*tasks)
-            album_urls_b64 = [res for res in album_urls_b64 if res]
+                tasks = [process_pipeline(url) for url in album_urls[:10]]
+                results = await asyncio.gather(*tasks)
+                album_urls_b64 = [res[0] for res in results if res[0]]
+                slide_pil_frames = [res[1] for res in results if res[1]]
+
+                if len(album_urls_b64) < 2: 
+                    media_data.slider_error = "Insufficient valid frames processed"
+                    return
+
+                media_data.slider_frames_b64 = album_urls_b64
+                if slide_pil_frames:
+                    s_key = f"slider_{media_data.artist}_{media_data.title}"
+                    media_data.live_display_url = self.image_processor.save_live_display_gif(slide_pil_frames, 5000, s_key)
 
             frames = len(album_urls_b64)
-            if frames < 2: 
-                media_data.slider_error = "Insufficient valid frames processed"
-                return
-
             media_data.spotify_slide_pass = True
             media_data.slider_frames = frames
-            
-            await pixoo_device.send_command({
-                "Command": "Draw/CommandList", 
-                "CommandList": [{"Command": "Draw/ResetHttpGifId"}]
-            })
-            
-            for pic_offset, b64_frame in enumerate(album_urls_b64):
-                await self.send_pixoo_animation_frame(pixoo_device, "Draw/SendHttpGif", frames, 64, pic_offset, 0, 5000, b64_frame)
+
+            if send_to_device and pixoo_device:
+                await pixoo_device.send_command({
+                    "Command": "Draw/CommandList", 
+                    "CommandList": [{"Command": "Draw/ResetHttpGifId"}]
+                })
+                
+                for pic_offset, b64_frame in enumerate(album_urls_b64):
+                    await self.send_pixoo_animation_frame(pixoo_device, "Draw/SendHttpGif", frames, 64, pic_offset, 0, 5000, b64_frame)
                 
         except Exception as e: 
             media_data.slider_error = str(e)
@@ -3519,9 +3616,10 @@ class SpotifyService:
             _LOGGER.error("Error building preview frame: %s", e)
             return None
 
-    def _build_animation_frames_sync(self, prepared_albums: list, media_data: "MediaData") -> list:
+    def _build_animation_frames_sync(self, prepared_albums: list, media_data: "MediaData") -> tuple[list, list]:
         try:
             pixoo_frames = []
+            pil_frames = []
             total_frames = min(len(prepared_albums), 10)
             x_pos = [1, 16, 51]
 
@@ -3537,15 +3635,16 @@ class SpotifyService:
                 
                 cached_data = {}
                 canvas = self.image_processor.text_clock_img(canvas, cached_data, media_data)
+                pil_frames.append(canvas.copy())
                 
                 frame_b64 = self.image_processor.gbase64(canvas)
                 if frame_b64:
                     pixoo_frames.append(frame_b64)
                     
-            return pixoo_frames
+            return pixoo_frames, pil_frames
         except Exception as e:
             _LOGGER.error("Error building animation frames: %s", e)
-            return []
+            return [], []
 
     async def spotify_album_art_animation(self, pixoo_device: "PixooDevice", media_data: "MediaData", prev_channel: int) -> None: 
         if getattr(media_data, 'playing_tv', False): 
@@ -3622,7 +3721,7 @@ class SpotifyService:
             if len(prepared_albums) < 3: 
                 return
 
-            pixoo_frames = await self.image_processor.hass.async_add_executor_job(
+            pixoo_frames, pil_frames = await self.image_processor.hass.async_add_executor_job(
                 self._build_animation_frames_sync, prepared_albums, media_data
             )
             
@@ -3631,6 +3730,10 @@ class SpotifyService:
 
             media_data.spotify_slide_pass = True 
             media_data.slider_frames = len(pixoo_frames)
+
+            if pil_frames:
+                s_key = f"slider_anim_{media_data.artist}_{media_data.title}"
+                media_data.live_display_url = self.image_processor.save_live_display_gif(pil_frames, 5000, s_key)
             
             await pixoo_device.send_command({
                 "Command": "Draw/CommandList", 
@@ -4024,6 +4127,31 @@ class LyricsProvider:
         
         if next_event_time != -1: return [], max(0.1, next_event_time - current_pos)
         return [], None
+
+    async def check_lyrics_availability(self, artist: str, title: str, duration: int) -> bool:
+        """Checks if synced lyrics exist for the track without building visual timeline."""
+        if not artist or not title or duration <= 0:
+            return False
+
+        new_key = f"{artist}|{title}".lower()
+        if new_key in self.lyrics_cache:
+            return len(self.lyrics_cache[new_key]) > 0
+
+        fetched = await self._fetch_from_api(artist, title, duration)
+        if len(self.lyrics_cache) >= 40:
+            self.lyrics_cache.popitem(last=False)
+        self.lyrics_cache[new_key] = fetched
+        return len(fetched) > 0
+
+    def ensure_timeline_built(self, artist: str, title: str):
+        """Builds visual timeline only when lyrics display is actually requested."""
+        if not artist or not title:
+            return
+        new_key = f"{artist}|{title}".lower()
+        if new_key != self.current_song_key:
+            self.current_song_key = new_key
+            raw_lyrics = self.lyrics_cache.get(new_key, [])
+            self._build_visual_timeline(raw_lyrics)
     
 # =========================================================================
 # MEDIA DATA MODEL
@@ -4054,16 +4182,20 @@ class MediaData:
         self.image_processor = image_processor
         self.session = session
         self.lyrics_provider = LyricsProvider(self.config, self.session)
+        self.lyrics_available: bool = False
         self.title_cleaner = TitleCleaner()
         self.ai_provider = AiArtProvider(self.config)
         self.vinyl_frames_b64: list = []
         self.cassette_frames_b64: list = []
+        self.slider_frames_b64: list = []
+        self.live_display_url: Optional[str] = None
         
         self.prev_title: str = ""
         self.prev_artist: str = ""
-        self.prev_picture: Optional[str] = None  # --- THE FIX: Tracking Picture URL changes! ---
+        self.prev_picture: Optional[str] = None
         self.track_changed: bool = False 
-        
+        self.is_prefetch: bool = False
+
         self.artist: str = ""
         self.title: str = ""
         self.title_original: str = ""
@@ -4130,13 +4262,21 @@ class MediaData:
             self._evaluate_radio_mode(raw_title, raw_artist, attributes)
             await self._fetch_lyrics()
 
-            # --- THE FIX: We now trigger a re-render if HA updates the picture URL later! ---
-            self.track_changed = (self.title != self.prev_title or self.artist != self.prev_artist or self.picture != self.prev_picture)
+            pic_appeared = (self.prev_picture is None and self.picture is not None)
+            self.track_changed = (
+                self.title != self.prev_title 
+                or self.artist != self.prev_artist 
+                or pic_appeared
+            )
             if self.track_changed:
+                self.vinyl_frames_b64 = []
+                self.cassette_frames_b64 = []
+                self.slider_frames_b64 = []
                 self.slider_album_urls = []
                 self.slider_artist_pic_url = None
                 self.slider_frames = 0
                 self.spotify_slide_pass = False
+                self.artist_slide_pass = False
                 self.slider_error = None
 
             self.prev_title, self.prev_artist = self.title, self.artist
@@ -4185,11 +4325,13 @@ class MediaData:
         self.title = self.clean_title(raw_title) if self.config.clean_title else raw_title
         self.artist = raw_artist if raw_artist else ""
         self.album = attributes.get('album_name') or attributes.get('media_album_name') or ""
+        self.live_display_url = None
         
         original_picture = attributes.get('entity_picture')
         if original_picture and (re.match(r'^[a-zA-Z]:\\', original_picture) or original_picture.startswith("file://")): 
             original_picture = None
         self.picture = original_picture
+        
         
         try:
             self.media_position = float(attributes.get('media_position', 0))
@@ -4239,8 +4381,22 @@ class MediaData:
             self.radio_logo = False
 
     async def _fetch_lyrics(self):
-        if getattr(self.config, 'show_lyrics', False) and not getattr(self.config, 'special_mode', False) and not self.playing_tv and not self.playing_radio:
-            self.lyrics = await self.lyrics_provider.get_lyrics(self.artist, self.title_original, self.album, int(self.media_duration))
+        has_timing = (
+            not self.playing_tv 
+            and not self.playing_radio 
+            and getattr(self, 'media_duration', 0) > 0
+        )
+        self.lyrics_available = False
+
+        if has_timing and self.artist and self.title:
+            self.lyrics_available = await self.lyrics_provider.check_lyrics_availability(
+                self.artist, self.title_original, int(self.media_duration)
+            )
+
+        if self.lyrics_available and getattr(self.config, 'show_lyrics', False) and not getattr(self.config, 'special_mode', False):
+            self.lyrics_provider.ensure_timeline_built(self.artist, self.title_original)
+            new_key = f"{self.artist}|{self.title_original}".lower()
+            self.lyrics = self.lyrics_provider.lyrics_cache.get(new_key, [])
         else:
             self.lyrics = []
 

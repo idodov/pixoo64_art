@@ -49,6 +49,10 @@ To bring the ultimate control experience directly to your Home Assistant dashboa
 
 Unlike standard media player cards, this card acts as a **live visual simulator**, mirroring in real-time exactly what is rendering on your Pixoo64 LED matrix—complete with CRT pixel grids, ambient backdrops, dynamic theme glow colors extracted from the artwork, and live prefetch status badges.
 
+|  DEMO |  Standard |  AI |
+| :---: | :---: | :---: |
+|  <video src="https://github.com/user-attachments/assets/587d92a3-c4e8-48b8-ad5f-42e072b8940e"/>| <img width="376" height="726" alt="image" src="https://github.com/user-attachments/assets/ca7146b5-8279-45d0-ace7-6c4b6b0f0343" /> | <img width="386" height="727" alt="image" src="https://github.com/user-attachments/assets/b0d67e42-004b-47d5-85ff-67b832f040e7" /> |
+
 ### 🌟 Key Card Features & Customization
 * **Live Visual Preview** — See the exact 64×64 pixel canvas, artwork filters, and live animation frames right on your dashboard. Interactive clicking lets you seek through track playback instantly.
 * **Modular Section Reordering** — Fully customizable UI. Using the visual editor or YAML, you can reorder, show, or hide individual dashboard sections (Display, Track Metadata, Next Track Prefetch, Media Controls, Display Modes, Hardware Switches, and Advanced Tuning).

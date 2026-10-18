@@ -2764,7 +2764,7 @@ class FallbackService:
                 media_data.slider_frames_b64 = frames_b64
                 if gallery_pil_frames:
                     ag_key = f"artist_gallery_{media_data.artist}"
-                    media_data.live_display_url = self.image_processor.save_live_display_gif(gallery_pil_frames, 5000, ag_key)
+                    media_data.live_display_url = await self.image_processor.async_save_live_display_gif(gallery_pil_frames, 5000, ag_key)
 
             media_data.artist_slide_pass = True
             media_data.slider_frames = len(frames_b64)
@@ -3584,7 +3584,7 @@ class SpotifyService:
                 media_data.slider_frames_b64 = album_urls_b64
                 if slide_pil_frames:
                     s_key = f"slider_{media_data.artist}_{media_data.title}"
-                    media_data.live_display_url = self.image_processor.save_live_display_gif(slide_pil_frames, 5000, s_key)
+                    media_data.live_display_url = await self.image_processor.async_save_live_display_gif(slide_pil_frames, 5000, s_key)
 
             frames = len(album_urls_b64)
             media_data.spotify_slide_pass = True
@@ -3733,7 +3733,7 @@ class SpotifyService:
 
             if pil_frames:
                 s_key = f"slider_anim_{media_data.artist}_{media_data.title}"
-                media_data.live_display_url = self.image_processor.save_live_display_gif(pil_frames, 5000, s_key)
+                media_data.live_display_url = await self.image_processor.async_save_live_display_gif(pil_frames, 5000, s_key)
             
             await pixoo_device.send_command({
                 "Command": "Draw/CommandList", 

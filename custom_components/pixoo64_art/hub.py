@@ -573,6 +573,9 @@ class PixooHub:
         }
 
         if key not in image_affecting_keys:
+            if key == "progress_bar" and hasattr(self, 'media_data'):
+                self.media_data.show_progress_bar = self.config.progress_bar_enabled and getattr(self.media_data, 'media_duration', 0) > 0
+
             if self.is_art_visible:
                 if self.lyrics_active_mode:
                     self.hass.async_create_task(self._calculate_and_schedule_next())

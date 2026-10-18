@@ -65,6 +65,8 @@ The integration supports multiple immersive visual rendering modes, easily switc
   </tr>
 </table>
 
+<img width="1247" height="578" alt="image" src="https://github.com/user-attachments/assets/5f2113d4-9d1b-483f-9eba-273a0adfbf26" />
+
 ### 🎛️ How to configure and add the Lovelace card to the dashboard?
 
 The `pixoo-media-card` is fully integrated with Home Assistant's dashboard editor and supports both visual UI configuration and raw YAML.

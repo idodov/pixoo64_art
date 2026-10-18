@@ -44,21 +44,38 @@ The integration supports multiple immersive visual rendering modes, easily switc
 ---
 
 ## 🎛️ The Lovelace Card (`pixoo-media-card`)
+<table border="0" cellpadding="0" cellspacing="0" style="border-collapse: collapse; border: none; background: transparent;">
+  <tr>
+    <td width="62%" valign="top" style="border: none; background: transparent; padding-right: 20px;">
+      To bring the ultimate control experience directly to your Home Assistant dashboards, <b>Pixoo64 Media Album Art</b> includes a custom, feature-packed Lovelace card: <b><code>pixoo-media-card</code></b>.
+      <br><br>
+      Unlike standard media player cards, this card acts as a <b>live visual simulator</b>, mirroring in real-time exactly what is rendering on your Pixoo64 LED matrix—complete with CRT pixel grids, ambient backdrops, dynamic theme glow colors extracted from the artwork, and live prefetch status badges.
+      <br><br>
+      <ul>
+        <li><b>Live Visual Preview</b> — See the exact 64×64 pixel canvas, artwork filters, and live animation frames right on your dashboard. Interactive clicking lets you seek through track playback instantly.</li>
+        <li><b>Modular Section Reordering</b> — Fully customizable UI. Using the visual editor or YAML, you can reorder, show, or hide individual dashboard sections (Display, Track Metadata, Next Track Prefetch, Media Controls, Display Modes, Hardware Switches, and Advanced Tuning).</li>
+        <li><b>Dynamic Ambient Theme Engine</b> — Automatically extracts dominant color palettes from active album art or WLED strips to paint your card's ambient background, glow, and borders in real time.</li>
+        <li><b>Hardware & Mode Control Suite</b> — Switch display modes (Standard, Vinyl, Cassette, Spotify Slider, Artist Gallery, Synced Lyrics, Analog Clock, Force AI) on the fly, adjust lyrics sync offset, toggle progress bars, or control Pixoo screen power and brightness directly from the card.</li>
+        <li><b>Technical Diagnostics Panel</b> — Optional collapsible diagnostics view displaying live pipeline durations, RAM image cache utilization, and background worker telemetry.</li>
+      </ul>
+    </td>
+    <td width="38%" valign="middle" align="center" style="border: none; background: transparent;">
+      <video src="https://github.com/user-attachments/assets/587d92a3-c4e8-48b8-ad5f-42e072b8940e" width="100%" autoplay loop muted playsinline style="border-radius: 10px; display: block; border: none;"></video>
+    </td>
+  </tr>
+</table>
 
-To bring the ultimate control experience directly to your Home Assistant dashboards, **Pixoo64 Media Album Art** includes a custom, feature-packed Lovelace card: **`pixoo-media-card`**.
+### 🎛️ How to configure and add the Lovelace card to the dashboard?
 
-Unlike standard media player cards, this card acts as a **live visual simulator**, mirroring in real-time exactly what is rendering on your Pixoo64 LED matrix—complete with CRT pixel grids, ambient backdrops, dynamic theme glow colors extracted from the artwork, and live prefetch status badges.
+The `pixoo-media-card` is fully integrated with Home Assistant's dashboard editor and supports both visual UI configuration and raw YAML.
 
-|  DEMO |  Standard |  AI |
-| :---: | :---: | :---: |
-|  <video src="https://github.com/user-attachments/assets/587d92a3-c4e8-48b8-ad5f-42e072b8940e"/>| <img width="376" height="726" alt="image" src="https://github.com/user-attachments/assets/ca7146b5-8279-45d0-ace7-6c4b6b0f0343" /> | <img width="386" height="727" alt="image" src="https://github.com/user-attachments/assets/b0d67e42-004b-47d5-85ff-67b832f040e7" /> |
+- **Via the UI (Recommended):** Edit your dashboard, click **Add Card**, search for **Pixoo Media Card**, and select it. The visual editor will appear, allowing you to select your status sensor, toggle sections, and reorder areas easily.
+- **Via YAML:** You can add the card directly to your dashboard YAML configuration using the following structure:
 
-### 🌟 Key Card Features & Customization
-* **Live Visual Preview** — See the exact 64×64 pixel canvas, artwork filters, and live animation frames right on your dashboard. Interactive clicking lets you seek through track playback instantly.
-* **Modular Section Reordering** — Fully customizable UI. Using the visual editor or YAML, you can reorder, show, or hide individual dashboard sections (Display, Track Metadata, Next Track Prefetch, Media Controls, Display Modes, Hardware Switches, and Advanced Tuning).
-* **Dynamic Ambient Theme Engine** — Automatically extracts dominant color palettes from active album art or WLED strips to paint your card's ambient background, glow, and borders in real time.
-* **Hardware & Mode Control Suite** — Switch display modes (Standard, Vinyl, Cassette, Spotify Slider, Artist Gallery, Synced Lyrics, Analog Clock, Force AI) on the fly, adjust lyrics sync offset, toggle progress bars, or control Pixoo screen power and brightness directly from the card.
-* **Technical Diagnostics Panel** — Optional collapsible diagnostics view displaying live pipeline durations, RAM image cache utilization, and background worker telemetry.
+```yaml
+type: custom:pixoo-media-card
+entity_sensor: sensor.pixoo64_status
+```
 
 ---
 
@@ -254,9 +271,33 @@ Go to **Settings ➔ Devices & Services ➔ Pixoo64 ➔ Configure** to update:
 
 </details>
 
+<details>
+<summary><strong>🔧 What should I do if the Pixoo64 stops updating or fails to render?</strong></summary>
+
+<br>
+
+If your Pixoo64 stops updating or fails to render:
+1. **Check IP & Power:** Ensure your Pixoo64 is powered on and that its local IP address hasn't changed (DHCP reservation is strongly recommended).
+2. **Verify Sensor State:** Go to Home Assistant Developer Tools ➔ States and check `sensor.pixoo64_status`. If it's unavailable, verify that the device is reachable on your LAN.
+3. **Master Control Toggle:** Try toggling **Master Control** off and on again via your dashboard to restart the communication loop.
+4. **Network Firewall/Subnets:** Ensure Home Assistant and the Pixoo64 are on the same local subnet, and that no firewall rules block HTTP communication on port 80.
+
+</details>
+
 ---
 
 ### 🔑 APIs, Accounts & Costs
+
+<details>
+<summary><strong>🎵 Do I need a music streaming subscription or specific streaming service to use this integration?</strong></summary>
+
+<br>
+
+**No.** You do not need a subscription to any streaming service to use this integration. 
+
+You can use **local files**, network shares, DLNA, or web radio streams. As long as your playing audio file or media source contains basic **metadata** (Artist and Track Title), the integration's waterfall search engine will automatically find and render the matching album art or fallback visual in most cases.
+
+</details>
 
 <details>
 <summary><strong>💸 Do I need to pay for any API keys or premium subscriptions?</strong></summary>
@@ -283,6 +324,7 @@ You don't have to configure *any* keys. The "waterfall" engine skips unconfigure
 | **Minimalist** | Nothing | Uses your media player's artwork, falling back to MusicBrainz, Internet Archive, and TheAudioDB. |
 | **Recommended** | Spotify | Fast, huge high-res library, and unlocks the animated *Spotify Slider* mode. |
 | **Never Blank** | Spotify + Discogs / Last.fm + Pollinations AI | Mainstream hits, rare vinyl/B-sides/indie tracks, and AI-generated art when no official cover exists. |
+| **Optimal** | All available APIs (Spotify, TIDAL, Last.fm, Discogs, Pollinations AI) | **100% Free developer accounts (no premium subscriptions needed).** Ensures that in 99.9% of cases, an accurate, high-resolution artwork or custom-generated AI visual will be rendered on your Pixoo matrix. |
 
 </details>
 
@@ -449,7 +491,36 @@ The **TV Mode engine**:
 * **Auto-revert** — once you stop adjusting, the display returns to the album art or live lyrics.
 
 </details>
+<details>
+<summary><strong>🎤 Are synchronized lyrics available for every song?</strong></summary>
 
+<br>
+
+**No.** Synchronized lyrics are not available for every song, but they are widely available for popular tracks across a wide variety of languages through LRCLIB and integrated providers.
+
+</details>
+
+<details>
+<summary><strong>📻 In which scenarios are synchronized lyrics definitely not supported?</strong></summary>
+
+<br>
+
+Lyrics cannot be displayed when listening to **live radio broadcasts**. 
+
+Since radio is a continuous linear stream, the integration cannot track the precise elapsed playback time or match it to a timestamped lyric file. The core rule for the lyrics engine is that **exact, frame-accurate timing** must be available both from Home Assistant's media player state and from the transcription source.
+
+</details>
+
+<details>
+<summary><strong>🔍 How can I tell if the currently playing song has synchronized lyrics?</strong></summary>
+
+<br>
+
+You can check in two easy ways:
+1. **Via the Lovelace Card:** Look at the **Display Modes** section on your `pixoo-media-card`. If synchronized lyrics are available for the current track, the **Lyrics** button will feature an active **green indicator dot**. Additionally, a dedicated status icon appears at the top right of the Track Info section.
+2. **Via Home Assistant State Attributes:** The integration's main status sensor exposes specific attributes (such as `lyrics_available` and `has_timing`) that you can inspect directly in Developer Tools or use in automations.
+
+</details>
 <details>
 <summary><strong>⏱️ Live lyrics are slightly out of sync. Can I fix this?</strong></summary>
 
@@ -494,7 +565,8 @@ With **Playlist Prefetch** enabled, it reads your media player's queue and downl
   logger:
     default: info
     logs:
-      custom_components.pixoo64_art: debug```
+      custom_components.pixoo64_art: debug
+  ```
 
 * **Network Timeouts** — Ensure your Pixoo64 is connected to a stable 2.4 GHz Wi-Fi network and that port `80` is not blocked between Home Assistant and the device.
 * **Still stuck?** [Open an issue](https://github.com/idodov/pixoo64_art/issues) and include your debug logs, Home Assistant version, and media player type.

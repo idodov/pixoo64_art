@@ -1054,11 +1054,12 @@ class ImageProcessor:
         if not picture:
             return None
         current_filter = getattr(self.config, 'image_filter', 'None')
+        current_crop = getattr(self.config, 'crop_mode', 'No Crop')
         
         has_lyrics = getattr(self.config, 'show_lyrics', False) and len(media_data.lyrics) > 0 and getattr(self.config, 'text_bg', False)
         lyrics_suffix = "_lyrics" if has_lyrics else ""
         
-        cache_key = f"{picture}_{media_data.artist}_{media_data.title}_{current_filter}{lyrics_suffix}".strip().lower()
+        cache_key = f"{picture}_{media_data.artist}_{media_data.title}_{current_filter}_{current_crop}{lyrics_suffix}".strip().lower()
         
         use_cache = not spotify_slide and not getattr(media_data, 'playing_tv', False)
 
@@ -1119,6 +1120,7 @@ class ImageProcessor:
                 t0 = time.perf_counter()
                 display_img = clean_img.copy()
                 filter_mode = getattr(self.config, 'image_filter', 'None')
+                crop_mode = getattr(self.config, 'crop_mode', 'No Crop')
                 display_img = self.filter_service.apply_pre_scale(display_img, filter_mode)
                 display_img = display_img.resize((64, 64), Image.Resampling.BILINEAR)
 
@@ -1163,7 +1165,7 @@ class ImageProcessor:
                 )
 
                 if not is_animated_or_clock:
-                    static_key = f"std_{media_data.artist}_{media_data.title}_{filter_mode}"
+                    static_key = f"std_{media_data.artist}_{media_data.title}_{filter_mode}_{crop_mode}"
                     result_dict['live_display_url'] = self.save_live_display_gif([final_img_with_clock], 1000, static_key)
                     media_data.live_display_url = result_dict['live_display_url']
 
@@ -1172,7 +1174,7 @@ class ImageProcessor:
         except Exception as e:
             _LOGGER.error("Error in _process_image: %s", e)
             return None
-
+            
     async def async_prefetch_url(self, picture: str, media_data: "MediaData" = None):
         if not picture: return
         if picture.startswith('http'): 

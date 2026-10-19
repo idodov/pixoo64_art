@@ -265,7 +265,6 @@ class PixooHub:
         self._active_song_key = None 
         self._prefetched_media = None
         
-        
         self.select_index = 0
         self.last_valid_index = 0
         self.device_brightness = 100
@@ -606,8 +605,10 @@ class PixooHub:
         self._last_rendered_album = None
         self._last_rendered_artist = None
         self._last_rendered_mode = None
+        self._last_rendered_filter = None
+        self._last_rendered_crop = None
         
-        self._cancel_tasks(['current_task', '_prefetch_task', '_early_send_task'])
+        self._cancel_tasks(['current_task', '_prefetch_task', '_playlist_prefetch_task', '_early_send_task'])
         self._active_song_key = None 
         self.current_task = self.hass.async_create_task(self.force_update())
 
@@ -726,7 +727,7 @@ class PixooHub:
         self.config.text_bg = self.ui_state.get("text_background", True)
 
         self.config.lyrics_sync = float(self.ui_state.get("lyrics_sync", 0.0))
-        self.config.image_filter = self.ui_state.get("image_filter", "None")
+        self.config.image_filter = self.ui_state.get("image_filter", getattr(self.config, "image_filter", "None"))
         
         self.config.playlist_prefetch_range = options.get(CONF_PLAYLIST_PREFETCH, data.get(CONF_PLAYLIST_PREFETCH, "Disabled"))
 
@@ -734,7 +735,7 @@ class PixooHub:
         self.config.wled_ip = options.get(CONF_WLED_IP, data.get(CONF_WLED_IP, ""))
         self.config.only_at_night = options.get("only_at_night", data.get("only_at_night", True))
 
-        crop_mode = self.ui_state.get("crop_mode", "No Crop")
+        crop_mode = self.ui_state.get("crop_mode", getattr(self.config, "crop_mode", "No Crop"))
         self.config.crop_mode = crop_mode
         self.config.crop_borders = crop_mode in ["Crop", "Extra Crop"]
         self.config.crop_extra = (crop_mode == "Extra Crop")
@@ -1468,7 +1469,9 @@ class PixooHub:
             
             old_title = old_state.attributes.get("media_title")
             new_title = new_state.attributes.get("media_title")
-            if old_title == new_title:
+            old_pic = old_state.attributes.get("entity_picture")
+            new_pic = new_state.attributes.get("entity_picture")
+            if old_title == new_title and old_pic == new_pic and self.is_art_visible:
                 self.progress_timer_gen_id += 1
                 await self._update_progress_bar_loop()
                 return 
@@ -1480,8 +1483,21 @@ class PixooHub:
         current_title = str(self.media_data.title or "").strip().lower()
         current_artist = str(self.media_data.artist or "").strip().lower()
 
+        new_picture = new_state.attributes.get("entity_picture")
+        old_picture = getattr(self.media_data, "picture", None)
+        picture_just_arrived = (not old_picture and bool(new_picture)) or (
+            bool(new_picture)
+            and new_picture != old_picture
+            and getattr(self.media_data, "pic_source", None) in ("Internal", None)
+        )
+
         # If the track is STILL the same (e.g., seeking/skipping forward or attribute update)
-        if cleaned_new_title and cleaned_new_title == current_title and new_track_artist == current_artist:
+        if (
+            cleaned_new_title
+            and cleaned_new_title == current_title
+            and new_track_artist == current_artist
+            and not picture_just_arrived
+        ):
             try:
                 self.media_data.media_position = float(new_state.attributes.get('media_position', self.media_data.media_position))
                 self.media_data.media_duration = float(new_state.attributes.get('media_duration', self.media_data.media_duration))
@@ -1553,6 +1569,7 @@ class PixooHub:
             title_str = getattr(self.media_data, 'title', '') or ''
             profiler = SongProfiler(f"{artist_str} - {title_str}")
             try:
+                self._apply_logic_matrix()
                 await self._sync_hardware_state_from_device(allow_channel_update=True)
 
                 current_song_key = f"{self.media_data.artist}_{self.media_data.title}".strip().lower()
@@ -1640,6 +1657,8 @@ class PixooHub:
                         can_skip = False
                     elif not self.is_art_visible:
                         can_skip = False
+                    elif getattr(self.media_data, 'pic_source', None) == "Internal":
+                        can_skip = False
                     elif getattr(self.config, 'vinyl_mode', False) or getattr(self.config, 'cassette_mode', False) or getattr(self.config, 'burned', False) or getattr(self.config, 'force_ai', False) or getattr(self.config, 'analog_clock', False):
                         can_skip = False
                     elif getattr(self.config, 'spotify_slide', False) or getattr(self.config, 'artist_slide', False):
@@ -1713,10 +1732,6 @@ class PixooHub:
 
                     if p_art == c_art and (p_tit in c_tit or c_tit in p_tit):
                         _LOGGER.debug("RAM Cache Hit! Adopting precomputed animation frames & GIF for %s", current_song_key)
-                        prefetched_hit = True
-                        processed_data = getattr(self._prefetched_media, 'processed_data', None)
-
-                    if p_art == c_art and (p_tit in c_tit or c_tit in p_tit):
                         prefetched_hit = True
                         processed_data = getattr(self._prefetched_media, 'processed_data', None)
                         self.media_data.pic_url = self._prefetched_media.pic_url
@@ -1870,17 +1885,28 @@ class PixooHub:
                         base64_image = clock_b64
 
                 if not early_slider_match and not early_vinyl_match and not early_cassette_match and not is_spotify_slider and not is_artist_slider:
-                    image_cmd = {
-                        "Command": "Draw/CommandList", 
-                        "CommandList": [
-                            {"Command": "Channel/SetIndex", "SelectIndex": 4},
-                            {"Command": "Channel/OnOffScreen", "OnOff": 1}, 
-                            {"Command": "Draw/ResetHttpGifId"}, 
-                            {"Command": "Draw/SendHttpGif", "PicNum": 1, "PicWidth": 64, "PicOffset": 0, "PicID": 0, "PicSpeed": 10000, "PicData": base64_image}
-                        ]
-                    }
                     t0_send = perf_counter()
                     try:
+                        if not self.is_art_visible or not self.device_screen_on:
+                            await self.pixoo_device.send_command({
+                                "Command": "Draw/CommandList", 
+                                "CommandList": [
+                                    {"Command": "Channel/OnOffScreen", "OnOff": 1},
+                                    {"Command": "Channel/SetIndex", "SelectIndex": 4},
+                                    {"Command": "Draw/ResetHttpGifId"}
+                                ]
+                            })
+                            await asyncio.sleep(0.15)
+
+                        image_cmd = {
+                            "Command": "Draw/CommandList", 
+                            "CommandList": [
+                                {"Command": "Channel/SetIndex", "SelectIndex": 4},
+                                {"Command": "Channel/OnOffScreen", "OnOff": 1}, 
+                                {"Command": "Draw/ResetHttpGifId"}, 
+                                {"Command": "Draw/SendHttpGif", "PicNum": 1, "PicWidth": 64, "PicOffset": 0, "PicID": 0, "PicSpeed": 10000, "PicData": base64_image}
+                            ]
+                        }
                         await self.pixoo_device.send_command(image_cmd)
                     finally:
                         profiler.add("pixoo_send", perf_counter() - t0_send)
@@ -2236,4 +2262,3 @@ class PixooHub:
             return bool((title and str(title).strip()) or is_tv)
         return False
         
-    

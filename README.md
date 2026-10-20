@@ -76,7 +76,29 @@ The `pixoo-media-card` is fully integrated with Home Assistant's dashboard edito
 
 ```yaml
 type: custom:pixoo-media-card
-entity_sensor: sensor.pixoo64_status
+entity_sensor: sensor.pixoo64_media_display_pixoo64_status
+area_padding: default
+show_media: true
+show_modes: true
+show_advanced: true
+show_next_track: true
+show_stats: true
+show_display: true
+show_track_info: true
+show_background: true
+show_pixoo_controls: true
+layout_order:
+  - next_track
+  - track_info
+  - display
+  - media_controls
+  - modes
+  - pixoo_controls
+  - advanced
+  - stats
+grid_options:
+  columns: 24
+  rows: auto
 ```
 
 ---

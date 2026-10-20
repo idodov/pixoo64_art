@@ -1645,8 +1645,9 @@ class PixooHub:
                 mode_changed = (current_mode != getattr(self, '_last_rendered_mode', None))
                 filter_changed = (current_filter != getattr(self, '_last_rendered_filter', None))
                 crop_changed = (current_crop != getattr(self, '_last_rendered_crop', None))
+                song_changed = (current_song_key != getattr(self, '_active_song_key', None))
 
-                if not (mode_changed or filter_changed or crop_changed):
+                if not (mode_changed or filter_changed or crop_changed or song_changed):
                     if current_pic_url and current_pic_url == getattr(self, '_last_rendered_pic_url', None) and "token=" not in current_pic_url:
                         can_skip = True
                     elif current_album and current_album == getattr(self, '_last_rendered_album', None) and not getattr(self.media_data, 'radio_logo', False):

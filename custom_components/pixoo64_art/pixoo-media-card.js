@@ -247,6 +247,8 @@ class PixooMediaCard extends HTMLElement {
     this._textBgLocalState = false;
     this._progressBarLocalState = true;
     this._userSelectedChannel = null;
+    this._inChannelMode = false;
+    this._lastTrackKey = '';
     this._localPowerState = null;
     this._lastTrackTitle = '';
     this._pendingTargetMode = null;
@@ -405,10 +407,6 @@ class PixooMediaCard extends HTMLElement {
 
     return null;
   }
-
-  // =========================================================================
-  // WCAG 2.1 CONTRAST & WLED COLOR ENGINE (Guarantees >= 4.5:1 everywhere)
-  // =========================================================================
 
   _getLuminance(rgb) {
     const [r, g, b] = rgb.map((v) => {
@@ -999,8 +997,12 @@ class PixooMediaCard extends HTMLElement {
     root.getElementById('device-channels-container')?.querySelectorAll('button').forEach((b) => {
       b.addEventListener('click', (e) => {
         const ch = parseInt(e.currentTarget.getAttribute('data-channel'), 10);
+        this._inChannelMode = true;
         this._userSelectedChannel = ch;
         root.getElementById('device-channels-container').querySelectorAll('button').forEach((x) => x.classList.toggle('active', parseInt(x.getAttribute('data-channel'), 10) === ch));
+        root.getElementById('modes-buttons-container')?.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
+        const syncWrap = root.getElementById('lyrics-sync-wrapper');
+        if (syncWrap) syncWrap.style.display = 'none';
         if (this._hass && this._config.entity_sensor) {
           this._hass.callService('pixoo64_art', 'send_command', { entity_id: this._config.entity_sensor, command: 'Channel/SetIndex', payload: { SelectIndex: ch } });
         }
@@ -1292,6 +1294,7 @@ class PixooMediaCard extends HTMLElement {
       tpEnt ? this._hass.states[tpEnt]?.state : '',
       syEnt ? this._hass.states[syEnt]?.state : '',
       this._lastLayoutOrderSig,
+      this._inChannelMode ? `ch_${this._userSelectedChannel}` : 'mode',
       pad,
       bg ? '1' : '0'
     ].join('|');
@@ -1312,12 +1315,18 @@ class PixooMediaCard extends HTMLElement {
     if (curMode !== 'Vinyl' && !this._savedNonVinylCrop) this._savedNonVinylCrop = curCrop;
 
     const trackTtl = sA.media_title || mA.media_title || '';
-    if (this._lastTrackTitle && trackTtl && trackTtl !== this._lastTrackTitle) {
+    const trackArt = sA.artist || mA.media_artist || '';
+    const trackKey = `${trackTtl}|${trackArt}`;
+    if (this._lastTrackKey && trackKey && trackKey !== this._lastTrackKey) {
       this._persistentTheme = null;
+      if (this._inChannelMode || this._userSelectedChannel !== null) {
+        this._inChannelMode = false;
+        this._userSelectedChannel = null;
+      }
     }
     this._lastTrackTitle = trackTtl;
+    this._lastTrackKey = trackKey;
 
-    // Extract WLED palette & background_color_rgb for theme
     const wledArr = Array.isArray(sA.wled_colors) && sA.wled_colors.length >= 3 ? sA.wled_colors : null;
     const c1 = (wledArr ? wledArr[0] : sA.color1) || '#00ffcc';
     const c2 = (wledArr ? wledArr[1] : sA.color2) || '#38bdf8';
@@ -1396,9 +1405,7 @@ class PixooMediaCard extends HTMLElement {
         const bv = parseInt(sA.brightness, 10);
         if (!isNaN(bv) && this.shadowRoot.activeElement !== bs) bs.value = bv;
       }
-      const sc = this._parseChannelIndex(sA.pixoo64_channel);
-      if (sc !== null) this._userSelectedChannel = sc;
-      const actCh = sc !== null ? sc : this._userSelectedChannel;
+      const actCh = this._inChannelMode ? this._userSelectedChannel : null;
       this.shadowRoot.getElementById('device-channels-container')?.querySelectorAll('button').forEach((b) => b.classList.toggle('active', actCh !== null && parseInt(b.getAttribute('data-channel'), 10) === actCh));
     }
 
@@ -1446,7 +1453,6 @@ class PixooMediaCard extends HTMLElement {
       }
     }
 
-    // Next Track Box: Appears ~10s before song ends when Prefetch populates next track info
     const nW = this.shadowRoot.getElementById('next-track-wrapper');
     const nT = this.shadowRoot.getElementById('next-track-title');
     if (this._config.show_next_track !== false && isPlay && sA.prefetch_next_artist && sA.prefetch_next_title) {
@@ -1465,16 +1471,32 @@ class PixooMediaCard extends HTMLElement {
       if (live && this._lastLiveImage !== live && img) {
         if (!isAiGenerating || sA.image_source === 'AI') {
           this._lastLiveImage = live;
-          img.src = live;
-        }
-      }
+          
+          const freshSrc = (live.includes('/local/') && !live.includes('&cb=')) 
+            ? `${live}&cb=${Date.now()}` 
+            : live;
+            
+          img.src = freshSrc;
 
-      if (this._pendingTargetMode && !isAiGenerating) {
-        if (!this._pendingTargetMode.startsWith('Vinyl')) {
-          const clean = this._pendingTargetMode.replace(/ \(.*\)/, '');
-          if ((confMode === clean || sA.active_mode === clean) && live === this._previousLiveImage) {
-            this._releaseRenderingLock();
-          }
+          const currentWledColors = (Array.isArray(sA.wled_colors) && sA.wled_colors.length >= 3)
+            ? sA.wled_colors
+            : [sA.color1 || '#8c553b', sA.color2 || '#00ffcc', sA.color3 || '#38bdf8'];
+
+          img.onerror = () => {
+            const externalHttpsUrl = Array.isArray(sA.image_url) ? sA.image_url[0] : sA.image_url;
+
+            if (externalHttpsUrl && externalHttpsUrl.startsWith('https://') && img.src !== externalHttpsUrl) {
+              img.src = externalHttpsUrl;
+
+              img.onerror = () => {
+                img.onerror = null;
+                img.src = generateFallbackSvg(sA.media_title || mA.media_title, sA.artist || mA.media_artist, currentWledColors);
+              };
+            } else {
+              img.onerror = null;
+              img.src = generateFallbackSvg(sA.media_title || mA.media_title, sA.artist || mA.media_artist, currentWledColors);
+            }
+          };
         }
       }
 
@@ -1509,7 +1531,7 @@ class PixooMediaCard extends HTMLElement {
       const statsContent = this.shadowRoot.getElementById('stats-content');
       if (this._config.show_stats === true && sp) {
         const itms = [];
-        itms.push({ l: 'Active Mode', v: sA.active_mode || curMode || 'Standard' });
+        itms.push({ l: 'Active Mode', v: this._inChannelMode ? `Channel ${this._userSelectedChannel ?? ''}` : (sA.active_mode || curMode || 'Standard') });
         if (sA.image_source && sA.image_source !== 'Unknown') itms.push({ l: 'Source', v: sA.image_source });
         if (sA.process_duration && !['N/A', '0.00s', '0.0s'].includes(sA.process_duration)) itms.push({ l: 'Process Time', v: sA.process_duration });
         if (sA.profile_total) itms.push({ l: 'Pipeline', v: `${sA.profile_total}s` });
@@ -1537,7 +1559,7 @@ class PixooMediaCard extends HTMLElement {
     const mdWrap = this.shadowRoot.getElementById('modes-controls-wrapper');
     const mdCont = this.shadowRoot.getElementById('modes-buttons-container');
     const syncWrap = this.shadowRoot.getElementById('lyrics-sync-wrapper');
-    if (syncWrap) syncWrap.style.display = isLyrics ? 'flex' : 'none';
+    if (syncWrap) syncWrap.style.display = (!this._inChannelMode && isLyrics) ? 'flex' : 'none';
 
     const opEl = this.shadowRoot.getElementById('overlay-pos-select');
     const oaEl = this.shadowRoot.getElementById('overlay-align-select');
@@ -1588,8 +1610,12 @@ class PixooMediaCard extends HTMLElement {
 
         mdCont.querySelectorAll('button').forEach((b) => {
           b.addEventListener('click', (e) => {
-            if (this._pendingTargetMode || e.currentTarget.classList.contains('active') || e.currentTarget.disabled) return;
+            const isCurrentlyActive = e.currentTarget.classList.contains('active');
+            if (this._pendingTargetMode || (isCurrentlyActive && !this._inChannelMode) || e.currentTarget.disabled) return;
             const tgt = e.currentTarget.getAttribute('data-mode');
+            this._inChannelMode = false;
+            this._userSelectedChannel = null;
+            this.shadowRoot.getElementById('device-channels-container')?.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
             this._startRenderingLock(tgt);
             const lMe = this._findDeviceEntity(['select'], ['pixoo64_media_display_mode', 'display_mode']);
             const lCe = this._findDeviceEntity(['select'], ['pixoo64_media_crop_mode', 'crop_mode']);
@@ -1599,10 +1625,13 @@ class PixooMediaCard extends HTMLElement {
               if (curLMe !== 'Vinyl') this._savedNonVinylCrop = curLCe;
               const tc = tgt === 'Vinyl (Zoom)' ? 'Crop' : tgt === 'Vinyl (Extra Zoom)' ? 'Extra Crop' : 'No Crop';
               if (lCe) this._hass.callService('select', 'select_option', { entity_id: lCe, option: tc });
-              if (lMe && curLMe !== 'Vinyl') this._hass.callService('select', 'select_option', { entity_id: lMe, option: 'Vinyl' });
+              if (lMe) this._hass.callService('select', 'select_option', { entity_id: lMe, option: 'Vinyl' });
             } else {
               if (curLMe === 'Vinyl' && lCe) this._hass.callService('select', 'select_option', { entity_id: lCe, option: this._savedNonVinylCrop || 'No Crop' });
               if (lMe) this._hass.callService('select', 'select_option', { entity_id: lMe, option: tgt });
+            }
+            if (this._hass && this._config.entity_sensor) {
+              this._hass.callService('homeassistant', 'update_entity', { entity_id: this._config.entity_sensor });
             }
             mdCont.querySelectorAll('button').forEach((btn) => btn.classList.toggle('active', btn.getAttribute('data-mode') === tgt));
           });
@@ -1611,20 +1640,24 @@ class PixooMediaCard extends HTMLElement {
 
       if (mdCont) {
         mdCont.querySelectorAll('button').forEach((b) => {
-          const o = b.getAttribute('data-mode');
-          let act = false;
-          if (this._pendingTargetMode) {
-            act = (o === this._pendingTargetMode);
-          } else if (o.startsWith('Vinyl')) {
-            if (confMode === 'Vinyl') act = (o === 'Vinyl (Normal)' && curCrop === 'No Crop') || (o === 'Vinyl (Zoom)' && curCrop === 'Crop') || (o === 'Vinyl (Extra Zoom)' && curCrop === 'Extra Crop');
-          } else if (o === 'Lyrics') {
-            act = (confMode === 'Lyrics' && lyrAvail);
-          } else if (o === 'Standard') {
-            act = (confMode === 'Standard') || (confMode === 'Lyrics' && !lyrAvail);
+          if (this._inChannelMode) {
+            b.classList.remove('active');
           } else {
-            act = confMode === o;
+            const o = b.getAttribute('data-mode');
+            let act = false;
+            if (this._pendingTargetMode) {
+              act = (o === this._pendingTargetMode);
+            } else if (o.startsWith('Vinyl')) {
+              if (confMode === 'Vinyl') act = (o === 'Vinyl (Normal)' && curCrop === 'No Crop') || (o === 'Vinyl (Zoom)' && curCrop === 'Crop') || (o === 'Vinyl (Extra Zoom)' && curCrop === 'Extra Crop');
+            } else if (o === 'Lyrics') {
+              act = (confMode === 'Lyrics' && lyrAvail);
+            } else if (o === 'Standard') {
+              act = (confMode === 'Standard') || (confMode === 'Lyrics' && !lyrAvail);
+            } else {
+              act = confMode === o;
+            }
+            b.classList.toggle('active', act);
           }
-          b.classList.toggle('active', act);
         });
       }
     } else if (mdWrap && mdWrap.style.display !== 'none') {
@@ -1705,6 +1738,79 @@ class PixooMediaCard extends HTMLElement {
   getCardSize() {
     return 4;
   }
+}
+
+function generateFallbackSvg(title, artist, colors = []) {
+  const c1 = colors[0] || '#8c553b';
+  const c2 = colors[1] || '#00ffcc';
+  const c3 = colors[2] || '#38bdf8';
+
+  const escapeXml = (str) =>
+    (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  const wrapText = (text, maxChars) => {
+    if (!text) return [];
+    const words = String(text).trim().split(/\s+/);
+    const lines = [];
+    let currentLine = '';
+
+    for (const w of words) {
+      if ((currentLine + ' ' + w).trim().length <= maxChars) {
+        currentLine = (currentLine + ' ' + w).trim();
+      } else {
+        if (currentLine) lines.push(currentLine);
+        currentLine = w.length > maxChars ? w.slice(0, maxChars - 1) + '…' : w;
+      }
+    }
+    if (currentLine) lines.push(currentLine);
+    return lines;
+  };
+
+  const titleLines = wrapText(title || 'Idle', 10).slice(0, 3);
+  const artistLines = wrapText(artist || 'No Media', 12).slice(0, 2);
+
+  const totalLines = titleLines.length + artistLines.length;
+  const startY = Math.max(14, Math.round((64 - (totalLines * 9)) / 2) + 6);
+
+  let currentY = startY;
+  const renderedTitle = titleLines.map((line) => {
+    const y = currentY;
+    currentY += 10;
+    return `
+      <text x="32" y="${y + 1}" font-family="monospace" font-size="7.5" font-weight="900" fill="#000000" text-anchor="middle">${escapeXml(line)}</text>
+      <text x="32" y="${y}" font-family="monospace" font-size="7.5" font-weight="900" fill="${c2}" text-anchor="middle">${escapeXml(line)}</text>
+    `;
+  }).join('');
+
+  currentY += 2; 
+
+  const renderedArtist = artistLines.map((line) => {
+    const y = currentY;
+    currentY += 8;
+    return `
+      <text x="32" y="${y + 1}" font-family="monospace" font-size="5.5" font-weight="700" fill="#000000" text-anchor="middle">${escapeXml(line)}</text>
+      <text x="32" y="${y}" font-family="monospace" font-size="5.5" font-weight="700" fill="${c3}" text-anchor="middle">${escapeXml(line)}</text>
+    `;
+  }).join('');
+
+  const svgString = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+    <defs>
+      <linearGradient id="bgGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="${c1}" stop-opacity="0.55"/>
+        <stop offset="50%" stop-color="#0a0d14" stop-opacity="0.95"/>
+        <stop offset="100%" stop-color="${c3}" stop-opacity="0.45"/>
+      </linearGradient>
+    </defs>
+    <rect width="64" height="64" fill="#070a12"/>
+    <rect width="64" height="64" fill="url(#bgGlow)"/>
+
+    <rect x="1" y="1" width="62" height="62" fill="none" stroke="${c2}" stroke-width="1" stroke-opacity="0.4"/>
+
+    ${renderedTitle}
+    ${renderedArtist}
+  </svg>`;
+
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svgString);
 }
 
 if (!customElements.get('pixoo-media-card')) {

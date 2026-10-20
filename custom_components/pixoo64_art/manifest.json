@@ -1,7 +1,7 @@
 {
   "domain": "pixoo64_art",
   "name": "Pixoo64 Media Album Art",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "documentation": "https://github.com/idodov/pixoo64-media-album-art",
   "dependencies": ["http", "frontend"],
   "codeowners": ["@idodov"],

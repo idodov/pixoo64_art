@@ -162,7 +162,7 @@ Switch visual rendering modes on the fly via the Lovelace card, select entities,
   </tr>
 </table>
 
-<img width="1247" height="578" alt="image" src="https://github.com/user-attachments/assets/5f2113d4-9d1b-483f-9eba-273a0adfbf26" />
+<img width="1242" height="643" alt="image" src="https://github.com/user-attachments/assets/7c5a1368-2021-4bd0-a072-7b2c2c5c2b01" />
 
 > [!TIP]
 > **Automatic Frontend Registration:** The companion Lovelace card (`pixoo-media-card.js`) is automatically served and injected into Home Assistant upon integration startup (`/pixoo64_card/pixoo-media-card.js`). You do not need to manually add resources in your Lovelace dashboards settings!

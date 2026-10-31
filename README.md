@@ -44,6 +44,25 @@ Version 2.1.0 expands the notification and pixel-art system with community icon 
 | **🎛️ Lovelace Card AWTRIX Selector** | Added **Custom AWTRIX Icon** dropdown option and quick **🌐 Browse AWTRIX ↗** button. | Preview and send any AWTRIX Hub icon directly from the Home Assistant dashboard in seconds. |
 
 ---
+> [!CAUTION]
+> ### 🛑 IMPORTANT NOTICE: Upgrading from v1.4.3 / v2.0.0 to v2.1.0
+> 
+> Due to a folder structure bug in `v2.0.0` (which is now fixed in `v2.1.0`), HACS may have cached an invalid directory path (`custom_components/None/manifest.json`) or created orphaned folders.
+> 
+> ---
+> 
+> #### 1. Check and delete orphaned folders (CRITICAL)
+> Using File Editor, Studio Code Server, or SSH:
+> * Check `/config/custom_components/` for a folder named **`None`** (`/config/custom_components/None/`). **Delete it if present.**
+> * Check your main `/config/` directory for any stray **`pixoo64_art`** folder sitting directly under `/config/` (outside of `custom_components`). **Delete it if present.**
+> 
+> ---
+> 
+> #### 2. Flush HACS cache & update
+> 1. In Home Assistant, go to **HACS** → **Pixoo64 Media Album Art**.
+> 2. Click the **three dots (⋮)** in the top-right corner.
+> 3. Click **"Update information"** (or restart Home Assistant to clear the memory cache).
+> 4. Click **Update** to install **`v2.1.0`** (or select **"Redownload"** → choose `v2.1.0`).
 
 ## 🏆 Hit Parade Charts & Playback Analytics
 

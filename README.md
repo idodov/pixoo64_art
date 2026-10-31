@@ -1,15 +1,15 @@
-<h1 align="center">🎨 Pixoo64 Media Album Art for Home Assistant (v2.0)</h1>
+<h1 align="center">🎨 Pixoo64 Media Album Art for Home Assistant (v2.1)</h1>
 
 <p align="center">
   <a href="https://www.home-assistant.io/"><img src="https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blueviolet.svg?style=for-the-badge&logo=home-assistant" alt="Home Assistant 2024.1+"></a>
   <a href="https://hacs.xyz/"><img src="https://img.shields.io/badge/HACS-Custom%20Repo-orange.svg?style=for-the-badge&logo=hacs" alt="HACS Custom Repository"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT"></a>
-  <a href="https://github.com/idodov/pixoo64_art/releases"><img src="https://img.shields.io/badge/Version-2.0.0-emerald.svg?style=for-the-badge" alt="Version 2.0.0"></a>
+  <a href="https://github.com/idodov/pixoo64_art/releases"><img src="https://img.shields.io/badge/Version-2.1.0-emerald.svg?style=for-the-badge" alt="Version 2.1.0"></a>
   <a href="https://github.com/idodov/pixoo64_art/issues"><img src="https://img.shields.io/github/issues/idodov/pixoo64_art?style=for-the-badge&color=red" alt="GitHub Issues"></a>
 </p>
 
 <p align="center">
-  <strong>Transform your Divoom Pixoo64 into an ultra-fast retro media companion: adaptive album art, real-time synced lyrics, animated Hit Parade charts, live playback analytics, ambient light sync, and smart-home visual notifications.</strong>
+  <strong>Transform your Divoom Pixoo64 into an ultra-fast retro media companion: adaptive album art, real-time synced lyrics, animated Hit Parade charts, live playback analytics, ambient light sync, and snappy pixel-art notifications powered by AWTRIX Hub & LaMetric.</strong>
 </p>
 
 ---
@@ -22,32 +22,32 @@ Unlike traditional media display scripts that rely on single-platform APIs or cl
 
 * **100% Music Service Agnostic** — Works out-of-the-box with Spotify, Apple Music, TIDAL, YouTube Music, Sonos, Plex, Jellyfin, Kodi, VLC, local file libraries, DLNA, and internet radio streams.
 * **🏆 Hit Parade Charts & Local Analytics** — Features a built-in SQLite WAL playback analytics database that scrobbles your plays locally, tracks full album and EP completion sessions, and generates animated countdown charts on your Pixoo matrix.
-* **Sub-Second Display Latency** — Pulls artwork directly from Home Assistant's in-memory media player component in less than 1 ms, delivering near-instant transitions when tracks change.
+* **⚡ Sub-Second Display Latency** — Pulls artwork directly from Home Assistant's in-memory media player component in less than 1 ms, delivering near-instant transitions when tracks change.
 * **🎤 Asynchronous Background Lyrics** — Synced lyrics lookups (via LRCLIB) run completely decoupled in the background. Your cover art and titles appear on the Pixoo instantly without waiting for remote network responses.
+* **🔔 High-Speed Smart Notifications with AWTRIX & LaMetric Icons** — Seamlessly display animated pixel icons from **[AWTRIX Hub](https://awtrix.de/icons)** and **[LaMetric](https://developer.lametric.com/icons)** at double-speed refresh rates with full burned-text typography and hardware buzzer beeps.
 * **🛡️ Smart Channel Memory & Black-Screen Immunity** — Strictly guards against getting trapped on Channel 4 (the empty HTTP GIF screen). Your preferred channel (Clock, Cloud, Visualizer, or Custom) is remembered and restored automatically.
 * **Zero Paid Subscriptions Required** — Core playback works with native Home Assistant metadata and free community databases. Optional free developer keys (Spotify, TIDAL, Discogs, Last.fm) can be added for enhanced resolution and animated carousel modes.
 * **100% Local LAN Communication** — Sends pixel payloads directly over your local Wi-Fi via HTTP POST requests, guaranteeing privacy, zero external cloud dependencies, and instant response times.
 
 ---
 
-## 🚀 What's New in Version 2.0
+## 🚀 What's New in Version 2.1.0
 
-Version 2.0 introduces an extensive architectural overhaul designed for **instant rendering**, **local playback intelligence**, and **dashboard customizability**:
+Version 2.1.0 expands the notification and pixel-art system with community icon libraries, high-frame-rate animations, and persistent SQLite icon caching:
 
-| Architectural Pillar | Technical Enhancement | User Experience Impact |
+| Feature | Enhancement | User Benefit |
 | :--- | :--- | :--- |
-| **In-Memory Image Extraction** | Resolves media player proxy entities directly in Python memory via `async_get_media_image()`. | Eliminates local HTTP loopbacks and proxy timeouts; artwork appears on the Pixoo64 in under 200 ms. |
-| **Decoupled Lyrics Engine** | Lyrics availability verification runs as a non-blocking background task. | Track art and titles display immediately on the matrix; screen transitions smoothly to lyrics only once verified. |
-| **🏆 Hit Parade Charts & Analytics** | Embedded SQLite database ledger tracking play counts, timestamps, and album completions. | Trigger animated Top 10 countdowns on your Pixoo matrix across Daily, Weekly, Monthly, and All-Time buckets. |
-| **Master Persistent Cache** | Saves 300×300 master JPEG images, pre-computed color palettes, and artist sliders locally. | Repeated songs load with 0 ms network overhead and survive Home Assistant reboots. |
-| **Channel Memory & Fail-Safe** | Filters out internal channel 4 and monitors user channels (0–3). | The screen never turns blank or gets stuck on an empty channel when music pauses, stops, or times out. |
-| **Fluid Multi-Column Lovelace Card** | `pixoo-media-card` with 1-col, 2-col, and 3-col adaptive responsive layouts and drag-and-drop handles. | Perfectly proportioned dashboard display without distorted cover art on widescreen, tablet, or mobile views. |
+| **🌐 AWTRIX Hub Integration** | Direct support for [awtrix.de/icons](https://awtrix.de/icons) via icon slugs (e.g., `house-climate`, `btccoin`, `kick`) or full URLs. | Access thousands of community-crafted 8×8 and 16×16 pixel icons and animations directly from automations or the dashboard card. |
+| **⚡ 2× Animated Frame Speed** | Precise extraction of native GIF Graphic Control Blocks & WebP ANMF headers with doubled playback speed (`raw_speed * 0.5`). | Eliminates sluggish slideshow playback on the Pixoo LED hardware; animations look lively, fluid, and responsive. |
+| **🏎️ Custom Animation Speed Control** | New optional `anim_speed` parameter (in milliseconds per frame). | Fine-tune animation speed on demand (e.g. `anim_speed: 50` for fast 20 fps animations). |
+| **💾 Persistent SQLite & Disk Icon Cache** | 3-tier hybrid caching (RAM $\to$ SQLite WAL database $\to$ `.storage/pixoo64/icons/`). | Icons download once and load in **0.0 ms** thereafter with zero network overhead. Easily pruned or cleared via `pixoo64_art.clear_cache` (`scope: icons`). |
+| **🎛️ Lovelace Card AWTRIX Selector** | Added **Custom AWTRIX Icon** dropdown option and quick **🌐 Browse AWTRIX ↗** button. | Preview and send any AWTRIX Hub icon directly from the Home Assistant dashboard in seconds. |
 
 ---
 
 ## 🏆 Hit Parade Charts & Playback Analytics
 
-Version 2.0 includes a comprehensive **local music analytics and leaderboard system**. Home Assistant automatically tracks every track, artist, and full album playthrough into a local SQLite database (`.storage/pixoo64/pixoo64_analytics.db`), operating with zero external telemetry or cloud tracking.
+Version 2.0+ includes a comprehensive **local music analytics and leaderboard system**. Home Assistant automatically tracks every track, artist, and full album playthrough into a local SQLite database (`.storage/pixoo64/pixoo64_analytics.db`), operating with zero external telemetry or cloud tracking.
 
 ```
        [Track Playback Event]
@@ -59,7 +59,8 @@ Version 2.0 includes a comprehensive **local music analytics and leaderboard sys
        Local SQLite Database (WAL Mode)
         ├── tracked_songs (Plays, Fingerprint, Canonical Title)
         ├── play_history (Timestamps, Granular Ledger)
-        └── album_completions (Full Album & EP Playthroughs)
+        ├── album_completions (Full Album & EP Playthroughs)
+        └── pixel_icons (AWTRIX & LaMetric Cached Metadata)
                  │
                  ▼
     ┌─────────────────────────────┴─────────────────────────────┐
@@ -73,7 +74,7 @@ Hit Parade Animated Display                       Dedicated Sensors & Services
 
 ### 📊 Leaderboard Categories & Timeframes
 
-You can trigger a **Hit Parade Countdown** directly on your Pixoo64 matrix using the dashboard card, the `pixoo64_art.create_chart` service, or Home Assistant automations:
+You can trigger a **Hit Parade Countdown** directly on your Pixoo64 matrix using the dashboard card, the `pixoo64_art.create_chart` action, or Home Assistant automations:
 
 * **Chart Types:**
   * **Top Tracks** — Your most-played individual songs.
@@ -148,8 +149,8 @@ Switch visual rendering modes on the fly via the Lovelace card, select entities,
       <ul>
         <li><b>Live Visual Mirror & Seeking</b> — View the exact 64×64 pixel canvas, applied image filters, and active animation frames directly on your dashboard. Click directly on the display preview to seek through playback.</li>
         <li><b>Fluid Responsive Multi-Column Engine</b> — Automatically adapts cleanly across 1-column, 2-column, and 3-column wide screens without aspect-ratio stretching or clipping.</li>
+        <li><b>🔔 Quick Notifications Suite</b> — Send animated AWTRIX, LaMetric, or built-in pixel alerts with a 1-click <b>Browse AWTRIX</b> button directly from the card.</li>
         <li><b>🏆 Hit Parade Charts Panel</b> — Select chart category, timeframe, and period, then click <b>Show Chart</b> to trigger animated countdowns on your Pixoo matrix directly from the dashboard.</li>
-        <li><b>🔔 Quick Notifications Suite</b> — Test buzzer patterns and send animated pixel-art alerts directly to the display from an interactive UI panel.</li>
         <li><b>Modular Section Reordering</b> — Tailor the card to your workflow. Using the visual UI editor or YAML, you can freely reorder, show, or hide any section (Display, Metadata, Next Track, Media Controls, Display Modes, Hardware Controls, and Diagnostics).</li>
         <li><b>Dynamic Ambient Theme Engine</b> — Automatically samples the dominant color palette from the current album art or synced WLED strips to paint ambient glows, borders, and buttons.</li>
         <li><b>Real-Time Lyrics Status</b> — Live visual indicator badge illuminates when lyrics are available, allowing instant one-click mode switching.</li>
@@ -242,31 +243,60 @@ Downscaling modern album art can soften micro-contrast. The built-in **Image Fil
 
 The `pixoo64_art.send_notification` action allows Home Assistant automations to display animated pixel-art alerts and sound audible buzzer signals on your Pixoo64.
 
-### ✨ What Makes Version 2.0 Notifications Special:
-* **🔥 Burned-Text Typography Engine** — Text is rendered directly onto the 64×64 pixel buffer via Pillow and sent as atomic GIF frames. Eliminates Pixoo hardware text artifacts, TextID collisions, and text flickering.
-* **👑 Dedicated Bold Title Header** — The `title` is rendered in **True Bold** white at the top, cleanly separated from the message underneath (no awkward colons or concatenated strings).
+### ✨ What Makes Version 2.1 Notifications Special:
+* **🌐 AWTRIX Hub & LaMetric Ecosystem** — Pass any icon slug from **[AWTRIX Hub](https://awtrix.de/icons)** (e.g., `house-climate`, `btccoin`, `kick`), numeric/animated ID from **[LaMetric](https://developer.lametric.com/icons)** (e.g., `a2710`, `28340`), or any direct image URL.
+* **⚡ 2× Doubled Frame Speed** — Native frame timings are extracted from GIF Graphic Control Blocks and WebP ANMF chunks, then doubled automatically for lively, fluid animations on the LED matrix.
+* **⏱️ Custom Speed Override** — Pass `anim_speed: 60` (in milliseconds) to customize frame duration directly.
+* **💾 Hybrid Persistent Caching** — Icons are saved to local SQLite and disk (`.storage/pixoo64/icons/`). Subsequent triggers render instantly in **0 ms** with zero network delay.
+* **🔥 Burned-Text Typography Engine** — Text is rendered onto the 64×64 pixel buffer via Pillow and sent as atomic frames, eliminating hardware font collisions or flickering.
+* **👑 Dedicated Bold Title Header** — Renders the `title` in **True Bold** white at the top, cleanly separated from the message underneath (no awkward colons or concatenated strings).
 * **📐 Adaptive Icon Sizing (Zero Cutout Guarantee)** — The visual engine dynamically assesses text volume:
   * *Short Messages (1 line)*: Icon scales 2× to **16×16** centered at the top.
   * *Medium Messages (2–3 lines)*: Icon scales to **12×12**.
   * *Dense Messages (4+ lines)*: Icon stays at native **8×8** (compact) in the top header, stepping font size from 8 down to 7 or 6 so text never clips.
 * **🌐 Multilingual & Arabic / Hebrew BiDi Support** — Bundles 100% freeware open-source fonts (**DejaVu Sans**, **DejaVu Sans Bold**, and **Noto Sans Arabic**). Automatic bidirectional text ordering (`get_bidi()`) and Arabic cursive letter shaping (`arabic_reshaper`).
-* **✨ Custom Icons & LaMetric Compatibility** — Supports LaMetric pixel icons and animated GIFs! Pass an icon ID like `a2710` (animated), `28340`, or any image URL. The icon is fetched on-the-fly, converted, and cached locally.
-* **🎛️ Lovelace Dashboard Card Support** — In the `pixoo-media-card`, users can select **Custom** from the notification dropdown and enter any pixel icon ID with live preview.
+* **🎛️ Lovelace Dashboard Card Support** — In `pixoo-media-card`, users can select **Custom AWTRIX Icon** or **Custom LaMetric Icon** and enter any slug or ID with a 1-click **Browse** button.
 
+### 💡 Notification Examples
+
+#### Example 1: Smart Notification with AWTRIX Icon & Buzzer
 ```yaml
-# Example: Smart notification with animated LaMetric icon & bold title
 action: pixoo64_art.send_notification
 data:
-  title: "Security"
-  message: "Front door opened!"
+  title: "Climate"
+  message: "Living room AC turned on"
   type: "custom"
-  icon: "a2710"       # LaMetric animated icon ID (or numeric ID '28340')
-  duration: 6
-  color: "#00FFCC"
+  icon: "house-climate"      # AWTRIX Hub icon slug (or "awtrix:house-climate")
+  duration: 5
+  color: "#00DCFF"
   play_buzzer: true
-  buzzer_active: 300
-  buzzer_off: 200
-  buzzer_total: 1800
+```
+
+#### Example 2: Crypto Alert with LaMetric Animated Icon & Custom Speed
+```yaml
+action: pixoo64_art.send_notification
+data:
+  title: "Crypto"
+  message: "Bitcoin broke $100k!"
+  icon: "a2710"              # LaMetric animated icon ID (or "btccoin")
+  anim_speed: 60             # Fast 60ms frame delay override
+  duration: 8
+  color: "#FFA500"
+```
+
+#### Example 3: Standard Home Assistant `notify` Platform
+```yaml
+action: notify.send_message
+target:
+  entity_id: notify.pixoo64_media_display_notification
+data:
+  title: "Front Door"
+  message: "Motion detected outside"
+  data:
+    awtrix_icon: "front-door-icon"
+    color: "#32CD32"
+    duration: 6
+    play_buzzer: true
 ```
 
 ### Action Parameters
@@ -275,8 +305,9 @@ data:
 | :--- | :--- | :--- | :--- | :--- |
 | `message` | string | **Yes** | — | Notification message. English, Hebrew, and Arabic text are automatically aligned with full BiDi support. |
 | `title` | string | No | — | Bold header title displayed prominently at the top of the canvas. |
-| `type` | string | No | `text` | Icon animation profile (see catalog below) or `custom` for external/LaMetric icons. |
-| `icon` | string | No | — | Custom pixel icon ID (e.g., `a2710` for animated GIF, `28340` for static PNG), image URL, or base64 data URI. Browse icons at [LaMetric Icon Gallery](https://developer.lametric.com/icons). |
+| `icon` | string | No | — | Custom pixel icon: AWTRIX icon slug (e.g. `house-climate`, `btccoin`), LaMetric ID (`a2710`, `28340`), or direct image URL. Browse icons at [AWTRIX Hub](https://awtrix.de/icons) or [LaMetric Gallery](https://developer.lametric.com/icons). |
+| `anim_speed` | int | No | Native / 2× | Optional frame delay in ms for animated icons (e.g., `50`–`100`). Defaults to native speed doubled. |
+| `type` | string | No | `text` | Icon animation profile (see catalog below) or `custom` for external/AWTRIX/LaMetric icons. |
 | `burned_text` | boolean | No | `true` | When true (recommended), renders text directly onto the pixel buffer with freeware typography and bold titles. When false, uses Pixoo hardware font 190. |
 | `duration` | int | No | `5` | Display duration in seconds before returning to media art or idle channel. |
 | `color` | string | No | Theme default | Custom HEX color code override (e.g., `#FF0055`). |
@@ -289,7 +320,7 @@ data:
 
 | Category | Available Animation Profiles |
 | :--- | :--- |
-| **Custom / Pixel Art** | `custom` (Pass any [LaMetric Icon](https://developer.lametric.com/icons) ID like `a2710`, `28340`, or image URL in `icon` parameter) |
+| **Community Icons** | `custom` (Pass any [AWTRIX Hub Icon](https://awtrix.de/icons) slug like `house-climate`, `btccoin`, or [LaMetric Icon](https://developer.lametric.com/icons) ID like `a2710`, `28340`, or image URL in `icon`) |
 | **System & Alerts** | `text` (clean text banner), `info`, `success`, `warning`, `error`, `v` (checkmark), `x` (cancel), `alert` (animated ringing bell), `alarm` (emergency siren), `attack` (animated rocket) |
 | **Smart Home Infrastructure** | `door`, `lock`, `garage`, `shutter`, `boiler`, `ac` (snowflake), `fan`, `light`, `vacuum`, `power`, `home`, `motion`, `fire`, `water` |
 | **Domestic Life & Daily Routines** | `washer`, `dryer`, `trash`, `mail`, `coffee`, `package`, `pet` (paw), `plant` (leaf), `car` |
@@ -323,7 +354,7 @@ The integration automatically exposes standard, fully documented Home Assistant 
 | `switch.pixoo64_text_background` | `switch` | Dimmed text backing strip for high-contrast readability. |
 | `switch.pixoo64_artwork_race_mode` | `switch` | Parallel API race mode toggle. |
 | `number.pixoo64_lyrics_sync_offset` | `number` | Fine-tune synchronized lyrics timing from -10.0s to +10.0s. |
-| `button.pixoo64_clear_pixoo_cache` | `button` | Purges persistent master images, artist sliders, and RAM caches on demand. |
+| `button.pixoo64_clear_pixoo_cache` | `button` | Purges persistent master images, artist sliders, pixel icons, and RAM caches on demand. |
 
 ---
 
@@ -335,9 +366,9 @@ The integration automatically exposes standard, fully documented Home Assistant 
 | `pixoo64_art.cancel_chart` | Immediately cancels an active chart countdown and restores artwork or clock. | *(None required)* |
 | `pixoo64_art.get_leaderboard` | Returns response data containing the top played tracks, artists, or albums. | `chart_type`, `timeframe`, `period`, `limit` |
 | `pixoo64_art.get_analytics` | Returns response data with complete database statistics and metrics. | *(None required)* |
-| `pixoo64_art.send_notification` | Displays an animated notification with optional hardware buzzer beeps. | `message`, `title`, `type`, `duration`, `color`, `play_buzzer` |
+| `pixoo64_art.send_notification` | Displays an animated notification with optional hardware buzzer beeps. | `message`, `title`, `icon`, `anim_speed`, `type`, `duration`, `color`, `play_buzzer` |
 | `pixoo64_art.send_command` | Sends a raw or custom command directly to the Pixoo64 HTTP API. | `command`, `payload` |
-| `pixoo64_art.clear_cache` | Purges specific scopes of the persistent SQLite and disk storage. | `scope` (`all`, `masters`, `artists`, `analytics`) |
+| `pixoo64_art.clear_cache` | Purges specific scopes of the persistent SQLite and disk storage. | `scope` (`all`, `masters`, `artists`, `analytics`, `icons`) |
 
 #### 💡 Script Example: Querying Leaderboard Response Data
 
@@ -432,7 +463,7 @@ Everything is configured directly through the Home Assistant UI — no YAML edit
 
 **Not for core playback.** Communication between Home Assistant and your Pixoo64 takes place entirely over your local Wi-Fi network (LAN HTTP POST).
 
-Internet connectivity is only utilized when fetching external assets from online providers (Spotify, TIDAL, Discogs, Last.fm, MusicBrainz, TheAudioDB, LRCLIB lyrics, or Pollinations AI).
+Internet connectivity is only utilized when fetching external assets from online providers (Spotify, TIDAL, Discogs, Last.fm, MusicBrainz, TheAudioDB, LRCLIB lyrics, AWTRIX Hub, LaMetric, or Pollinations AI).
 
 </details>
 
@@ -460,7 +491,26 @@ Assign a **DHCP reservation** for your Pixoo64 within your router's administrati
 
 <br>
 
-**No.** Version 2.0 incorporates a dedicated **Channel Memory & Fail-Safe Engine**. When music starts, the integration saves your active Divoom channel (0=Clock, 1=Cloud, 2=Visualizer, 3=Custom). Channel 4 (the internal HTTP GIF receiver) is strictly filtered out and never saved. When music stops or the pause timer expires, the integration safely restores your original channel or turns off the screen per your configuration.
+**No.** The integration incorporates a dedicated **Channel Memory & Fail-Safe Engine**. When music starts, the integration saves your active Divoom channel (0=Clock, 1=Cloud, 2=Visualizer, 3=Custom). Channel 4 (the internal HTTP GIF receiver) is strictly filtered out and never saved. When music stops or the pause timer expires, the integration safely restores your original channel or turns off the screen per your configuration.
+
+</details>
+
+---
+
+### 🔔 Smart Notifications & Icons
+
+<details>
+<summary><strong>🔔 How do I find and use icons for notifications?</strong></summary>
+
+<br>
+
+You can pass icons from multiple sources into the `icon` parameter:
+
+* **[AWTRIX Hub](https://awtrix.de/icons)**: Copy any icon slug (e.g. `house-climate`, `btccoin`, `kick`, `partly-cloudy-2`) and pass `icon: "house-climate"` (or `icon: "awtrix:house-climate"`).
+* **[LaMetric Icon Gallery](https://developer.lametric.com/icons)**: Copy any icon ID (e.g. `a2710` for animated, `28340` for static) and pass `icon: "a2710"`.
+* **Direct Image URLs**: Any direct link to a `.gif`, `.png`, or `.webp` image.
+* **Animation Speed**: Native frame speeds are extracted and automatically doubled for lively, snappy playback on the LED matrix. You can also override speed manually with `anim_speed: 60`.
+* **Instant Caching**: Icons are cached locally in SQLite and disk (`.storage/pixoo64/icons/`) after their first display. Repeated triggers load in **0 ms**.
 
 </details>
 
@@ -567,7 +617,7 @@ When a song begins, the integration evaluates metadata through this structured s
 
 Synced lyrics are retrieved via LRCLIB based on track title, artist, and duration. 
 
-In Version 2.0, lyrics queries run **asynchronously in the background**. Album art and song titles display immediately on the Pixoo64 without waiting for remote network responses. If lyrics are discovered, the Lovelace card illuminates an active green lyrics indicator, and the screen smoothly transitions into lyrics mode with an automated background dimming filter.
+In Version 2.0+, lyrics queries run **asynchronously in the background**. Album art and song titles display immediately on the Pixoo64 without waiting for remote network responses. If lyrics are discovered, the Lovelace card illuminates an active green lyrics indicator, and the screen smoothly transitions into lyrics mode with an automated background dimming filter.
 
 </details>
 
@@ -635,6 +685,7 @@ Distributed under the **MIT License**. See [`LICENSE`](https://github.com/idodov
 ## 🌟 Acknowledgments
 
 * [Divoom](https://www.divoom.com/) — for the Pixoo64 64×64 LED matrix hardware.
+* [Blueforcer](https://github.com/Blueforcer) & [AWTRIX Hub](https://awtrix.de/) — for the community pixel icon repository and matrix firmware ecosystem.
 * [LaMetric](https://lametric.com/) & [LaMetric Developer](https://developer.lametric.com/icons) — for the extensive library of community pixel art and animations.
 * [LRCLIB](https://lrclib.net/) — for the free, open-source synced lyrics API.
 * [TheAudioDB](https://www.theaudiodb.com/) — for artist portraits and fanart databases.

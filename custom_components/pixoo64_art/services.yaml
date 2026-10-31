@@ -17,10 +17,10 @@ send_notification:
       selector:
         text:
     icon:
-      name: Custom Icon ID / URL
-      description: "Custom pixel icon or LaMetric ID (e.g. 'a2710' for animated GIF, '28340' for PNG, or image URL). Browse icons at https://developer.lametric.com/icons"
+      name: Custom Icon ID / URL / AWTRIX
+      description: "Custom pixel icon: AWTRIX icon slug (e.g. 'house-climate', 'btccoin', 'kick', or 'awtrix:slug'), LaMetric ID (e.g. 'a2710' for animated GIF, '28340' for PNG), or direct image URL. Browse icons at https://awtrix.de/icons or https://developer.lametric.com/icons"
       required: false
-      example: "a2710"
+      example: "house-climate"
       selector:
         text:
     type:
@@ -33,7 +33,7 @@ send_notification:
           options:
             - label: "Text Only"
               value: "text"
-            - label: "Custom Pixel Icon (Icon ID / LaMetric)"
+            - label: "Custom Pixel Icon (AWTRIX / LaMetric / URL)"
               value: "custom"
             - label: "Information (Blue)"
               value: "info"
@@ -129,6 +129,17 @@ send_notification:
           min: 1
           max: 60
           unit_of_measurement: seconds
+    anim_speed:
+      name: Animation Speed (ms per frame)
+      description: "Optional frame delay in milliseconds for animated icons. Lower values play faster (default extracts native speed from GIF/WebP and doubles the animation speed, e.g. 50-150ms)."
+      required: false
+      example: 60
+      selector:
+        number:
+          min: 20
+          max: 1000
+          step: 10
+          unit_of_measurement: ms
     burned_text:
       name: Burned Text Mode
       description: "When true (recommended), renders text directly onto the pixel buffer with freeware typography and bold titles. When false, uses Pixoo hardware font 190 text overlay."
@@ -335,6 +346,8 @@ clear_cache:
               value: "artists"
             - label: "Playback Analytics Only"
               value: "analytics"
+            - label: "Pixel Icons (AWTRIX & LaMetric) Only"
+              value: "icons"
 
 get_analytics:
   name: Get Playback Analytics Summary

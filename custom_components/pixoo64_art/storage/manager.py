@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from io import BytesIO
@@ -29,6 +30,7 @@ class PixooStorageManager:
         self.base_dir = hass.config.path(".storage", "pixoo64")
         self.masters_dir = os.path.join(self.base_dir, "masters")
         self.artists_dir = os.path.join(self.base_dir, "artists")
+        self.icons_dir = os.path.join(self.base_dir, "icons")
         self.db_path = os.path.join(self.base_dir, "pixoo_data.db")
         self._lock = asyncio.Lock()
         self.db = PixooDatabase(self.base_dir, self.db_path)
@@ -43,7 +45,7 @@ class PixooStorageManager:
             try:
                 if not self.db.initialized:
                     await self.hass.async_add_executor_job(
-                        self.db.initialize_sync, self.masters_dir, self.artists_dir
+                        self.db.initialize_sync, self.masters_dir, self.artists_dir, self.icons_dir
                     )
                 return await self.hass.async_add_executor_job(fn, *args)
             except (UnidentifiedImageError, OSError) as err:
@@ -55,7 +57,7 @@ class PixooStorageManager:
 
     async def async_initialize(self) -> None:
         if self.is_cache_enabled:
-            await self._run_locked(self.db.initialize_sync, self.masters_dir, self.artists_dir)
+            await self._run_locked(self.db.initialize_sync, self.masters_dir, self.artists_dir, self.icons_dir)
 
     @staticmethod
     def _deserialize_palette(palette_json: str) -> dict:
@@ -347,6 +349,121 @@ class PixooStorageManager:
     async def async_get_track_stats(self, artist: str, title: str) -> Dict[str, Any]:
         return await self._run_locked(self.analytics.get_track_stats_sync, artist, title, default={"plays": 0, "first_played": None, "last_played": None})
 
+    def _get_icon_sync(self, icon_key: str) -> Optional[Tuple[bytes, int]]:
+        now = int(time.time())
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT file_path, speed_ms FROM pixel_icons WHERE icon_key = ?",
+                (icon_key,),
+            ).fetchone()
+            if not row:
+                return None
+            file_path, speed_ms = row
+            resolved_path = self._resolve_path(file_path)
+            if not os.path.isfile(resolved_path):
+                conn.execute("DELETE FROM pixel_icons WHERE icon_key = ?", (icon_key,))
+                conn.commit()
+                return None
+            try:
+                with open(resolved_path, "rb") as f:
+                    icon_bytes = f.read()
+            except OSError:
+                return None
+            if not icon_bytes:
+                return None
+            conn.execute(
+                "UPDATE pixel_icons SET last_accessed = ? WHERE icon_key = ?",
+                (now, icon_key),
+            )
+            conn.commit()
+            return icon_bytes, speed_ms
+
+    async def async_get_icon(self, icon_key: str) -> Optional[Tuple[bytes, int]]:
+        if not self.is_cache_enabled:
+            return None
+        return await self._run_locked(self._get_icon_sync, icon_key)
+
+    def _save_icon_sync(
+        self,
+        icon_key: str,
+        data: bytes,
+        source: str,
+        frame_count: int,
+        speed_ms: int,
+        width: int,
+        height: int,
+    ) -> None:
+        now = int(time.time())
+        safe_key = re.sub(r"[^a-zA-Z0-9_\-]", "_", icon_key)
+        rel_path = os.path.join("icons", f"{safe_key}.cache")
+        abs_path = os.path.join(self.icons_dir, f"{safe_key}.cache")
+        try:
+            with open(abs_path, "wb") as f:
+                f.write(data)
+        except OSError as err:
+            _LOGGER.debug("Failed to write icon file '%s': %s", abs_path, err)
+            return
+
+        with self.db.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO pixel_icons (icon_key, file_path, source, frame_count, speed_ms, width, height, created_at, last_accessed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(icon_key) DO UPDATE SET
+                    file_path = excluded.file_path,
+                    source = excluded.source,
+                    frame_count = excluded.frame_count,
+                    speed_ms = excluded.speed_ms,
+                    width = excluded.width,
+                    height = excluded.height,
+                    last_accessed = excluded.last_accessed
+                """,
+                (icon_key, rel_path, source, frame_count, speed_ms, width, height, now, now),
+            )
+            self._enforce_icons_lru(conn, max_icons=500)
+            conn.commit()
+
+    def _enforce_icons_lru(self, conn, max_icons: int = 500) -> None:
+        if max_icons <= 0:
+            return
+        icon_count = conn.execute("SELECT COUNT(*) FROM pixel_icons").fetchone()[0] or 0
+        if icon_count > max_icons:
+            evicted = conn.execute(
+                "SELECT icon_key, file_path FROM pixel_icons ORDER BY last_accessed ASC LIMIT ?",
+                (icon_count - max_icons,),
+            ).fetchall()
+            for key, path in evicted:
+                resolved = self._resolve_path(path)
+                try:
+                    if os.path.isfile(resolved):
+                        os.remove(resolved)
+                except OSError:
+                    pass
+                conn.execute("DELETE FROM pixel_icons WHERE icon_key = ?", (key,))
+
+    async def async_save_icon(
+        self,
+        icon_key: str,
+        data: bytes,
+        source: str = "custom",
+        frame_count: int = 1,
+        speed_ms: int = 120,
+        width: int = 16,
+        height: int = 16,
+    ) -> None:
+        if not self.is_cache_enabled:
+            return
+        await self._run_locked(
+            self._save_icon_sync,
+            icon_key,
+            data,
+            source,
+            frame_count,
+            speed_ms,
+            width,
+            height,
+        )
+
     def _clear_cache_sync(self, scope: str = "all") -> None:
         norm_scope = str(scope or "all").strip().lower()
         if norm_scope in ("all", "masters") and os.path.isdir(self.masters_dir):
@@ -355,11 +472,16 @@ class PixooStorageManager:
         if norm_scope in ("all", "artists") and os.path.isdir(self.artists_dir):
             shutil.rmtree(self.artists_dir, ignore_errors=True)
             os.makedirs(self.artists_dir, exist_ok=True)
+        if norm_scope in ("all", "icons") and os.path.isdir(self.icons_dir):
+            shutil.rmtree(self.icons_dir, ignore_errors=True)
+            os.makedirs(self.icons_dir, exist_ok=True)
         with self.db.get_connection() as conn:
             if norm_scope in ("all", "masters"):
                 conn.execute("DELETE FROM artwork_masters")
             if norm_scope in ("all", "artists"):
                 conn.execute("DELETE FROM artist_sliders")
+            if norm_scope in ("all", "icons"):
+                conn.execute("DELETE FROM pixel_icons")
             if norm_scope in ("all", "analytics"):
                 self.analytics.clear_analytics_on_conn(conn)
             conn.commit()
@@ -367,6 +489,13 @@ class PixooStorageManager:
                 conn.execute("VACUUM;")
             else:
                 conn.execute("PRAGMA incremental_vacuum;")
+
+        if norm_scope in ("all", "icons"):
+            try:
+                from ..renderers.notifications import LaMetricIconResolver
+                LaMetricIconResolver.clear_memory_cache()
+            except Exception:
+                pass
 
     async def async_clear_cache(self, scope: str = "all") -> None:
         await self._run_locked(self._clear_cache_sync, scope)
@@ -394,6 +523,7 @@ class PixooStorageManager:
         now = int(time.time())
         with self.db.get_connection() as conn:
             self._enforce_masters_lru(conn, max_masters)
+            self._enforce_icons_lru(conn, max_icons=500)
             artist_count = conn.execute("SELECT COUNT(*) FROM artist_sliders").fetchone()[0] or 0
             if artist_count > max_artists:
                 evicted_artists = conn.execute(

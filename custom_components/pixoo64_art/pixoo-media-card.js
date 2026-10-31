@@ -92,6 +92,21 @@ function computeSmartColumns(order, config) {
   };
 }
 
+function isPixooStatusSensor(entityId, states) {
+  if (!entityId || !entityId.startsWith('sensor.')) return false;
+  const lower = entityId.toLowerCase();
+  if (lower.includes('analytics')) return false;
+
+  const stateObj = states?.[entityId];
+  if (stateObj?.attributes) {
+    if (stateObj.attributes.active_mode !== undefined || stateObj.attributes.media_player !== undefined || stateObj.attributes.prefetch_status !== undefined) {
+      return true;
+    }
+  }
+
+  return lower.includes('pixoo64_status') || (lower.includes('pixoo') && lower.includes('status'));
+}
+
 class PixooMediaCardEditor extends HTMLElement {
   set hass(h) {
     this._hass = h;
@@ -251,9 +266,9 @@ class PixooMediaCardEditor extends HTMLElement {
   }
 
   _getPixooSensorOptions(val) {
-    if (!this._hass) return '';
+    if (!this._hass?.states) return '';
     return Object.keys(this._hass.states)
-      .filter((e) => e.startsWith('sensor.') && (e.includes('pixoo64_media_display') || e.includes('pixoo64_status') || (e.includes('pixoo') && this._hass.states[e].attributes?.active_mode !== undefined)))
+      .filter((e) => isPixooStatusSensor(e, this._hass.states))
       .sort()
       .map((e) => `<option value="${e}" ${e === val ? 'selected' : ''}>${this._hass.states[e].attributes.friendly_name || e} (${e})</option>`)
       .join('');
@@ -277,7 +292,7 @@ class PixooMediaCard extends HTMLElement {
 
   static getStubConfig(h) {
     const s = h?.states
-      ? Object.keys(h.states).find((e) => e.startsWith('sensor.') && (e.includes('pixoo64_media_display') || e.includes('pixoo64_status') || (e.includes('pixoo') && h.states[e].attributes?.active_mode !== undefined))) || ''
+      ? Object.keys(h.states).find((e) => isPixooStatusSensor(e, h.states)) || ''
       : '';
     return {
       entity_sensor: s,
@@ -388,9 +403,11 @@ class PixooMediaCard extends HTMLElement {
       this.render();
       this._rendered = true;
     }
-    if (this._config && !this._config.entity_sensor && h?.states) {
-      const a = Object.keys(h.states).find((e) => e.startsWith('sensor.') && (e.includes('pixoo64_media_display') || e.includes('pixoo64_status') || (e.includes('pixoo') && h.states[e].attributes?.active_mode !== undefined)));
-      if (a) this._config = { ...this._config, entity_sensor: a };
+    if (this._config && h?.states) {
+      if (!this._config.entity_sensor || this._config.entity_sensor.toLowerCase().includes('analytics')) {
+        const a = Object.keys(h.states).find((e) => isPixooStatusSensor(e, h.states));
+        if (a) this._config = { ...this._config, entity_sensor: a };
+      }
     }
     this.updateValues(false);
   }
@@ -1096,6 +1113,7 @@ class PixooMediaCard extends HTMLElement {
                   <div class="row" style="gap:4px;align-items:center;">
                     <select id="notif-source-select" title="Icon Source" style="flex:1.4;">
                       <option value="builtin" selected>Built-in Icons (Catalog)</option>
+                      <option value="awtrix">Custom AWTRIX Icon</option>
                       <option value="lametric">Custom LaMetric Icon</option>
                     </select>
                     <div style="flex:0 0 auto;display:flex;align-items:center;" title="Notification & Border Color">
@@ -1162,6 +1180,11 @@ class PixooMediaCard extends HTMLElement {
                         <option value="text">📄 Text Only</option>
                       </optgroup>
                     </select>
+                  </div>
+                  <div class="row" id="notif-awtrix-row" style="display:none;margin-top:4px;gap:6px;align-items:center;">
+                    <span style="font-size:.72rem;color:var(--pixoo-secondary);flex:0 0 auto;">Icon Name:</span>
+                    <input type="text" id="notif-awtrix-icon-input" placeholder="e.g. house-climate, btccoin, kick..." style="flex:1;background:rgba(255,255,255,.06);border:1px solid var(--pixoo-border-tint);border-radius:4px;padding:4px 6px;color:var(--pixoo-text);font-size:.74rem;">
+                    <a href="https://awtrix.de/icons" target="_blank" rel="noopener noreferrer" style="font-size:.70rem;color:var(--pixoo-primary);text-decoration:none;display:inline-flex;align-items:center;gap:3px;padding:4px 8px;border-radius:4px;background:rgba(255,255,255,.06);border:1px solid var(--pixoo-border-tint);white-space:nowrap;flex:0 0 auto;transition:all .2s;" title="Browse thousands of community AWTRIX pixel icons & animations" onmouseover="this.style.background='rgba(0,191,255,.15)';this.style.borderColor='var(--pixoo-primary)'" onmouseout="this.style.background='rgba(255,255,255,.06)';this.style.borderColor='var(--pixoo-border-tint)'">🌐 Browse AWTRIX ↗</a>
                   </div>
                   <div class="row" id="notif-lametric-row" style="display:none;margin-top:4px;gap:6px;align-items:center;">
                     <span style="font-size:.72rem;color:var(--pixoo-secondary);flex:0 0 auto;">Icon ID:</span>
@@ -1383,13 +1406,10 @@ class PixooMediaCard extends HTMLElement {
       const src = e.target.value;
       const builtinRow = root.getElementById('notif-builtin-row');
       const lametricRow = root.getElementById('notif-lametric-row');
-      if (src === 'lametric') {
-        if (builtinRow) builtinRow.style.display = 'none';
-        if (lametricRow) lametricRow.style.display = 'flex';
-      } else {
-        if (builtinRow) builtinRow.style.display = 'flex';
-        if (lametricRow) lametricRow.style.display = 'none';
-      }
+      const awtrixRow = root.getElementById('notif-awtrix-row');
+      if (builtinRow) builtinRow.style.display = src === 'builtin' ? 'flex' : 'none';
+      if (lametricRow) lametricRow.style.display = src === 'lametric' ? 'flex' : 'none';
+      if (awtrixRow) awtrixRow.style.display = src === 'awtrix' ? 'flex' : 'none';
     });
 
     root.getElementById('notif-type-select')?.addEventListener('change', (e) => {
@@ -1409,6 +1429,7 @@ class PixooMediaCard extends HTMLElement {
       const source = root.getElementById('notif-source-select')?.value || 'builtin';
       const builtinType = root.getElementById('notif-type-select')?.value || 'info';
       const customIcon = root.getElementById('notif-custom-icon-input')?.value?.trim() || '';
+      const awtrixIcon = root.getElementById('notif-awtrix-icon-input')?.value?.trim() || '';
       const duration = parseInt(root.getElementById('notif-duration-select')?.value || '5', 10);
       const burnedText = !!root.getElementById('notif-burned-check')?.checked;
       const playBuzzer = !!root.getElementById('notif-buzzer-check')?.checked;
@@ -1423,7 +1444,10 @@ class PixooMediaCard extends HTMLElement {
         play_buzzer: playBuzzer
       };
       if (title) payload.title = title;
-      if (source === 'lametric') {
+      if (source === 'awtrix') {
+        payload.type = 'custom';
+        if (awtrixIcon) payload.icon = awtrixIcon;
+      } else if (source === 'lametric') {
         payload.type = 'custom';
         if (customIcon) payload.icon = customIcon;
       } else {
@@ -1455,6 +1479,11 @@ class PixooMediaCard extends HTMLElement {
       }
     });
     root.getElementById('notif-custom-icon-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        root.getElementById('notif-send-btn')?.click();
+      }
+    });
+    root.getElementById('notif-awtrix-icon-input')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         root.getElementById('notif-send-btn')?.click();
       }

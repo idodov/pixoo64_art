@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageSequence
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from ..const import DOMAIN
 from ..models import get_bidi, has_bidi, is_arabic, prepare_bidi_text
 from .notification_icons import NotificationIconRenderer
 
@@ -25,15 +26,20 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class LaMetricIconResolver:
-    """Asynchronously fetches and caches LaMetric 8x8 pixel icons and multi-frame animations."""
+    """Asynchronously fetches and caches pixel icons (AWTRIX Hub & LaMetric) with persistent hybrid storage."""
 
     _mem_cache: Dict[str, Tuple[List[Image.Image], int]] = {}
+
+    @classmethod
+    def clear_memory_cache(cls) -> None:
+        """Clear all decoded icon frames stored in RAM."""
+        cls._mem_cache.clear()
 
     @classmethod
     async def async_resolve_icon(
         cls, hass: HomeAssistant, icon_ref: Optional[str]
     ) -> Optional[Tuple[List[Image.Image], int]]:
-        """Resolve icon_ref (ID, URL, or data URI) into (frames, speed_ms)."""
+        """Resolve icon_ref (ID, URL, AWTRIX slug, or data URI) into (frames, speed_ms)."""
         if not icon_ref:
             return None
 
@@ -56,46 +62,122 @@ class LaMetricIconResolver:
         if clean_id in cls._mem_cache:
             return cls._mem_cache[clean_id]
 
-        storage_dir = hass.config.path(".storage", "pixoo64", "lametric_icons")
-        os.makedirs(storage_dir, exist_ok=True)
-        cached_file = os.path.join(storage_dir, f"{clean_id}.gif")
+        # 2. Check PixooStorageManager (SQLite WAL + persistent disk cache)
+        storage_mgr = None
+        if hass:
+            domain_data = hass.data.get(DOMAIN, {})
+            for hub in domain_data.values():
+                if hasattr(hub, "storage_manager") and hub.storage_manager:
+                    storage_mgr = hub.storage_manager
+                    break
 
-        # 2. Check persistent disk cache
-        if os.path.isfile(cached_file):
-            try:
-                raw_bytes = await hass.async_add_executor_job(cls._read_file_bytes, cached_file)
-                with Image.open(BytesIO(raw_bytes)) as img:
-                    parsed = cls._extract_frames_and_speed(img)
-                    if len(parsed[0]) > 1 or clean_id.startswith("a"):
+        if storage_mgr:
+            cached_entry = await storage_mgr.async_get_icon(clean_id)
+            if cached_entry:
+                raw_bytes, stored_speed = cached_entry
+                try:
+                    with Image.open(BytesIO(raw_bytes)) as img:
+                        frames, speed = cls._extract_frames_and_speed(img)
+                        parsed = (frames, speed)
                         cls._mem_cache[clean_id] = parsed
                         return parsed
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
-        # 3. Determine URLs (prioritizing animated 'a' prefix for numeric IDs)
+        # 3. Check legacy filesystem cache fallback
+        storage_dir = hass.config.path(".storage", "pixoo64", "icons")
+        legacy_dirs = [
+            hass.config.path(".storage", "pixoo64", "pixel_icons"),
+            hass.config.path(".storage", "pixoo64", "lametric_icons"),
+        ]
+        os.makedirs(storage_dir, exist_ok=True)
+
+        safe_filename = re.sub(r"[^a-zA-Z0-9_\-]", "_", clean_id)
+        cached_candidates = [
+            os.path.join(storage_dir, f"{safe_filename}.cache"),
+            os.path.join(storage_dir, f"{safe_filename}.gif"),
+            os.path.join(storage_dir, f"{safe_filename}.webp"),
+        ]
+        for ldir in legacy_dirs:
+            cached_candidates.append(os.path.join(ldir, f"{safe_filename}.cache"))
+            cached_candidates.append(os.path.join(ldir, f"{safe_filename}.gif"))
+            cached_candidates.append(os.path.join(ldir, f"{safe_filename}.webp"))
+
+        for cached_file in cached_candidates:
+            if os.path.isfile(cached_file):
+                try:
+                    raw_bytes = await hass.async_add_executor_job(cls._read_file_bytes, cached_file)
+                    with Image.open(BytesIO(raw_bytes)) as img:
+                        parsed = cls._extract_frames_and_speed(img)
+                        if parsed and len(parsed[0]) > 0:
+                            cls._mem_cache[clean_id] = parsed
+                            if storage_mgr:
+                                first_f = parsed[0][0]
+                                w, h = first_f.size
+                                await storage_mgr.async_save_icon(
+                                    clean_id, raw_bytes, "cached", len(parsed[0]), parsed[1], w, h
+                                )
+                            return parsed
+                except Exception:
+                    pass
+
+        # 4. Determine URL candidates (AWTRIX Hub, LaMetric, or direct image URL)
+        urls: List[str] = []
         if clean_id.startswith("http://") or clean_id.startswith("https://"):
-            urls = [clean_id]
-        else:
-            urls = []
-            if clean_id.startswith("a") and len(clean_id) > 1 and clean_id[1:].isdigit():
-                urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/{clean_id}")
-                urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/{clean_id[1:]}")
-            elif clean_id.isdigit():
-                urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/a{clean_id}")
-                urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/{clean_id}")
+            if "awtrix.de/icons/" in clean_id:
+                slug_part = clean_id.split("awtrix.de/icons/")[1].split("/")[0].split("?")[0].strip()
+                if slug_part:
+                    urls.append(f"https://awtrix.de/icons/{slug_part}/preview.webp")
+            urls.append(clean_id)
+        elif clean_id.startswith("awtrix:") or clean_id.startswith("awtrix/") or clean_id.startswith("awtrix_"):
+            slug = clean_id.split("awtrix:", 1)[-1].split("awtrix/", 1)[-1].split("awtrix_", 1)[-1].strip()
+            if slug:
+                urls.append(f"https://awtrix.de/icons/{slug}/preview.webp")
+        elif clean_id.startswith("lametric:") or clean_id.startswith("lametric/"):
+            lid = clean_id.split(":", 1)[-1].split("/", 1)[-1].strip()
+            if lid.isdigit():
+                urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/a{lid}")
+                urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/{lid}")
             else:
-                urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/{clean_id}")
+                urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/{lid}")
+        elif clean_id.startswith("a") and len(clean_id) > 1 and clean_id[1:].isdigit():
+            # Numeric animated ID (LaMetric style)
+            urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/{clean_id}")
+            urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/{clean_id[1:]}")
+            urls.append(f"https://awtrix.de/icons/{clean_id}/preview.webp")
+        elif clean_id.isdigit():
+            # Numeric ID (LaMetric style)
+            urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/a{clean_id}")
+            urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/{clean_id}")
+            urls.append(f"https://awtrix.de/icons/{clean_id}/preview.webp")
+        else:
+            # Text slug name (AWTRIX Hub style, e.g. "house-climate", "btccoin", "kick")
+            urls.append(f"https://awtrix.de/icons/{clean_id}/preview.webp")
+            urls.append(f"https://developer.lametric.com/content/apps/icon_thumbs/{clean_id}")
 
         websession = async_get_clientsession(hass)
+        save_target = os.path.join(storage_dir, f"{safe_filename}.cache")
+        req_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "image/webp,image/apng,image/gif,image/*,*/*;q=0.8",
+        }
         for url in urls:
             try:
-                async with websession.get(url, timeout=aiohttp.ClientTimeout(total=4)) as resp:
+                async with websession.get(url, headers=req_headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                     if resp.status == 200:
                         data = await resp.read()
                         with Image.open(BytesIO(data)) as img:
                             parsed = cls._extract_frames_and_speed(img)
                             cls._mem_cache[clean_id] = parsed
-                            await hass.async_add_executor_job(cls._write_file_bytes, cached_file, data)
+                            first_f = parsed[0][0]
+                            w, h = first_f.size
+                            src_label = "awtrix" if "awtrix" in url else ("lametric" if "lametric" in url else "custom")
+                            if storage_mgr:
+                                await storage_mgr.async_save_icon(
+                                    clean_id, data, src_label, len(parsed[0]), parsed[1], w, h
+                                )
+                            else:
+                                await hass.async_add_executor_job(cls._write_file_bytes, save_target, data)
                             return parsed
             except Exception as e:
                 _LOGGER.debug("Could not fetch icon from '%s': %s", url, e)
@@ -106,20 +188,34 @@ class LaMetricIconResolver:
     def _extract_frames_and_speed(img: Image.Image) -> Tuple[List[Image.Image], int]:
         frames: List[Image.Image] = []
         durations: List[int] = []
+        top_duration = img.info.get("duration", 0) if hasattr(img, "info") else 0
         try:
             for frame in ImageSequence.Iterator(img):
                 frames.append(frame.copy().convert("RGBA"))
-                d = frame.info.get("duration", 0)
+                d = (
+                    frame.info.get("duration")
+                    or getattr(img, "info", {}).get("duration")
+                    or top_duration
+                )
                 if d and d > 0:
-                    durations.append(d)
+                    # Centiseconds conversion (some GIF encoders use 1/100s, e.g. 5 = 50ms)
+                    if d < 15:
+                        d = d * 10
+                    durations.append(int(d))
         except Exception:
             pass
         if not frames:
             frames = [img.convert("RGBA")]
 
-        speed = int(sum(durations) / len(durations)) if durations else 120
-        if speed < 40 or speed > 3000:
-            speed = 120
+        if durations:
+            raw_speed = int(sum(durations) / len(durations))
+        elif top_duration and top_duration > 0:
+            raw_speed = int(top_duration if top_duration >= 15 else top_duration * 10)
+        else:
+            raw_speed = 100
+
+        # Double the playback speed on Pixoo (half the frame delay in ms) for lively, snappy animation
+        speed = max(30, min(500, int(raw_speed * 0.5)))
         return frames[:30], speed
 
     @staticmethod
@@ -248,7 +344,7 @@ class NotificationManager:
             notif_type = str(event_data.get("type", "text")).strip().lower()
             duration = max(1, min(60, int(event_data.get("duration", 5))))
             custom_color = event_data.get("color")
-            icon_ref = event_data.get("icon") or event_data.get("lametric_icon") or event_data.get("icon_id")
+            icon_ref = event_data.get("icon") or event_data.get("lametric_icon") or event_data.get("awtrix_icon") or event_data.get("icon_id")
 
             # Support LaMetric model.frames schema
             if "model" in event_data and isinstance(event_data["model"], dict):
@@ -260,9 +356,17 @@ class NotificationManager:
                     if not icon_ref and first_f.get("icon"):
                         icon_ref = str(first_f.get("icon")).strip()
 
-            # Automatic detection if notif_type looks like a custom icon ID (e.g. "a2710", "28340")
+            if notif_type in ("custom", "lametric", "awtrix"):
+                notif_type = "custom"
+
+            # Automatic detection if notif_type looks like a custom icon ID (e.g. "a2710", "28340", "awtrix:kick")
             if not icon_ref and notif_type not in self.THEMES:
-                if re.match(r"^a?\d+$", notif_type) or notif_type.startswith("http"):
+                if (
+                    re.match(r"^a?\d+$", notif_type)
+                    or notif_type.startswith("http")
+                    or notif_type.startswith("awtrix")
+                    or notif_type.startswith("lametric")
+                ):
                     icon_ref = notif_type
                     notif_type = "custom"
 
@@ -335,6 +439,13 @@ class NotificationManager:
                     self._draw_background(notif_type, rgb_color, icon_cy, None)
                 ]
                 anim_speed = 10000
+
+            custom_anim_speed = event_data.get("anim_speed") or event_data.get("speed")
+            if custom_anim_speed is not None:
+                try:
+                    anim_speed = max(20, min(5000, int(custom_anim_speed)))
+                except (ValueError, TypeError):
+                    pass
 
             if use_burned_text:
                 # Burned Text Mode: render bold title and message directly onto each frame
@@ -514,9 +625,18 @@ class NotificationManager:
             return img
 
         if custom_icon:
-            # Scale LaMetric icon to 16x16 with crisp nearest-neighbor sampling
-            scaled = custom_icon.resize((16, 16), Image.Resampling.NEAREST)
-            img.paste(scaled, (24, max(2, cy - 8)), scaled)
+            # Scale custom icon crisply with nearest-neighbor sampling
+            orig_w, orig_h = custom_icon.size
+            if orig_w == orig_h:
+                scaled = custom_icon.resize((16, 16), Image.Resampling.NEAREST)
+            else:
+                scale = min(32 / max(1, orig_w), 16 / max(1, orig_h))
+                target_size = (max(1, int(orig_w * scale)), max(1, int(orig_h * scale)))
+                scaled = custom_icon.resize(target_size, Image.Resampling.NEAREST)
+            w, h = scaled.size
+            paste_x = max(0, 32 - w // 2)
+            paste_y = max(2, cy - h // 2)
+            img.paste(scaled, (paste_x, paste_y), scaled)
         else:
             cx = 32
             NotificationIconRenderer.render_icon(n_type, draw, cx, cy, color, frame_num=0)

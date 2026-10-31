@@ -67,6 +67,20 @@ CREATE TABLE IF NOT EXISTS album_completions (
     completed_at INTEGER NOT NULL        -- UTC Unix epoch timestamp
 );
 CREATE INDEX IF NOT EXISTS idx_album_completed ON album_completions(completed_at);
+
+-- 6. Pixel Icons Metadata Cache (AWTRIX & LaMetric)
+CREATE TABLE IF NOT EXISTS pixel_icons (
+    icon_key TEXT PRIMARY KEY,          -- clean_id / slug
+    file_path TEXT NOT NULL,           -- relative path inside storage dir
+    source TEXT NOT NULL,              -- 'awtrix', 'lametric', 'custom', 'url'
+    frame_count INTEGER NOT NULL,      -- number of frames (1 for static, >1 for animated)
+    speed_ms INTEGER NOT NULL,         -- animation speed in ms
+    width INTEGER NOT NULL,            -- pixel width
+    height INTEGER NOT NULL,           -- pixel height
+    created_at INTEGER NOT NULL,       -- Unix epoch timestamp
+    last_accessed INTEGER NOT NULL     -- Unix epoch timestamp
+);
+CREATE INDEX IF NOT EXISTS idx_icon_last_accessed ON pixel_icons(last_accessed);
 """
 
 
@@ -166,10 +180,12 @@ class PixooDatabase:
         conn.execute("PRAGMA foreign_keys = ON;")
         return conn
 
-    def initialize_sync(self, masters_dir: str, artists_dir: str) -> None:
+    def initialize_sync(self, masters_dir: str, artists_dir: str, icons_dir: Optional[str] = None) -> None:
         """Create filesystem directories and initialize SQLite schema."""
         os.makedirs(masters_dir, exist_ok=True)
         os.makedirs(artists_dir, exist_ok=True)
+        if icons_dir:
+            os.makedirs(icons_dir, exist_ok=True)
         marker = os.path.join(self.base_dir, ".uncropped_masters_v2")
         with sqlite3.connect(self.db_path, timeout=15.0) as conn:
             conn.execute("PRAGMA journal_mode = WAL;")

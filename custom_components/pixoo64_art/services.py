@@ -16,7 +16,7 @@ from .hub import PixooHub
 SERVICE_CLEAR_CACHE_SCHEMA = vol.Schema(
     {
         vol.Optional("scope", default="all"): vol.In(
-            ["all", "masters", "artists", "analytics"]
+            ["all", "masters", "artists", "analytics", "icons"]
         ),
     },
     extra=vol.ALLOW_EXTRA,

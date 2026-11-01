@@ -44,25 +44,6 @@ Version 2.1.0 expands the notification and pixel-art system with community icon 
 | **🎛️ Lovelace Card AWTRIX Selector** | Added **Custom AWTRIX Icon** dropdown option and quick **🌐 Browse AWTRIX ↗** button. | Preview and send any AWTRIX Hub icon directly from the Home Assistant dashboard in seconds. |
 
 ---
-> [!CAUTION]
-> ### 🛑 IMPORTANT NOTICE: Upgrading from v1.4.3 / v2.0.0 to v2.1.0
-> 
-> Due to a folder structure bug in `v2.0.0` (which is now fixed in `v2.1.0`), HACS may have cached an invalid directory path (`custom_components/None/manifest.json`) or created orphaned folders.
-> 
-> ---
-> 
-> #### 1. Check and delete orphaned folders (CRITICAL)
-> Using File Editor, Studio Code Server, or SSH:
-> * Check `/config/custom_components/` for a folder named **`None`** (`/config/custom_components/None/`). **Delete it if present.**
-> * Check your main `/config/` directory for any stray **`pixoo64_art`** folder sitting directly under `/config/` (outside of `custom_components`). **Delete it if present.**
-> 
-> ---
-> 
-> #### 2. Flush HACS cache & update
-> 1. In Home Assistant, go to **HACS** → **Pixoo64 Media Album Art**.
-> 2. Click the **three dots (⋮)** in the top-right corner.
-> 3. Click **"Update information"** (or restart Home Assistant to clear the memory cache).
-> 4. Click **Update** to install **`v2.1.0`** (or select **"Redownload"** → choose `v2.1.0`).
 
 ## 🏆 Hit Parade Charts & Playback Analytics
 
@@ -460,8 +441,8 @@ Everything is configured directly through the Home Assistant UI — no YAML edit
 | **Artwork Race Mode** | `artwork_race_mode` | Fires multiple metadata queries simultaneously and renders whichever finishes first. *(Requires at least one external API key).* |
 | **MusicBrainz** | `musicbrainz_enabled` | Open-source Cover Art Archive lookups with built-in rate-limit governance. |
 | **Internet Archive** | `internet_archive_enabled` | Metadata and artwork lookups from archive.org. |
-| **Pollinations AI** | `pollinations_key` | Optional API key enabling generative conceptual artwork for bootlegs or unmapped tracks. |
-| **AI Model** | `ai_model` | Preferred generative image model (e.g., `flux.1-schnell`, `turbo`). |
+| **Pollinations AI** | `pollinations_key` | *Optional.* Leave empty to use the free tier (1 image every 45s). For unlimited generations and premium models, enter a **Secret Key** (`sk_...`) from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys). *(Note: Publishable keys `pk_...` are for client apps only and cannot authenticate Home Assistant).* |
+| **AI Model** | `ai_model` | Preferred generative image model (e.g., `flux.1-schnell`, `turbo`, `recraft-v4.1-vector`). Dynamically synced from the Pollinations catalog. |
 | **Spotify Credentials** | `spotify_client_id`, `spotify_client_secret` | Free developer credentials for fast high-res artwork search and the animated *Spotify Slider* carousel. |
 | **TIDAL Credentials** | `tidal_client_id`, `tidal_client_secret` | Free developer credentials for catalogue artwork resolution. |
 | **Last.fm / Discogs** | `lastfm_key`, `discogs_token` | Personal developer tokens for vinyl release covers and B-side matching. |
@@ -583,8 +564,21 @@ Yes. Under **Settings ➔ Devices & Services ➔ Pixoo64 ➔ Configure ➔ Persi
 <br>
 
 **No.** The integration is completely free to operate:
-* **Zero-config open APIs:** MusicBrainz, Internet Archive, TheAudioDB, and LRCLIB operate without any API keys.
+* **Zero-config open APIs:** MusicBrainz, Internet Archive, TheAudioDB, LRCLIB, and Pollinations AI (free tier) operate without any API keys.
 * **Free developer accounts:** Spotify, TIDAL, Last.fm, and Discogs provide free developer API access without requiring paid subscription plans.
+
+</details>
+
+<details>
+<summary><strong>🤖 How does Generative AI Art (Pollinations.ai) work and what key do I need?</strong></summary>
+
+<br>
+
+The integration supports generative AI pop-art via **Pollinations.ai** for tracks or radio streams lacking official sleeve artwork (or when **Force AI** mode is enabled):
+
+* **Free Tier (Zero Config / No Key Needed):** If you leave the `pollinations_key` field blank, the integration automatically routes generation through the free public endpoint (`image.pollinations.ai`). This is completely free to use, but Pollinations enforces a rate limit of 1 image every 45 seconds per IP.
+* **Secret Key (`sk_...`) for Paid/Unlimited Usage:** If you have Pollinations credits or want unlimited, instant generations with premium models, you can provide a **Secret Key** starting with **`sk_`** from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys).
+* **⚠️ Publishable Keys (`pk_...`) are NOT supported:** When creating an "App" on Pollinations, it generates an App / Publishable Key (`pk_...`). These are intended strictly for client-side browser payment widgets (*Pollinations Pay*). Passing a `pk_` key to Home Assistant will cause Pollinations to reject requests with `HTTP 401 Unauthorized`. Always use a **Secret Key (`sk_`)** or leave the field empty for the free tier.
 
 </details>
 
@@ -617,7 +611,7 @@ When a song begins, the integration evaluates metadata through this structured s
  6. TheAudioDB ──────────────────────────(Found)─► Render Artist Gallery portrait
          │ (Missing)
          ▼
- 7. Pollinations AI (if configured) ─────(Active)► Generate conceptual artwork
+ 7. Pollinations AI (Free or Secret Key) ─(Active)► Generate conceptual artwork
          │ (Disabled / unconfigured)
          ▼
  8. Geometric Canvas Fallback ───────────────────► Clean minimalist layout

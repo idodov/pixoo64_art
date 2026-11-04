@@ -1,10 +1,11 @@
-<h1 align="center">🎨 Pixoo64 Media Album Art for Home Assistant (v2.1)</h1>
+<h1 align="center">🎨 Pixoo64 Media Album Art for Home Assistant (v2.1.1)</h1>
 
 <p align="center">
   <a href="https://www.home-assistant.io/"><img src="https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blueviolet.svg?style=for-the-badge&logo=home-assistant" alt="Home Assistant 2024.1+"></a>
-  <a href="https://hacs.xyz/"><img src="https://img.shields.io/badge/HACS-Custom%20Repo-orange.svg?style=for-the-badge&logo=hacs" alt="HACS Custom Repository"></a>
+  <a href="https://www.home-assistant.io/blog/2026/11/04/release-202611/#welcome-to-the-marketplace"><img src="https://img.shields.io/badge/Marketplace-Custom%20Repo-purple.svg?style=for-the-badge&logo=home-assistant" alt="Marketplace Ready"></a>
+  <a href="https://hacs.xyz/"><img src="https://img.shields.io/badge/HACS-Compatible-orange.svg?style=for-the-badge&logo=hacs" alt="HACS Compatible"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT"></a>
-  <a href="https://github.com/idodov/pixoo64_art/releases"><img src="https://img.shields.io/badge/Version-2.1.0-emerald.svg?style=for-the-badge" alt="Version 2.1.0"></a>
+  <a href="https://github.com/idodov/pixoo64_art/releases"><img src="https://img.shields.io/badge/Version-2.1.1-emerald.svg?style=for-the-badge" alt="Version 2.1.1"></a>
   <a href="https://github.com/idodov/pixoo64_art/issues"><img src="https://img.shields.io/github/issues/idodov/pixoo64_art?style=for-the-badge&color=red" alt="GitHub Issues"></a>
 </p>
 
@@ -31,17 +32,19 @@ Unlike traditional media display scripts that rely on single-platform APIs or cl
 
 ---
 
-## 🚀 What's New in Version 2.1.0
+## 🚀 What's New in Version 2.1.1
 
-Version 2.1.0 expands the notification and pixel-art system with community icon libraries, high-frame-rate animations, and persistent SQLite icon caching:
+Version 2.1.1 brings Home Assistant 2026.11 Marketplace readiness, zero-config free-tier AI generation, synchronized startup state restoration, and Chromecast improvements:
 
 | Feature | Enhancement | User Benefit |
 | :--- | :--- | :--- |
-| **🌐 AWTRIX Hub Integration** | Direct support for [awtrix.de/icons](https://awtrix.de/icons) via icon slugs (e.g., `house-climate`, `btccoin`, `kick`) or full URLs. | Access thousands of community-crafted 8×8 and 16×16 pixel icons and animations directly from automations or the dashboard card. |
-| **⚡ 2× Animated Frame Speed** | Precise extraction of native GIF Graphic Control Blocks & WebP ANMF headers with doubled playback speed (`raw_speed * 0.5`). | Eliminates sluggish slideshow playback on the Pixoo LED hardware; animations look lively, fluid, and responsive. |
-| **🏎️ Custom Animation Speed Control** | New optional `anim_speed` parameter (in milliseconds per frame). | Fine-tune animation speed on demand (e.g. `anim_speed: 50` for fast 20 fps animations). |
-| **💾 Persistent SQLite & Disk Icon Cache** | 3-tier hybrid caching (RAM $\to$ SQLite WAL database $\to$ `.storage/pixoo64/icons/`). | Icons download once and load in **0.0 ms** thereafter with zero network overhead. Easily pruned or cleared via `pixoo64_art.clear_cache` (`scope: icons`). |
-| **🎛️ Lovelace Card AWTRIX Selector** | Added **Custom AWTRIX Icon** dropdown option and quick **🌐 Browse AWTRIX ↗** button. | Preview and send any AWTRIX Hub icon directly from the Home Assistant dashboard in seconds. |
+| **🏬 Home Assistant Marketplace Support** | Fully aligned with Home Assistant 2026.11 built-in Marketplace (`Settings > Marketplace`). | Direct installation via core Marketplace custom repositories with zero external downloader scripts. |
+| **🤖 Free-Tier Pollinations AI (No Key Needed)** | Standardized on Pollinations' free-tier endpoint at `512×512` resolution (`image.pollinations.ai`). | Generates bespoke pop-art for songs and radio streams completely free out-of-the-box with zero configuration or API key. |
+| **🪙 Pollen Coin Balance & Model Cost Display** | Replaced dollar symbols with Pollinations coin emoji (`🪙`) and added per-model cost badges across configuration and status cards. | Clear visual tracking of model costs and account balance. |
+| **⚡ Instant Startup State Restoration Barrier** | Added an asynchronous synchronization barrier (`mark_entity_restored`) across all 15 restore entities (`select`, `switch`, `number`). | Restored settings (e.g. `Extra Crop`, `Force AI`) are applied immediately on reboot without requiring manual option clicks. |
+| **🛡️ Unconditional Hardware Artwork Display** | Commands `Channel/SetIndex: 4` unconditionally before static frame uploads. | Physical Pixoo hardware reliably flips to artwork even after rebooting from hardware clock faces (Channel 0). |
+| **📺 Chromecast & Cast Receiver Compatibility** | Injected Cast receiver heuristics (`isCastReceiver`) and strict HTTPS asset validation. | In Force AI mode on Cast devices (or when encountering insecure HTTP URLs on HTTPS streams), the card cleanly falls back to the dynamic retro SVG pixel screen instead of mismatched covers or broken image icons. |
+| **🎛️ Card Advanced Master & Full Control Toggles** | Added one-click **Master Control** and **Full Control** toggle buttons directly inside the Advanced section of `pixoo-media-card`. | Instant control over software loop processing and hardware display power straight from your dashboard. |
 
 ---
 
@@ -133,7 +136,7 @@ Switch visual rendering modes on the fly via the Lovelace card, select entities,
 | **Artist Gallery** | Dedicated visual mode cycling through high-resolution artist fanart and portraits sourced from TheAudioDB. | <img width="64" height="64" alt="pixoo_artist_gallery_FKA_twigs__Koreless" src="https://github.com/user-attachments/assets/0a083f65-2fcf-43ab-99b6-3c3ff606e9ca" /> |
 | **Synced Lyrics** | Real-time synchronized lyrics powered by LRCLIB, featuring intelligent multi-line wrapping, dimming backdrop filter, and BiDi language support. | *(Live text rendered synchronously)* |
 | **Analog Clock** | Classical retro analog clock overlay projected over atmospheric, softly dimmed album art. | <img width="64" height="64" alt="pixoo_clock_FKA_twigs__Koreless_Drums_of_Death_Cyberpunk_Neon" src="https://github.com/user-attachments/assets/ad3512d4-992e-486e-8f00-fd484588a843" /> |
-| **Force AI** | Generates bespoke conceptual pop-art via Pollinations AI for tracks, streams, or mixes lacking official artwork. | <img width="64" height="64" alt="pixoo_std_FKA_twigs__Koreless_Drums_of_Death_Cyberpunk_Neon" src="https://github.com/user-attachments/assets/e0d59056-c783-43c6-8a59-21d7f910da9f" /> |
+| **Force AI** | Generates bespoke conceptual pop-art via Pollinations AI for tracks, streams, or mixes lacking official artwork (ignores cropping for full-bleed composition). | <img width="64" height="64" alt="pixoo_std_FKA_twigs__Koreless_Drums_of_Death_Cyberpunk_Neon" src="https://github.com/user-attachments/assets/e0d59056-c783-43c6-8a59-21d7f910da9f" /> |
 
 ---
 
@@ -151,6 +154,8 @@ Switch visual rendering modes on the fly via the Lovelace card, select entities,
         <li><b>Fluid Responsive Multi-Column Engine</b> — Automatically adapts cleanly across 1-column, 2-column, and 3-column wide screens without aspect-ratio stretching or clipping.</li>
         <li><b>🔔 Quick Notifications Suite</b> — Send animated AWTRIX, LaMetric, or built-in pixel alerts with a 1-click <b>Browse AWTRIX</b> button directly from the card.</li>
         <li><b>🏆 Hit Parade Charts Panel</b> — Select chart category, timeframe, and period, then click <b>Show Chart</b> to trigger animated countdowns on your Pixoo matrix directly from the dashboard.</li>
+        <li><b>🕹️ Advanced Master & Full Control Toggles</b> — Quickly toggle Master Control and Full Control hardware power states directly from the card's Advanced section.</li>
+        <li><b>📺 Chromecast Smart Fallback</b> — Automatically serves beautiful, theme-colored SVG pixel art on Cast displays during Force AI mode or when assets are not served over HTTPS.</li>
         <li><b>Modular Section Reordering</b> — Tailor the card to your workflow. Using the visual UI editor or YAML, you can freely reorder, show, or hide any section (Display, Metadata, Next Track, Media Controls, Display Modes, Hardware Controls, and Diagnostics).</li>
         <li><b>Dynamic Ambient Theme Engine</b> — Automatically samples the dominant color palette from the current album art or synced WLED strips to paint ambient glows, borders, and buttons.</li>
         <li><b>Real-Time Lyrics Status</b> — Live visual indicator badge illuminates when lyrics are available, allowing instant one-click mode switching.</li>
@@ -173,7 +178,7 @@ Switch visual rendering modes on the fly via the Lovelace card, select entities,
 The `pixoo-media-card` is fully integrated with Home Assistant's visual dashboard editor:
 
 - **Via the UI:** Edit your dashboard, click **Add Card**, search for **Pixoo Media Card**, and customize your layout using interactive switches, column selectors, and drag-and-drop section handles.
-- **Via YAML:** You can configure the card directly using the following comprehensive template:
+- **Via YAML:** You can configure the card directly using the following template:
 
 ```yaml
 type: custom:pixoo-media-card
@@ -188,7 +193,7 @@ show_charts: true           # 🏆 Hit Parade interactive chart panel
 show_notifications: true    # 🔔 Instant notifications & buzzer trigger
 show_pixoo_controls: true   # Screen power, brightness & channel selectors
 show_next_track: true       # Queue prefetch preview
-show_advanced: true         # Crop, filter, and overlay settings
+show_advanced: true         # Crop, filter, master/full control, and overlay settings
 show_stats: false           # Live telemetry & cache diagnostic metrics
 show_background: true       # Ambient artwork theme glow backdrop
 layout_order:
@@ -219,7 +224,7 @@ Standard center-cropping often slices off faces or leaves distracting black bars
 
 | Crop Mode | Description & Algorithm | Preview / Image |
 | :--- | :--- | :--- |
-| **No Crop** | Preserves the complete original album sleeve aspect ratio without automated framing adjustments. | <img width="64" height="64" alt="pixoo_std_Kate_Bush_Running_Up_That_Hill__A_Deal_With_God__Cyberpunk_Neon" src="https://github.com/user-attachments/assets/9b864c96-1450-44cd-8f17-47eadb533969" /> |
+| **No Crop** | Preserves the complete original album sleeve aspect ratio without automated framing adjustments. Automatically enforced in **Force AI** mode for full-bleed artwork. | <img width="64" height="64" alt="pixoo_std_Kate_Bush_Running_Up_That_Hill__A_Deal_With_God__Cyberpunk_Neon" src="https://github.com/user-attachments/assets/9b864c96-1450-44cd-8f17-47eadb533969" /> |
 | **Standard Crop** | Intelligently trims black letterboxing, white scanner margins, and pillarbox bars while protecting core artwork elements and typography. | <img width="64" height="64" alt="pixoo_std_Kate_Bush_Running_Up_That_Hill__A_Deal_With_God__Cyberpunk_Neon" src="https://github.com/user-attachments/assets/c107e471-58ca-479e-bca1-235b233979fa" /> |
 | **Extra Crop** <br>*(Subject Isolation)* | Computer vision engine featuring **Nested Container Unwrapping** (extracts inner photos from bordered sleeves), **Subject Clustering** (keeps band members and duos centered together), and **Typographic Framing** for minimalist text sleeves. | <img width="64" height="64" alt="pixoo_std_Kate_Bush_Running_Up_That_Hill__A_Deal_With_God__Cyberpunk_Neon" src="https://github.com/user-attachments/assets/0899f138-7503-4502-881b-9e583c3e7128" /> |
 
@@ -316,17 +321,6 @@ data:
 | `buzzer_off` | int | No | `500` | Silence duration between beeps in milliseconds. |
 | `buzzer_total` | int | No | `3000` | Total buzzer duration in milliseconds. |
 
-### Visual Icon Catalog (40+ Animations)
-
-| Category | Available Animation Profiles |
-| :--- | :--- |
-| **Community Icons** | `custom` (Pass any [AWTRIX Hub Icon](https://awtrix.de/icons) slug like `house-climate`, `btccoin`, or [LaMetric Icon](https://developer.lametric.com/icons) ID like `a2710`, `28340`, or image URL in `icon`) |
-| **System & Alerts** | `text` (clean text banner), `info`, `success`, `warning`, `error`, `v` (checkmark), `x` (cancel), `alert` (animated ringing bell), `alarm` (emergency siren), `attack` (animated rocket) |
-| **Smart Home Infrastructure** | `door`, `lock`, `garage`, `shutter`, `boiler`, `ac` (snowflake), `fan`, `light`, `vacuum`, `power`, `home`, `motion`, `fire`, `water` |
-| **Domestic Life & Daily Routines** | `washer`, `dryer`, `trash`, `mail`, `coffee`, `package`, `pet` (paw), `plant` (leaf), `car` |
-| **Sensors, Hardware & Devices** | `battery`, `wifi` (pulsing waves), `phone` (ringing wiggle), `camera`, `calendar`, `timer` (animated clock hand), `weather` (sun/cloud) |
-| **Atmosphere & Music** | `music`, `sun`, `moon` / `sleep` |
-
 ---
 
 ## 🛠️ Home Assistant Entities & Services Reference
@@ -392,7 +386,24 @@ sequence:
 
 ## 📦 Installation
 
-### Option 1: Via HACS (Recommended)
+### Option 1: Home Assistant Marketplace (Recommended for HA 2026.11+)
+
+Starting with **Home Assistant 2026.11**, HACS is officially built directly into Home Assistant core as the **Marketplace**:
+
+1. In Home Assistant, navigate to **Settings ➔ Marketplace**.
+2. Click the three dots **⋮** in the top right corner and select **Custom repositories**.
+3. Paste the repository URL:
+   ```text
+   https://github.com/idodov/pixoo64_art
+   ```
+4. Set the category to **Integration** and click **Add**.
+5. Locate **Pixoo64 Media Album Art** in the Marketplace list, click **Install**, and restart Home Assistant.
+
+---
+
+### Option 2: Legacy HACS (For Home Assistant 2024.x – 2026.10)
+
+For existing installations running older Home Assistant versions:
 
 1. Open **HACS** from your Home Assistant sidebar.
 2. Click the three dots **⋮** in the top right corner and select **Custom repositories**.
@@ -400,11 +411,15 @@ sequence:
 4. Set the category to **Integration** and click **Add**.
 5. Locate **Pixoo64 Media Album Art**, click **Download**, and restart Home Assistant.
 
-### Option 2: Manual Installation
+---
+
+### Option 3: Manual Installation
 
 1. Download the latest release archive from the [Releases page](https://github.com/idodov/pixoo64_art/releases).
 2. Unpack the archive and copy the `pixoo64_art` directory into your Home Assistant custom components folder:
-   `config/custom_components/pixoo64_art/`
+   ```text
+   config/custom_components/pixoo64_art/
+   ```
 3. Restart Home Assistant.
 
 ---
@@ -441,8 +456,8 @@ Everything is configured directly through the Home Assistant UI — no YAML edit
 | **Artwork Race Mode** | `artwork_race_mode` | Fires multiple metadata queries simultaneously and renders whichever finishes first. *(Requires at least one external API key).* |
 | **MusicBrainz** | `musicbrainz_enabled` | Open-source Cover Art Archive lookups with built-in rate-limit governance. |
 | **Internet Archive** | `internet_archive_enabled` | Metadata and artwork lookups from archive.org. |
-| **Pollinations AI** | `pollinations_key` | *Optional.* Leave empty to use the free tier (1 image every 45s). For unlimited generations and premium models, enter a **Secret Key** (`sk_...`) from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys). *(Note: Publishable keys `pk_...` are for client apps only and cannot authenticate Home Assistant).* |
-| **AI Model** | `ai_model` | Preferred generative image model (e.g., `flux.1-schnell`, `turbo`, `recraft-v4.1-vector`). Dynamically synced from the Pollinations catalog. |
+| **Pollinations AI** | `pollinations_key` | *Optional.* Leave empty to use the free tier out-of-the-box (no key required!). For unlimited high-speed generations, enter a **Secret Key** (`sk_...`) from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys). *(Note: Publishable keys `pk_...` are for browser widgets only and cannot authenticate Home Assistant).* |
+| **AI Model** | `ai_model` | Preferred generative image model (e.g., `black-forest-labs/flux.1-schnell`, `turbo`, `recraft-v4.1-vector`). Dynamically synced from the Pollinations catalog with per-model 🪙 token pricing. |
 | **Spotify Credentials** | `spotify_client_id`, `spotify_client_secret` | Free developer credentials for fast high-res artwork search and the animated *Spotify Slider* carousel. |
 | **TIDAL Credentials** | `tidal_client_id`, `tidal_client_secret` | Free developer credentials for catalogue artwork resolution. |
 | **Last.fm / Discogs** | `lastfm_key`, `discogs_token` | Personal developer tokens for vinyl release covers and B-side matching. |
@@ -484,14 +499,16 @@ Assign a **DHCP reservation** for your Pixoo64 within your router's administrati
 * **Master Control (Software Loop Switch):** The primary master switch for the integration. Turning it off stops artwork processing, lyrics queries, and display updates. The Pixoo64 remains powered on and reverts immediately to your default Divoom channel (Clock, Cloud, or Custom).
 * **Full Control (Hardware Power Ownership):** When enabled, the integration manages hardware screen power directly. When playback starts, it automatically turns the LED display on; when music stops, it turns the screen completely off (black).
 
+Both toggles can also be operated directly from the **Advanced** section of `pixoo-media-card`.
+
 </details>
 
 <details>
-<summary><strong>🛡️ Will the Pixoo64 get stuck on a black screen when music finishes?</strong></summary>
+<summary><strong>🛡️ Will the Pixoo64 get stuck on a black screen when music finishes or Home Assistant restarts?</strong></summary>
 
 <br>
 
-**No.** The integration incorporates a dedicated **Channel Memory & Fail-Safe Engine**. When music starts, the integration saves your active Divoom channel (0=Clock, 1=Cloud, 2=Visualizer, 3=Custom). Channel 4 (the internal HTTP GIF receiver) is strictly filtered out and never saved. When music stops or the pause timer expires, the integration safely restores your original channel or turns off the screen per your configuration.
+**No.** The integration incorporates a dedicated **Channel Memory & Fail-Safe Engine**. When music starts or after Home Assistant boots, the physical device is commanded directly to Channel 4. When music stops or the pause timer expires, the integration safely restores your original channel (0=Clock, 1=Cloud, 2=Visualizer, 3=Custom) or turns off the screen per your configuration.
 
 </details>
 
@@ -576,8 +593,8 @@ Yes. Under **Settings ➔ Devices & Services ➔ Pixoo64 ➔ Configure ➔ Persi
 
 The integration supports generative AI pop-art via **Pollinations.ai** for tracks or radio streams lacking official sleeve artwork (or when **Force AI** mode is enabled):
 
-* **Free Tier (Zero Config / No Key Needed):** If you leave the `pollinations_key` field blank, the integration automatically routes generation through the free public endpoint (`image.pollinations.ai`). This is completely free to use, but Pollinations enforces a rate limit of 1 image every 45 seconds per IP.
-* **Secret Key (`sk_...`) for Paid/Unlimited Usage:** If you have Pollinations credits or want unlimited, instant generations with premium models, you can provide a **Secret Key** starting with **`sk_`** from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys).
+* **Free Tier (Zero Config / No Key Needed):** If you leave the `pollinations_key` field blank, the integration automatically routes generation through the free public endpoint (`image.pollinations.ai`). It generates crisp `512×512` images and is completely free to use.
+* **Secret Key (`sk_...`) for Paid/Unlimited Usage:** If you have Pollinations credits or want unlimited, instant generations with premium models, you can provide a **Secret Key** starting with **`sk_`** from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys). Balance and model costs are tracked in Pollen coins (`🪙`).
 * **⚠️ Publishable Keys (`pk_...`) are NOT supported:** When creating an "App" on Pollinations, it generates an App / Publishable Key (`pk_...`). These are intended strictly for client-side browser payment widgets (*Pollinations Pay*). Passing a `pk_` key to Home Assistant will cause Pollinations to reject requests with `HTTP 401 Unauthorized`. Always use a **Secret Key (`sk_`)** or leave the field empty for the free tier.
 
 </details>

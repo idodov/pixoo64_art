@@ -19,7 +19,8 @@ class PixooLyricsSyncNumber(RestoreNumber):
         self._attr_native_step = 0.5
         
         self._attr_native_value = float(self.hub.ui_state.get(self.key, -2.0))
-        self.hub.ui_state[self.key] = self._attr_native_value
+        if self.key not in self.hub.ui_state:
+            self.hub.ui_state[self.key] = self._attr_native_value
 
     @property
     def device_info(self):
@@ -36,8 +37,8 @@ class PixooLyricsSyncNumber(RestoreNumber):
         last_data = await self.async_get_last_number_data()
         if last_data is not None and last_data.native_value is not None:
             self._attr_native_value = float(last_data.native_value)
-            self.hub.ui_state[self.key] = self._attr_native_value
-            self.hub._apply_logic_matrix()
+        self.async_write_ha_state()
+        self.hub.mark_entity_restored(self.key, self._attr_native_value)
 
     async def async_set_native_value(self, value: float):
         self._attr_native_value = float(value)

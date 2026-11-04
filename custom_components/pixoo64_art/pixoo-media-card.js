@@ -107,6 +107,23 @@ function isPixooStatusSensor(entityId, states) {
   return lower.includes('pixoo64_status') || (lower.includes('pixoo') && lower.includes('status'));
 }
 
+function isCastReceiver() {
+  try {
+    const ua = (typeof navigator !== 'undefined' && navigator && navigator.userAgent) || '';
+    if (/CrKey|Chromecast|GoogleTV/i.test(ua)) return true;
+    if (typeof window !== 'undefined' && window.location) {
+      const h = window.location.hostname || '';
+      const href = window.location.href || '';
+      if (h.includes('cast.home-assistant.io') || href.includes('cast.home-assistant.io') || href.includes('cast=1')) return true;
+    }
+    if (typeof document !== 'undefined') {
+      if (document.querySelector('hc-main, hc-lovelace, cast-manager')) return true;
+    }
+    if (typeof window !== 'undefined' && (window.castReceiverManager || window.__onGCastApiAvailable || window.isCast)) return true;
+  } catch (e) {}
+  return false;
+}
+
 class PixooMediaCardEditor extends HTMLElement {
   set hass(h) {
     this._hass = h;
@@ -2037,10 +2054,26 @@ class PixooMediaCard extends HTMLElement {
     if (sState) {
       const img = this.shadowRoot.getElementById('artwork');
       const isValidUrl = (u) => typeof u === 'string' && u.length > 0 && !u.startsWith('cache://') && u !== 'Fallback Image' && u !== 'TV Icon' && (u.startsWith('/') || u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:'));
+      const isSecureUrl = (u) => typeof u === 'string' && (u.startsWith('https://') || u.startsWith('data:'));
+      const isCast = isCastReceiver();
+      const isForceAi = Boolean(
+        sA.active_mode === 'Force AI' ||
+        sA.configured_mode === 'Force AI' ||
+        (typeof sA.image_source === 'string' && sA.image_source.startsWith('AI')) ||
+        (this._hass && this._hass.states['select.dining_pixoo64_media_display_pixoo64_display_mode']?.state === 'Force AI') ||
+        isAiGenerating
+      );
+
       const rawImg = Array.isArray(sA.image_url) ? sA.image_url[0] : sA.image_url;
       const sTitle = (sA.media_title || '').toLowerCase().trim();
       const mTitle = (mA.media_title || '').toLowerCase().trim();
       const sameTrack = !sTitle || !mTitle || sTitle === mTitle || mTitle.includes(sTitle) || sTitle.includes(mTitle);
+
+      const currentWledColors = (Array.isArray(sA.wled_colors) && sA.wled_colors.length >= 3)
+        ? sA.wled_colors
+        : [sA.color1 || '#8c553b', sA.color2 || '#00ffcc', sA.color3 || '#38bdf8'];
+      const fallbackSvg = generateFallbackSvg(sA.media_title || mA.media_title, sA.artist || mA.media_artist, currentWledColors);
+
       const validLive = (sameTrack && isValidUrl(sA.live_display_url)) ? sA.live_display_url : null;
       const validRemote = (sameTrack && isValidUrl(sA.original_image_url) && sA.original_image_url.startsWith('https://'))
         ? sA.original_image_url
@@ -2050,10 +2083,48 @@ class PixooMediaCard extends HTMLElement {
       const validRaw = (sameTrack && isValidUrl(rawImg) && !rawImg.includes('/api/media_player_proxy/')) ? rawImg : null;
       const validEntityPic = (!isAiGenerating && isValidUrl(mA.entity_picture)) ? mA.entity_picture : null;
       const isMediaPlaying = (isPlay || sA.chart_active === true || isAiGenerating) && Boolean(ttl || sA.chart_active || isAiGenerating);
-      const live = isMediaPlaying ? (validLive || validRemote || validEntityPic || validRaw || DEFAULT_PREVIEW_SVG) : DEFAULT_PREVIEW_SVG;
+
+      let targetArtwork = null;
+      if (isMediaPlaying) {
+        if (isCast) {
+          // On Chromecast / Cast receiver:
+          // 1. In Force AI mode or displaying an AI image, fall back to the SVG screen
+          // 2. Only allow files secured with an HTTPS URL; otherwise fall back to the SVG screen
+          if (isForceAi) {
+            targetArtwork = fallbackSvg;
+          } else if (validRemote && isSecureUrl(validRemote)) {
+            targetArtwork = validRemote;
+          } else if (validEntityPic && isSecureUrl(validEntityPic)) {
+            targetArtwork = validEntityPic;
+          } else if (validRaw && isSecureUrl(validRaw)) {
+            targetArtwork = validRaw;
+          } else {
+            targetArtwork = fallbackSvg;
+          }
+        } else {
+          // Normal mode (desktop, mobile, tablet):
+          if (isForceAi) {
+            targetArtwork = validLive || fallbackSvg;
+          } else {
+            const rawCandidate = validLive || validRemote || validEntityPic || validRaw;
+            if (rawCandidate) {
+              const isHttpsPage = typeof window !== 'undefined' && window.location && window.location.protocol === 'https:';
+              if (isHttpsPage && !isSecureUrl(rawCandidate) && !rawCandidate.startsWith('/')) {
+                targetArtwork = fallbackSvg;
+              } else {
+                targetArtwork = rawCandidate;
+              }
+            } else {
+              targetArtwork = fallbackSvg;
+            }
+          }
+        }
+      }
+
+      const live = isMediaPlaying ? (targetArtwork || fallbackSvg) : DEFAULT_PREVIEW_SVG;
 
       if (live && this._lastLiveImage !== live && img) {
-        if (!isAiGenerating || sA.image_source === 'AI' || validLive) {
+        if (!isAiGenerating || sA.image_source === 'AI' || validLive || isCast) {
           this._lastLiveImage = live;
           
           let freshSrc = live;
@@ -2066,11 +2137,13 @@ class PixooMediaCard extends HTMLElement {
             
           img.src = freshSrc;
 
-          const currentWledColors = (Array.isArray(sA.wled_colors) && sA.wled_colors.length >= 3)
-            ? sA.wled_colors
-            : [sA.color1 || '#8c553b', sA.color2 || '#00ffcc', sA.color3 || '#38bdf8'];
-
           img.onerror = () => {
+            if (isForceAi || isCast) {
+              img.onerror = null;
+              img.src = fallbackSvg;
+              return;
+            }
+
             const fallbackCandidate = (validRemote && img.src !== validRemote && !img.src.endsWith(validRemote))
               ? validRemote
               : (validRaw && img.src !== validRaw && !img.src.endsWith(validRaw))
@@ -2079,26 +2152,26 @@ class PixooMediaCard extends HTMLElement {
                   ? validEntityPic
                   : null;
 
-            if (fallbackCandidate) {
+            if (fallbackCandidate && (!isCast || isSecureUrl(fallbackCandidate))) {
               img.onerror = () => {
                 const secondFallback = (validEntityPic && img.src !== validEntityPic && !img.src.endsWith(validEntityPic))
                   ? validEntityPic
                   : null;
-                if (secondFallback) {
+                if (secondFallback && (!isCast || isSecureUrl(secondFallback))) {
                   img.onerror = () => {
                     img.onerror = null;
-                    img.src = generateFallbackSvg(sA.media_title || mA.media_title, sA.artist || mA.media_artist, currentWledColors);
+                    img.src = fallbackSvg;
                   };
                   img.src = secondFallback;
                 } else {
                   img.onerror = null;
-                  img.src = generateFallbackSvg(sA.media_title || mA.media_title, sA.artist || mA.media_artist, currentWledColors);
+                  img.src = fallbackSvg;
                 }
               };
               img.src = fallbackCandidate;
             } else {
               img.onerror = null;
-              img.src = generateFallbackSvg(sA.media_title || mA.media_title, sA.artist || mA.media_artist, currentWledColors);
+              img.src = fallbackSvg;
             }
           };
         }

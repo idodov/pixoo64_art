@@ -47,7 +47,8 @@ class PixooRestoreSelect(SelectEntity, RestoreEntity):
         if is_config:
             self._attr_entity_category = EntityCategory.CONFIG
 
-        self.hub.ui_state[self.key] = self._attr_current_option
+        if self.key not in self.hub.ui_state:
+            self.hub.ui_state[self.key] = self._attr_current_option
         if hasattr(self.hub, "select_entities"):
             self.hub.select_entities[self.key] = self
 
@@ -87,8 +88,8 @@ class PixooRestoreSelect(SelectEntity, RestoreEntity):
             self._attr_current_option = last_state.state
         else:
             self._attr_current_option = self.options[0]
-        self.hub.ui_state[self.key] = self._attr_current_option
-        self.hub._apply_logic_matrix()
+        self.async_write_ha_state()
+        self.hub.mark_entity_restored(self.key, self._attr_current_option)
 
     async def async_select_option(self, option: str):
         if option in self.options:

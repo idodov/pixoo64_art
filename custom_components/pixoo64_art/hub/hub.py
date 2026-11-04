@@ -36,6 +36,14 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
         self._current_live_gif_url, self.ui_state, self.sensor, self.analytics_sensor, self.select_entities = None, {}, None, None, {}
         self.config, self._unsub_listeners, self._image_lock = Config(entry), [], asyncio.Lock()
         self._active_song_key = self._prefetched_media = None
+        self._pending_restore_entities = {
+            "display_mode", "volume_osd", "pause_timeout", "image_filter",
+            "text_position", "overlay_info", "overlay_position", "overlay_align",
+            "crop_mode", "master_control", "progress_bar", "full_control",
+            "text_background", "artwork_race_mode", "lyrics_sync",
+        }
+        self._all_entities_restored = asyncio.Event()
+        self._startup_completed = False
         self.select_index = self.last_valid_index = 0
         self.device_brightness, self.device_screen_on, self.ai_generating, self.ai_status, self.chart_active = 100, True, False, "Idle", False
         self.pollen_balance = self.pollen_tier = self.pollen_paid = None
@@ -191,8 +199,17 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
         self._unsub_listeners.append(async_track_time_interval(self.hass, _periodic_channel_poll, timedelta(seconds=15)))
 
         async def _delayed_startup():
-            delay = 0.5 if getattr(self.hass, "is_running", True) else 4.0
-            await asyncio.sleep(delay)
+            try:
+                await asyncio.wait_for(self._all_entities_restored.wait(), timeout=2.5)
+            except asyncio.TimeoutError:
+                _LOGGER.debug(
+                    "Timed out waiting for restore entities (%s pending); proceeding with current state",
+                    self._pending_restore_entities,
+                )
+            await asyncio.sleep(0.1)
+            self._apply_logic_matrix()
+            self._startup_completed = True
+
             state = self.hass.states.get(self.media_player)
             if state and (self._is_player_active(state) or state.state == "paused"):
                 self._active_song_key = None
@@ -235,6 +252,13 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
     async def _handle_media_change(self, event=None) -> None:
         if self.notification_manager.is_active or not self.ui_state.get("master_control", True):
             return
+        if not getattr(self, "_startup_completed", False):
+            try:
+                ev = getattr(self, "_all_entities_restored", None)
+                if ev:
+                    await asyncio.wait_for(ev.wait(), timeout=1.5)
+            except (asyncio.TimeoutError, AttributeError):
+                pass
         live_state = self.hass.states.get(self.media_player)
         event_data = getattr(event, "data", {}) if event else {}
         new_state = live_state or event_data.get("new_state")
@@ -520,11 +544,11 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
 
                 if not (early_slider_match or early_vinyl_match or early_cassette_match or is_spotify_slider or is_artist_slider):
                     was_anim = getattr(self, "_is_animation_active", False)
-                    needs_wake = not self.is_art_visible or not self.device_screen_on
                     if not self.device_screen_on:
                         await self.pixoo_device.send_command({"Command": "Channel/OnOffScreen", "OnOff": 1}, force=True)
-                    if needs_wake or was_anim:
-                        await self.pixoo_device.send_command({"Command": "Channel/SetIndex", "SelectIndex": 4}, force=True)
+                        self.device_screen_on = True
+                    await self.pixoo_device.send_command({"Command": "Channel/SetIndex", "SelectIndex": 4}, force=True)
+                    self.select_index = 4
                     await self.pixoo_device.send_command({"Command": "Draw/ResetHttpGifId"}, force=True)
                     await asyncio.sleep(0.05)
                     await self.pixoo_device.send_command({

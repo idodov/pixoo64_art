@@ -43,7 +43,8 @@ class PixooRestoreSwitch(SwitchEntity, RestoreEntity):
         if is_config:
             self._attr_entity_category = EntityCategory.CONFIG
 
-        self.hub.ui_state[self.key] = self._attr_is_on
+        if self.key not in self.hub.ui_state:
+            self.hub.ui_state[self.key] = self._attr_is_on
 
     @property
     def device_info(self):
@@ -60,10 +61,10 @@ class PixooRestoreSwitch(SwitchEntity, RestoreEntity):
         last_state = await self.async_get_last_state()
 
         if last_state is not None:
-            self._attr_is_on = last_state.state == "on"
+            self._attr_is_on = (last_state.state == "on")
 
-        self.hub.ui_state[self.key] = self._attr_is_on
-        self.hub._apply_logic_matrix()
+        self.async_write_ha_state()
+        self.hub.mark_entity_restored(self.key, self._attr_is_on)
 
     async def async_turn_on(self, **kwargs):
         """Turn the entity on."""

@@ -443,6 +443,28 @@ class HubStateAndConfigMixin:
             return bool((title and str(title).strip()) or ("tv" in source or "tv" in app or "hdmi" in source))
         return False
 
+    def mark_entity_restored(self, key: str, value: Any) -> None:
+        """Process entity state restoration from HA storage."""
+        old_val = self.ui_state.get(key)
+        self.ui_state[key] = value
+        self._apply_logic_matrix()
+
+        pending = getattr(self, "_pending_restore_entities", None)
+        if pending is not None:
+            pending.discard(key)
+            if not pending:
+                ev = getattr(self, "_all_entities_restored", None)
+                if ev and not ev.is_set():
+                    ev.set()
+
+        # If startup already finished and restored value differs from what was rendered:
+        if getattr(self, "_startup_completed", False) and old_val != value:
+            _LOGGER.info(
+                "Restored entity setting %s=%s differed from initial %s; applying",
+                key, value, old_val
+            )
+            self.hass.async_create_task(self.async_ui_update(key, value))
+
     async def async_ui_update(self, key: str, value) -> None:
         self.ui_state[key] = value
         if key == "chart_timeframe":

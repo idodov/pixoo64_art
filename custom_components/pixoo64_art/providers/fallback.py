@@ -495,8 +495,10 @@ class FallbackService(BaseProvider):
                 self.hub._update_prefetch_sensor_state()
             return None
 
-        # Send exactly ONE request per track to avoid triggering rate limits
+        free_url = self.ai_provider.format_free_prompt_url(media_data.artist, media_data.title)
         urls_to_try = [ai_url]
+        if free_url and free_url != ai_url:
+            urls_to_try.append(free_url)
 
         last_err = None
         try:

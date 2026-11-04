@@ -63,7 +63,7 @@
       },
       "apis": {
         "title": "Streaming Services & AI API Keys",
-        "description": "Configure optional API credentials. A Pollinations AI Secret Key is strictly required to enable and generate custom AI album art.",
+        "description": "Configure optional streaming and AI credentials. Generative AI works free out of the box via Pollinations (no key required). An optional Secret Key (sk_...) can be provided for zero rate limits and premium models.",
         "data": {
           "spotify_client_id": "Spotify Client ID",
           "spotify_client_secret": "Spotify Client Secret",
@@ -85,13 +85,14 @@
           "discogs_token": "Personal token from [Discogs Developer Settings](https://www.discogs.com/settings/developers) for physical releases.",
           "artwork_race_mode": "Races the local media player proxy and fast streaming APIs in parallel, taking whichever finishes first to eliminate delays.",
           "playlist_prefetch_range": "Pre-fetches surrounding queue tracks (±5 or ±10 songs) into RAM. Requires active streaming keys.",
-          "pollinations_key": "⚠️ MANDATORY FOR AI ART: Obtain your secret API key from [Pollinations.ai](https://pollinations.ai). Strictly required for generating AI art. Leave blank if not using AI.",
+          "pollinations_key": "Optional. Secret Key starting with 'sk_' from https://enter.pollinations.ai/keys. Leave empty to use the free tier (1 image every 45s). Type 'clear' to remove.",
           "ai_model": "Select the generative image model used when 'Force AI Art' is switched on."
         }
       }
     },
     "error": {
       "cannot_connect": "Could not connect to Pixoo64. Please check the IP address and power.",
+      "pollinations_publishable_key": "Publishable keys ('pk_...') are for client-side web apps only and cannot authenticate Home Assistant. Use a secret key starting with 'sk_' from https://enter.pollinations.ai/keys, or clear this field to use the free tier.",
       "spotify_id_required": "Spotify Client Secret was provided without a Client ID.",
       "spotify_secret_required": "Spotify Client ID was provided without a Client Secret.",
       "tidal_id_required": "TIDAL Client Secret was provided without a Client ID.",
@@ -194,14 +195,14 @@
           },
           "ai_section": {
             "name": "Generative AI Art (Pollinations.ai)",
-            "description": "Configure conceptual pixel art generation. A Pollinations AI key is strictly required to enable this mode.",
+            "description": "Configure conceptual pixel art generation using Pollinations AI. Works free without a key, or use a Pollinations secret key (sk_...) for higher rate limits and premium models.",
             "data": {
-              "pollinations_key": "Pollinations AI Secret Key",
+              "pollinations_key": "Pollinations AI Secret Key (sk_...)",
               "ai_model": "AI Art Generation Model",
               "reload_ai_models": "Reload AI Engine Models List"
             },
             "data_description": {
-              "pollinations_key": "Get your API key at [Pollinations.ai](https://pollinations.ai). Mandatory for AI art generation. Leave blank to keep existing, or type 'clear' to remove.",
+              "pollinations_key": "Optional. Home Assistant requires a secret key starting with 'sk_' from https://enter.pollinations.ai/keys. Leave empty to use the free tier. Type 'clear' to remove.",
               "ai_model": "Generative model used to create AI album art when 'Force AI Art' is switched on.",
               "reload_ai_models": "Switch ON and click Submit to re-fetch the latest models from the Pollinations API on the spot (without changing your key or closing settings)."
             }
@@ -210,6 +211,7 @@
       }
     },
     "error": {
+      "pollinations_publishable_key": "Publishable keys ('pk_...') are for client-side web apps only and cannot authenticate Home Assistant. Use a secret key starting with 'sk_' from https://enter.pollinations.ai/keys, or clear this field to use the free tier.",
       "spotify_id_required": "Spotify Client Secret was provided without a Client ID.",
       "spotify_secret_required": "Spotify Client ID was provided without a Client Secret.",
       "tidal_id_required": "TIDAL Client Secret was provided without a Client ID.",

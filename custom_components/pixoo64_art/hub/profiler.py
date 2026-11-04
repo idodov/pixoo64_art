@@ -7,7 +7,7 @@ from homeassistant.helpers.event import async_call_later
 
 from ..const import (
     CONF_CHART_SIZE_LIMIT, CONF_CHART_SLIDE_DURATION, CONF_FIRST_DAY_OF_WEEK, CONF_LIGHT_ENTITY,
-    CONF_MAX_CACHED_ALBUMS, CONF_PERSISTENT_CACHE_ENABLED, CONF_PLAYLIST_PREFETCH, CONF_WLED_IP,
+    CONF_MAX_CACHED_ALBUMS, CONF_MEDIA_PLAYER, CONF_PERSISTENT_CACHE_ENABLED, CONF_PLAYLIST_PREFETCH, CONF_WLED_IP,
     DEFAULT_CHART_SIZE_LIMIT, DEFAULT_CHART_SLIDE_DURATION, DEFAULT_FIRST_DAY_OF_WEEK,
     DEFAULT_MAX_CACHED_ALBUMS, DEFAULT_PERSISTENT_CACHE_ENABLED,
 )
@@ -58,6 +58,8 @@ class HubStateAndConfigMixin:
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        from ..providers.ai import get_model_cost
+        cost, cost_display = get_model_cost(getattr(self.config, "ai_fallback", "flux"))
         attrs = dict(self.ui_state)
         attrs.update({
             "media_player": self.media_player, "pixoo64_channel": self.last_valid_index,
@@ -65,6 +67,10 @@ class HubStateAndConfigMixin:
             "current_track_plays": getattr(self.sensor, "_attr_extra_state_attributes", {}).get("current_track_plays", 0) if self.sensor else 0,
             "current_track_rank": getattr(self.sensor, "_attr_extra_state_attributes", {}).get("current_track_rank", None) if self.sensor else None,
             "ai_generating": getattr(self, "ai_generating", False), "ai_status": getattr(self, "ai_status", "Idle"),
+            "ai_progress": getattr(self, "ai_progress", None), "ai_last_error": getattr(self, "ai_last_error", None),
+            "ai_model": getattr(self.config, "ai_fallback", "flux"),
+            "ai_model_cost": cost,
+            "ai_model_cost_display": cost_display,
             "chart_active": getattr(self, "chart_active", False),
             "chart_leaderboard": getattr(self.chart_controller, "last_leaderboard", []) if hasattr(self, "chart_controller") else [],
             "chart_metadata": getattr(self, "chart_metadata", {}),
@@ -79,11 +85,16 @@ class HubStateAndConfigMixin:
         return attrs
 
     def _consume_prefetched_media(self, is_force_ai: bool) -> Tuple[bool, Optional[dict]]:
-        if getattr(self, "_prefetched_media", None) and not is_force_ai:
+        if getattr(self, "_prefetched_media", None):
             p_art, p_tit = str(self._prefetched_media.artist or "").strip().lower(), str(self._prefetched_media.title or "").strip().lower()
             c_art, c_tit = str(self.media_data.artist or "").strip().lower(), str(self.media_data.title or "").strip().lower()
             processed_data = getattr(self._prefetched_media, "processed_data", None)
-            if p_art and c_art and p_art == c_art and p_tit and c_tit and (p_tit == c_tit or p_tit.startswith(c_tit) or c_tit.startswith(p_tit)) and processed_data:
+            # If Force AI is requested, only consume if prefetched media actually contains AI generated art
+            if is_force_ai and getattr(self._prefetched_media, "pic_source", None) != "AI":
+                return False, None
+            art_matches = (p_art == c_art or p_art in c_art or c_art in p_art)
+            tit_matches = (p_tit == c_tit or p_tit.startswith(c_tit) or c_tit.startswith(p_tit) or p_tit in c_tit or c_tit in p_tit)
+            if art_matches and tit_matches and processed_data:
                 for attr in ("pic_url", "original_image_url", "pic_source", "live_display_url", "vinyl_frames_b64", "cassette_frames_b64", "slider_frames_b64", "slider_album_urls", "slider_frames"):
                     setattr(self.media_data, attr, getattr(self._prefetched_media, attr, [] if "frames_" in attr or "urls" in attr else None))
                 self._prefetched_media = None
@@ -97,6 +108,8 @@ class HubStateAndConfigMixin:
         if not self.sensor:
             return
         color1, color2, color3 = processed_data.get("color1"), processed_data.get("color2"), processed_data.get("color3")
+        from ..providers.ai import get_model_cost
+        cost, cost_display = get_model_cost(getattr(self.config, "ai_fallback", "flux"))
         sensor_attrs = {
             "artist": self.media_data.artist, "media_title": self.media_data.title, "media_player": self.media_player,
             "current_track_plays": int(track_plays or 0), "current_track_rank": track_rank,
@@ -117,7 +130,14 @@ class HubStateAndConfigMixin:
             "pixoo64_channel": self.last_valid_index, "brightness": self.device_brightness, "screen_power": "On" if self.device_screen_on else "Off",
             "prefetch_status": self.prefetch_status, "prefetch_next_artist": self.prefetch_next_artist, "prefetch_next_title": self.prefetch_next_title,
             "slider_status": self.spotify_slider_status, "slider_frames": self.spotify_slider_frames, "slider_last_error": self.spotify_slider_last_error,
-            "ai_generating": False, "ai_status": "Idle", "chart_active": getattr(self, "chart_active", False),
+            "ai_generating": False, "ai_status": "Idle", "ai_progress": None, "ai_last_error": getattr(self, "ai_last_error", None),
+            "ai_model": getattr(self.config, "ai_fallback", "flux"),
+            "ai_model_cost": cost,
+            "ai_model_cost_display": cost_display,
+            "chart_active": getattr(self, "chart_active", False),
+            "pollen_balance": getattr(self, "pollen_balance", None),
+            "pollen_tier": getattr(self, "pollen_tier", None),
+            "pollen_paid": getattr(self, "pollen_paid", None),
             "chart_leaderboard": getattr(self.chart_controller, "last_leaderboard", []) if hasattr(self, "chart_controller") else [],
             "chart_metadata": getattr(self, "chart_metadata", {}),
             "has_temperature_sensor": bool(getattr(self.config, "temperature_sensor", None)),
@@ -155,14 +175,78 @@ class HubStateAndConfigMixin:
             attrs["screen_power"] = "On" if self.device_screen_on else "Off"
             self.sensor.update_state(self.sensor._attr_native_value, attrs)
 
-    def set_ai_generating(self, is_generating: bool, status: str = "Idle") -> None:
-        self.ai_generating, self.ai_status = is_generating, status
+    def set_ai_generating(
+        self,
+        is_generating: bool,
+        status: str = "Idle",
+        progress: Optional[str] = None,
+        last_error: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> None:
+        self.ai_generating = is_generating
+        self.ai_status = status
+        if last_error is not None:
+            self.ai_last_error = last_error
+        elif is_generating:
+            self.ai_last_error = None
+        if progress is not None:
+            self.ai_progress = progress
+        elif not is_generating:
+            self.ai_progress = None
+
         if self.sensor:
+            from ..providers.ai import get_model_cost
+            active_model = model or getattr(self.config, "ai_fallback", "flux")
+            cost, cost_display = get_model_cost(active_model)
             attrs = dict(self.sensor._attr_extra_state_attributes or {})
-            attrs["ai_generating"], attrs["ai_status"] = self.ai_generating, self.ai_status
+            attrs["ai_generating"] = self.ai_generating
+            attrs["ai_status"] = self.ai_status
+            attrs["ai_progress"] = getattr(self, "ai_progress", None)
+            attrs["ai_last_error"] = getattr(self, "ai_last_error", None)
+            attrs["ai_model"] = active_model
+            attrs["ai_model_cost"] = cost
+            attrs["ai_model_cost_display"] = cost_display
+            if getattr(self, "pollen_balance", None) is not None:
+                attrs["pollen_balance"] = self.pollen_balance
+                attrs["pollen_tier"] = getattr(self, "pollen_tier", None)
+                attrs["pollen_paid"] = getattr(self, "pollen_paid", None)
             if is_generating and (getattr(self.config, "force_ai", False) or self.ui_state.get("display_mode") == "Force AI"):
                 attrs["active_mode"] = attrs["configured_mode"] = "Force AI"
             self.sensor.update_state(self.sensor._attr_native_value, attrs)
+
+        if not is_generating and getattr(self, "hass", None) and hasattr(self, "async_refresh_pollen_balance"):
+            self.hass.async_create_task(self.async_refresh_pollen_balance())
+
+    async def async_refresh_pollen_balance(self) -> None:
+        """Fetch and update Pollen balance for secret key."""
+        key = str(getattr(self.config, "pollinations", "") or getattr(self.config, "pollinations_key", "") or "").strip()
+        from ..providers.ai import async_get_pollen_balance, get_model_cost, async_fetch_pollinations_models
+        try:
+            await async_fetch_pollinations_models(self.websession, key)
+        except Exception:
+            pass
+        cost, cost_display = get_model_cost(getattr(self.config, "ai_fallback", "flux"))
+        if self.sensor:
+            attrs = dict(self.sensor._attr_extra_state_attributes or {})
+            attrs["ai_model_cost"] = cost
+            attrs["ai_model_cost_display"] = cost_display
+            self.sensor.update_state(self.sensor._attr_native_value, attrs)
+        if not key.startswith("sk_"):
+            return
+        data = await async_get_pollen_balance(self.websession, key)
+        if data and "balance" in data:
+            self.pollen_balance = round(float(data["balance"]), 2)
+            acct = data.get("accountBalance") or {}
+            self.pollen_tier = round(float(acct.get("tier", 0)), 2)
+            self.pollen_paid = round(float(acct.get("paid", 0)), 2)
+            if self.sensor:
+                attrs = dict(self.sensor._attr_extra_state_attributes or {})
+                attrs["pollen_balance"] = self.pollen_balance
+                attrs["pollen_tier"] = self.pollen_tier
+                attrs["pollen_paid"] = self.pollen_paid
+                attrs["ai_model_cost"] = cost
+                attrs["ai_model_cost_display"] = cost_display
+                self.sensor.update_state(self.sensor._attr_native_value, attrs)
 
     async def _sync_hardware_state_from_device(self, allow_channel_update: bool = True) -> None:
         try:
@@ -251,9 +335,8 @@ class HubStateAndConfigMixin:
 
     @property
     def is_ai_available(self) -> bool:
-        options, data = self.entry.options, self.entry.data
-        key = options.get("pollinations_key") or data.get("pollinations_key") or getattr(self.config, "pollinations", "")
-        return bool(key and isinstance(key, str) and len(str(key).strip()) > 5)
+        """AI generation is always available via Pollinations (free tier or secret key)."""
+        return True
 
     @property
     def is_spotify_available(self) -> bool:
@@ -264,6 +347,8 @@ class HubStateAndConfigMixin:
 
     def _apply_logic_matrix(self) -> None:
         options, data = self.entry.options, self.entry.data
+        self.media_player = options.get(CONF_MEDIA_PLAYER, data.get(CONF_MEDIA_PLAYER, getattr(self, "media_player", "media_player.living_room")))
+        self.config.media_player = self.media_player
         self.config.pollinations = options.get("pollinations_key", data.get("pollinations_key", ""))
         self.config.ai_fallback = options.get("ai_model", data.get("ai_model", "black-forest-labs/flux.1-schnell"))
         self.config.spotify_client_id = options.get("spotify_client_id", data.get("spotify_client_id", ""))
@@ -329,6 +414,10 @@ class HubStateAndConfigMixin:
         self.config.spotify_slide = ("slider" in m and "artist" not in m) and self.is_spotify_available
         self.config.artist_slide = "artist slide" in m or "artist gallery" in m
         self.config.force_ai = (display_mode == "Force AI" or bool(self.ui_state.get("force_ai", False))) and self.is_ai_available
+        if self.config.force_ai:
+            self.config.crop_mode = "No Crop"
+            self.config.crop_borders = False
+            self.config.crop_extra = False
         self.cached_static_items, self.last_text_payload_hash = [], None
 
     def _fetch_external_temperature(self) -> None:

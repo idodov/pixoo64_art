@@ -3,6 +3,7 @@
 import logging
 from typing import TYPE_CHECKING, Optional
 import urllib.parse
+import aiohttp
 
 from .base import BaseProvider
 
@@ -12,19 +13,94 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
+POLLINATIONS_CLIENT_ID = "pk_BGuQDoVvDvRQ4k8T"
+
+MODEL_PRICING_MAP: dict[str, dict] = {
+    "black-forest-labs/flux.1-schnell": {"cost": 0.0, "cost_display": "Free"},
+    "flux": {"cost": 0.0, "cost_display": "Free"},
+    "turbo": {"cost": 0.0, "cost_display": "Free"},
+    "flux-realism": {"cost": 0.0, "cost_display": "Free"},
+    "community/scriptsnsenses-sys/flux-2-dev-free": {"cost": 0.0, "cost_display": "Free"},
+    "black-forest-labs/flux.1-dev": {"cost": 0.003125, "cost_display": "0.003125"},
+    "recraft/recraft-v4.1-vector": {"cost": 0.00625, "cost_display": "0.00625"},
+}
+
+
+def get_model_cost(model_name: Optional[str]) -> tuple[float, str]:
+    """Return (cost, cost_display) for a model name with 20% developer fee included."""
+    if not model_name:
+        return 0.0, "Free"
+    m_clean = str(model_name).strip().lower()
+    if m_clean in MODEL_PRICING_MAP:
+        info = MODEL_PRICING_MAP[m_clean]
+        return float(info["cost"]), str(info["cost_display"])
+    for k, v in MODEL_PRICING_MAP.items():
+        if k.lower() == m_clean or k.split("/")[-1].lower() == m_clean:
+            return float(v["cost"]), str(v["cost_display"])
+    if any(s in m_clean for s in ("free", "schnell", "turbo", "lightning")):
+        return 0.0, "Free"
+    return 0.0, "Free"
+
+
+async def async_fetch_pollinations_models(session: aiohttp.ClientSession, api_key: str = None) -> list:
+    """Fetch available AI models dynamically and update pricing lookup table."""
+    fallback_models = [
+        {"id": "black-forest-labs/flux.1-schnell", "label": "FLUX.1 Schnell (Black Forest Labs) | 🪙 Free", "cost": 0.0},
+        {"id": "flux", "label": "FLUX (Classic) | 🪙 Free", "cost": 0.0},
+        {"id": "turbo", "label": "Turbo / Lightning (Fast) | 🪙 Free", "cost": 0.0},
+        {"id": "flux-realism", "label": "FLUX Realism | 🪙 Free", "cost": 0.0},
+        {"id": "recraft/recraft-v4.1-vector", "label": "Recraft V4.1 Vector | 🪙 0.00625", "cost": 0.00625},
+        {"id": "black-forest-labs/flux.1-dev", "label": "FLUX.1 Dev | 🪙 0.003125", "cost": 0.003125},
+    ]
+    try:
+        clean_key = str(api_key or "").strip()
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        if clean_key.startswith("sk_"):
+            headers["Authorization"] = f"Bearer {clean_key}"
+
+        async def _fetch(hdrs):
+            async with session.get("https://gen.pollinations.ai/models", headers=hdrs, timeout=8) as response:
+                if response.status == 200:
+                    return await response.json(content_type=None)
+                return None
+
+        data = await _fetch(headers)
+        if data is None and "Authorization" in headers:
+            data = await _fetch({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+
+        if data and isinstance(data, list):
+            parsed_models = []
+            for model in data:
+                if not isinstance(model, dict):
+                    continue
+                if model.get("category") == "image" or "image" in model.get("output_modalities", []):
+                    model_id = model.get("name")
+                    if not model_id:
+                        continue
+                    title = model.get("title", model_id)
+                    publisher = model.get("publisher", "Unknown")
+                    try:
+                        base_cost = float(model.get("pricing", {}).get("completionImageTokens", 0))
+                    except (ValueError, TypeError):
+                        base_cost = 0.0
+                    cost = round(base_cost * 1.25, 8)
+                    cost_display = "Free" if cost == 0 else f"{cost:.8f}".rstrip("0").rstrip(".")
+                    MODEL_PRICING_MAP[model_id.lower()] = {"cost": cost, "cost_display": cost_display}
+                    parsed_models.append({"id": model_id, "label": f"{title} ({publisher}) | 🪙 {cost_display}", "cost": cost})
+            parsed_models.sort(key=lambda x: x["cost"])
+            return parsed_models if parsed_models else fallback_models
+    except Exception as e:
+        _LOGGER.warning("Failed to fetch dynamic AI models: %s", e)
+    return fallback_models
+
+
 class AiArtProvider(BaseProvider):
     """Generates AI artwork prompts and Pollinations.ai URLs."""
 
     def __init__(self, config: "Config") -> None:
         self.config = config
 
-    def format_prompt_url(self, artist: Optional[str], title: str) -> Optional[str]:
-        """Format a deterministic Pollinations AI URL for the given artist and title."""
-        api_key = getattr(self.config, "pollinations", "")
-        if not api_key or not isinstance(api_key, str) or len(api_key.strip()) <= 5:
-            _LOGGER.warning("Skipping AI Art generation: 'pollinations_key' is missing or invalid.")
-            return None
-
+    def _get_prompt_and_seed(self, artist: Optional[str], title: str) -> tuple[str, int, str]:
         artist_name = artist if artist else "Music"
         clean_artist = artist_name.replace("/", " ").replace("\\", " ").strip()
         clean_title = title.replace("/", " ").replace("\\", " ").strip()
@@ -63,8 +139,57 @@ class AiArtProvider(BaseProvider):
             model = "black-forest-labs/flux.1-schnell"
         elif user_model == "vector":
             model = "recraft/recraft-v4.1-vector"
+        elif "/" not in user_model:
+            # Resolve bare model name to publisher/model canonical ID if known
+            canonical = None
+            for full_id in MODEL_PRICING_MAP:
+                if full_id.split("/")[-1].lower() == user_model:
+                    canonical = full_id
+                    break
+            model = canonical or user_model
         else:
             model = user_model
 
-        url_params = f"?model={model}&width=512&height=512&seed={seed}&nologo=true&key={api_key.strip()}"
-        return f"https://gen.pollinations.ai/image/{encoded_prompt}{url_params}"
+        return encoded_prompt, seed, model
+
+    def format_free_prompt_url(self, artist: Optional[str], title: str) -> Optional[str]:
+        """Format a free Pollinations AI URL (image.pollinations.ai) without requiring an API key."""
+        encoded_prompt, seed, model = self._get_prompt_and_seed(artist, title)
+        free_model = "turbo" if any(k in str(model).lower() for k in ("turbo", "lightning")) else "flux"
+        return f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=512&height=512&model={free_model}&seed={seed}&nologo=true"
+
+    def format_prompt_url(self, artist: Optional[str], title: str) -> Optional[str]:
+        """Format a deterministic Pollinations AI URL for the given artist and title."""
+        api_key = str(getattr(self.config, "pollinations", "") or getattr(self.config, "pollinations_key", "") or "").strip()
+        encoded_prompt, seed, model = self._get_prompt_and_seed(artist, title)
+
+        if api_key.startswith("sk_"):
+            # Authenticated via Bearer token in HTTP headers and query param key
+            url_params = f"?model={model}&width=512&height=512&seed={seed}&nologo=true&key={api_key}"
+            return f"https://gen.pollinations.ai/image/{encoded_prompt}{url_params}"
+
+        if api_key.startswith("pk_"):
+            _LOGGER.debug(
+                "Pollinations key starts with 'pk_'. Server calls require a secret key ('sk_'). Using free tier (image.pollinations.ai)."
+            )
+
+        return self.format_free_prompt_url(artist, title)
+
+
+async def async_get_pollen_balance(session: aiohttp.ClientSession, api_key: str) -> Optional[dict]:
+    """Fetch current Pollen balance from Pollinations API for a secret key."""
+    if not api_key or not api_key.startswith("sk_"):
+        return None
+    try:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "X-Client-Id": POLLINATIONS_CLIENT_ID,
+            "User-Agent": "Pixoo64-HA-Integration",
+        }
+        async with session.get("https://gen.pollinations.ai/account/balance", headers=headers, timeout=5) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data
+    except Exception as err:
+        _LOGGER.debug("Could not fetch Pollinations account balance: %s", err)
+    return None

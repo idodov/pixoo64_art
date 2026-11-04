@@ -31,12 +31,14 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
 
     def __init__(self, hass, entry) -> None:
         self.hass, self.entry = hass, entry
-        self.pixoo_ip, self.media_player = entry.data[CONF_PIXOO_IP], entry.data[CONF_MEDIA_PLAYER]
+        self.pixoo_ip = entry.options.get(CONF_PIXOO_IP) or entry.data.get(CONF_PIXOO_IP)
+        self.media_player = entry.options.get(CONF_MEDIA_PLAYER) or entry.data.get(CONF_MEDIA_PLAYER)
         self._current_live_gif_url, self.ui_state, self.sensor, self.analytics_sensor, self.select_entities = None, {}, None, None, {}
         self.config, self._unsub_listeners, self._image_lock = Config(entry), [], asyncio.Lock()
         self._active_song_key = self._prefetched_media = None
         self.select_index = self.last_valid_index = 0
         self.device_brightness, self.device_screen_on, self.ai_generating, self.ai_status, self.chart_active = 100, True, False, "Idle", False
+        self.pollen_balance = self.pollen_tier = self.pollen_paid = None
 
         self.websession = async_get_clientsession(hass)
         self.storage_manager = PixooStorageManager(self.hass, self.config)
@@ -114,12 +116,17 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
         if period_ent and getattr(period_ent, "hass", None):
             period_ent.async_write_ha_state()
         if self.sensor:
+            from ..providers.ai import get_model_cost
+            cost, cost_display = get_model_cost(getattr(self.config, "ai_fallback", "flux"))
             attrs = dict(self.sensor._attr_extra_state_attributes or {})
             attrs.update({
                 "chart_active": self.chart_active,
                 "chart_leaderboard": self.chart_controller.last_leaderboard,
                 "chart_metadata": getattr(self, "chart_metadata", {}),
                 "has_temperature_sensor": bool(getattr(self.config, "temperature_sensor", None)),
+                "ai_model": getattr(self.config, "ai_fallback", "flux"),
+                "ai_model_cost": cost,
+                "ai_model_cost_display": cost_display,
             })
             live_url = getattr(self.media_data, "live_display_url", None) or self._current_live_gif_url
             if live_url:
@@ -154,6 +161,7 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
         self._apply_logic_matrix()
         await self.chart_controller.async_refresh_periods_and_leaderboard()
         await self.async_update_analytics_sensor()
+        await self.async_refresh_pollen_balance()
         async def _daily_prune(_now=None):
             await self.storage_manager.async_prune(max_masters=getattr(self.config, "max_cached_albums", 1000))
 
@@ -161,13 +169,20 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
             try:
                 if self.osd_mode == "Pause" or not self.device_screen_on:
                     return
+                st = self.hass.states.get(self.media_player)
+                player_is_active = bool(st and self._is_player_active(st))
                 curr_ch = await self.pixoo_device.get_current_channel_index()
                 if curr_ch is not None and 0 <= curr_ch <= 3:
-                    if curr_ch != self.last_valid_index:
-                        self.last_valid_index = self.select_index = curr_ch
-                        self.update_channel_sensor_attribute(curr_ch)
-                    if self.is_art_visible:
-                        self.is_art_visible = False
+                    if player_is_active and self.ui_state.get("master_control", True):
+                        _LOGGER.info("Pixoo64 channel drifted to %s during playback; re-sending current artwork", curr_ch)
+                        self._active_song_key = None
+                        await self.force_update()
+                    else:
+                        if curr_ch != self.last_valid_index:
+                            self.last_valid_index = self.select_index = curr_ch
+                            self.update_channel_sensor_attribute(curr_ch)
+                        if self.is_art_visible:
+                            self.is_art_visible = False
             except Exception as e:
                 _LOGGER.debug("Periodic channel poll note: %s", e)
 
@@ -176,12 +191,13 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
         self._unsub_listeners.append(async_track_time_interval(self.hass, _periodic_channel_poll, timedelta(seconds=15)))
 
         async def _delayed_startup():
-            await asyncio.sleep(4.0)
+            delay = 0.5 if getattr(self.hass, "is_running", True) else 4.0
+            await asyncio.sleep(delay)
             state = self.hass.states.get(self.media_player)
-            if state and self._is_player_active(state):
+            if state and (self._is_player_active(state) or state.state == "paused"):
                 self._active_song_key = None
                 await self.force_update()
-            else:
+            elif not self.ui_state.get("master_control", True):
                 await self.control_light("off")
                 await self.control_wled_light("off")
                 try:
@@ -216,12 +232,13 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
         except Exception:
             pass
 
-    async def _handle_media_change(self, event) -> None:
+    async def _handle_media_change(self, event=None) -> None:
         if self.notification_manager.is_active or not self.ui_state.get("master_control", True):
             return
         live_state = self.hass.states.get(self.media_player)
-        new_state = live_state or event.data.get("new_state")
-        old_state = event.data.get("old_state")
+        event_data = getattr(event, "data", {}) if event else {}
+        new_state = live_state or event_data.get("new_state")
+        old_state = event_data.get("old_state")
         if not new_state:
             return
         if self.chart_active:
@@ -283,16 +300,17 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
                 self._stop_lyrics_scheduler()
             return
 
-        is_resuming_from_pause = bool(self.osd_mode == "Pause" or getattr(self, "_pause_timed_out", False) or (old_state and old_state.state == "paused"))
-        if is_resuming_from_pause and self._is_player_active(new_state):
-            self._pause_timed_out = False
-            self.osd_mode = None
-            self._active_song_key = None
+        if self._is_player_active(new_state):
             self._cleanup_timers(["_pause_timeout_unsub"])
-            if getattr(self, "_current_live_gif_url", None):
-                self.media_data.live_display_url = self._current_live_gif_url
-            if self.sensor:
-                self.update_sensor_callback()
+            is_resuming_from_pause = bool(self.osd_mode == "Pause" or getattr(self, "_pause_timed_out", False) or (old_state and old_state.state == "paused"))
+            if is_resuming_from_pause:
+                self._pause_timed_out = False
+                self.osd_mode = None
+                self._active_song_key = None
+                if getattr(self, "_current_live_gif_url", None):
+                    self.media_data.live_display_url = self._current_live_gif_url
+                if self.sensor:
+                    self.update_sensor_callback()
 
         if not self._is_player_active(new_state):
             if not getattr(self, "_pause_timed_out", False):
@@ -378,6 +396,9 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
         await self.media_data.update(new_state)
         self._fetch_external_temperature()
         if not self.media_data.title and not getattr(self.media_data, "playing_tv", False):
+            if self._is_player_active(new_state):
+                _LOGGER.debug("Pixoo64 media title empty but player is active. Keeping display.")
+                return
             await self._send_off_command(); return
         self.prefetch_status, self.prefetch_next_artist, self.prefetch_next_title, self._current_live_gif_url = "Idle", None, None, None
         self.media_data.live_display_url = None
@@ -405,8 +426,9 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
 
                 current_mode = self.ui_state.get("display_mode", "Standard")
                 current_filter, current_crop = getattr(self.config, "image_filter", "None"), getattr(self.config, "crop_mode", "No Crop")
-                is_force_ai = (current_mode == "Force AI" or getattr(self.config, "force_ai", False)) and getattr(self.config, "pollinations", None) and not getattr(self.media_data, "radio_logo", False) and not getattr(self.media_data, "playing_tv", False)
+                is_force_ai = (current_mode == "Force AI" or getattr(self.config, "force_ai", False)) and not getattr(self.media_data, "radio_logo", False) and not getattr(self.media_data, "playing_tv", False)
                 if is_force_ai:
+                    current_crop = "No Crop"
                     self.set_ai_generating(True, "Generating AI Artwork...")
 
                 has_timing = getattr(self.media_data, "media_duration", 0) > 0 and not getattr(self.media_data, "playing_radio", False) and not getattr(self.media_data, "playing_tv", False)
@@ -421,7 +443,8 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
                 start_time = time.perf_counter()
                 current_album, current_artist, current_pic_url = self.media_data.album, self.media_data.artist, self.media_data.picture
                 can_skip = (
-                    current_mode == getattr(self, "_last_rendered_mode", None) and current_filter == getattr(self, "_last_rendered_filter", None)
+                    not is_force_ai
+                    and current_mode == getattr(self, "_last_rendered_mode", None) and current_filter == getattr(self, "_last_rendered_filter", None)
                     and current_crop == getattr(self, "_last_rendered_crop", None) and current_song_key == getattr(self, "_active_song_key", None)
                     and ((current_pic_url and current_pic_url == getattr(self, "_last_rendered_pic_url", None) and "token=" not in current_pic_url) or (current_album and current_album == getattr(self, "_last_rendered_album", None) and not getattr(self.media_data, "radio_logo", False)))
                     and new_lyrics_found == getattr(self, "lyrics_active_mode", False) and self.is_art_visible and getattr(self.media_data, "pic_source", None) != "Internal"
@@ -522,6 +545,29 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
                 self._active_song_key = current_song_key
                 self._last_rendered_album, self._last_rendered_artist, self._last_rendered_pic_url = current_album, current_artist, self.media_data.picture
                 self.media_data.lyrics_font_color, self.media_data.background_color = font_color, bg_color_str
+
+                if not getattr(self.media_data, "live_display_url", None) and "pil_image" in processed_data and not (is_analog_clock or is_vinyl or is_cassette or is_spotify_slider or is_artist_slider):
+                    album_tag = self.media_data.album if getattr(self.media_data, "album", None) else self.media_data.title
+                    s_key = f"{'ai' if is_force_ai else 'std'}_{self.media_data.artist}_{album_tag}_{current_filter}_{current_crop}"
+                    self._current_live_gif_url = await self.image_processor.async_save_live_display_gif([processed_data["pil_image"]], 1000, s_key)
+                    processed_data["live_display_url"] = self._current_live_gif_url
+                    self.media_data.live_display_url = self._current_live_gif_url
+                elif processed_data.get("live_display_url"):
+                    self._current_live_gif_url = self.media_data.live_display_url = processed_data["live_display_url"]
+
+                if self.sensor:
+                    from ..providers.ai import get_model_cost
+                    cost, cost_display = get_model_cost(getattr(self.config, "ai_fallback", "flux"))
+                    imm_attrs = dict(self.sensor._attr_extra_state_attributes or {})
+                    imm_attrs["live_display_url"] = self.media_data.live_display_url
+                    imm_attrs["image_source"] = self.media_data.pic_source
+                    imm_attrs["ai_generating"] = False
+                    imm_attrs["ai_status"] = "Idle"
+                    imm_attrs["ai_model"] = getattr(self.config, "ai_fallback", "flux")
+                    imm_attrs["ai_model_cost"] = cost
+                    imm_attrs["ai_model_cost_display"] = cost_display
+                    self.sensor.update_state(f"{self.media_data.artist} - {self.media_data.title}", imm_attrs)
+
                 self._fetch_external_temperature()
                 self.cached_static_items = await self._build_text_items_list(font_color, bg_color_str, scope="static")
                 self.progress_timer_gen_id += 1
@@ -579,7 +625,9 @@ class PixooHub(HubStateAndConfigMixin, HubDisplayMixin, HubPrefetchMixin):
             except Exception as e:
                 _LOGGER.error("Execution error: %s", e)
             finally:
-                self.ai_generating, self.ai_status, self._is_processing_image = False, "Idle", False
+                self._is_processing_image = False
+                if getattr(self, "ai_generating", False):
+                    self.set_ai_generating(False, "Idle")
 
     async def _async_resolve_lyrics(self, expected_song_key: str, configured_mode: str) -> None:
         """Fetch lyrics in the background without blocking image processing."""

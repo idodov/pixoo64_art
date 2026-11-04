@@ -368,6 +368,16 @@ class HubDisplayMixin:
                 await self.async_cancel_chart(restore_view=False)
             else:
                 return
+
+        # Failsafe: Never turn off or switch away if master_control is active and media_player is actively playing music or paused
+        st = self.hass.states.get(self.media_player) if getattr(self, "hass", None) else None
+        if self.ui_state.get("master_control", True) and st and (self._is_player_active(st) or (st.state == "paused" and not force_screen_off)):
+            _LOGGER.warning(
+                "Pixoo64 _send_off_command blocked: %s is actively playing or paused without timeout. Preserving display.",
+                self.media_player,
+            )
+            return
+
         was_pause = bool(force_screen_off or self.osd_mode == "Pause" or getattr(self, "_pause_timed_out", False))
         should_screen_off = bool(was_pause or force_screen_off or getattr(self.config, "full_control", False) or not self.device_screen_on)
 
@@ -425,8 +435,13 @@ class HubDisplayMixin:
             self.sensor.update_state("Off", attrs)
 
     async def _execute_pause_timeout(self, now=None) -> None:
-        _LOGGER.info("Pixoo64 Pause screen timeout fired! Turning off display and returning to channel.")
         self._pause_timeout_unsub = None
+        st = self.hass.states.get(self.media_player) if getattr(self, "hass", None) else None
+        if st and self._is_player_active(st):
+            _LOGGER.debug("Pixoo64 pause timeout aborted: media_player is actively playing.")
+            self._pause_timed_out = False
+            return
+        _LOGGER.info("Pixoo64 Pause screen timeout fired! Turning off display and returning to channel.")
         self._pause_timed_out = True
         await self._send_off_command(force_screen_off=True)
 

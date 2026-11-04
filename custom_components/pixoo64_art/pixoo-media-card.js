@@ -637,8 +637,18 @@ class PixooMediaCard extends HTMLElement {
     const r = this.shadowRoot;
     const o = r.getElementById('render-overlay');
     const t = r.getElementById('render-text');
+    const sub = r.getElementById('render-sub');
+    const pb = r.getElementById('render-prog-bar');
+    const isAi = mode === 'AI Art' || mode === 'Force AI';
     if (o && t) {
-      t.textContent = mode.startsWith('Vinyl') ? 'Rendering Vinyl Disc...' : mode === 'Lyrics' ? 'Syncing Lyrics...' : mode === 'AI Art' ? 'Generating AI Artwork...' : 'Generating Display...';
+      t.textContent = mode.startsWith('Vinyl') ? 'Rendering Vinyl Disc...' : mode === 'Lyrics' ? 'Syncing Lyrics...' : isAi ? 'Generating AI Artwork...' : 'Generating Display...';
+      if (isAi) {
+        if (sub) sub.style.display = 'block';
+        if (pb) pb.style.display = 'block';
+      } else {
+        if (sub) sub.style.display = 'none';
+        if (pb) pb.style.display = 'none';
+      }
       o.style.display = 'flex';
     }
     r.getElementById('modes-controls-wrapper')?.classList.add('locked');
@@ -648,7 +658,7 @@ class PixooMediaCard extends HTMLElement {
     r.getElementById('media-controls-wrapper')?.classList.add('locked');
 
     if (this._busyWatchdog) clearTimeout(this._busyWatchdog);
-    const timeout = mode === 'AI Art' ? 45000 : 12000;
+    const timeout = isAi ? 45000 : 12000;
     this._busyWatchdog = setTimeout(() => {
       const s = this._hass?.states[this._config?.entity_sensor];
       if (s?.attributes?.ai_generating === true) return;
@@ -665,6 +675,10 @@ class PixooMediaCard extends HTMLElement {
     const r = this.shadowRoot;
     const o = r.getElementById('render-overlay');
     if (o) o.style.display = 'none';
+    const sub = r.getElementById('render-sub');
+    if (sub) sub.style.display = 'none';
+    const pb = r.getElementById('render-prog-bar');
+    if (pb) pb.style.display = 'none';
     r.getElementById('modes-controls-wrapper')?.classList.remove('locked');
     r.getElementById('cat-crop-prog')?.classList.remove('locked');
     r.getElementById('advanced-wrapper')?.classList.remove('locked');
@@ -958,9 +972,17 @@ class PixooMediaCard extends HTMLElement {
         .grid{position:absolute;top:0;left:0;width:100%;height:100%;background-image:linear-gradient(rgba(0,0,0,.65) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,.65) 1px,transparent 1px);background-size:calc(100%/64) calc(100%/64);box-shadow:inset 0 0 10px rgba(0,0,0,.85);pointer-events:none;z-index:2}
         .badge{position:absolute;top:6px;right:6px;z-index:3;display:flex;align-items:center;gap:5px;background:rgba(7,10,18,.92);padding:3px 8px;border-radius:12px;font-size:.68rem;font-weight:700;color:#ffffff;border:1px solid var(--pixoo-border-tint)}
         .dot{width:7px;height:7px;background-color:var(--pixoo-primary);border-radius:50%;box-shadow:0 0 7px var(--pixoo-primary)}
-        .hud{position:absolute;top:0;left:0;width:100%;height:100%;z-index:4;backdrop-filter:blur(5px);background:rgba(7,10,18,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}
+        .hud{position:absolute;top:0;left:0;width:100%;height:100%;z-index:4;backdrop-filter:blur(5px);background:rgba(7,10,18,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
         .spin{width:26px;height:26px;border:2.5px solid var(--pixoo-border-tint);border-top:2.5px solid var(--pixoo-primary);border-radius:50%;animation:sp .8s linear infinite;box-shadow:0 0 12px var(--pixoo-glow)}
-        .hud-txt{font-family:monospace;font-size:.74rem;font-weight:700;color:var(--pixoo-primary);text-shadow:0 0 8px rgba(0,0,0,.9);letter-spacing:.6px}
+        .hud-txt{font-family:monospace;font-size:.74rem;font-weight:700;color:var(--pixoo-primary);text-shadow:0 0 8px rgba(0,0,0,.9);letter-spacing:.6px;text-align:center;padding:0 8px}
+        .hud-sub{font-family:monospace;font-size:.66rem;font-weight:600;color:var(--pixoo-muted);letter-spacing:.3px;text-align:center;max-width:90%;line-height:1.25}
+        .hud-prog-bar{width:110px;height:3px;background:rgba(255,255,255,.15);border-radius:2px;overflow:hidden;margin-top:2px}
+        .hud-prog-fill{height:100%;background:var(--pixoo-primary);border-radius:2px;transition:width .3s ease}
+        .ai-error-banner{display:none;align-items:center;justify-content:space-between;gap:6px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);color:#fca5a5;padding:6px 10px;border-radius:8px;font-size:.73rem;font-weight:600;margin-bottom:8px;backdrop-filter:blur(4px);box-sizing:border-box;width:100%}
+        .ai-err-icon{font-size:.85rem;line-height:1}
+        .ai-err-text{flex:1;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
+        .ai-err-dismiss{background:transparent;border:none;color:#fca5a5;cursor:pointer;font-size:.85rem;padding:0 2px;line-height:1;opacity:.8;transition:opacity .2s}
+        .ai-err-dismiss:hover{opacity:1;color:#fff}
         @keyframes sp{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
         .pixoo-pixel-progress{position:absolute;bottom:0;left:0;width:100%;height:calc(100% / 64);background:rgba(0,0,0,.65);z-index:3;pointer-events:none}
         .pixoo-pixel-progress-fill{height:100%;width:0%;background:var(--pixoo-primary,#00ffcc);box-shadow:0 0 4px var(--pixoo-primary,#00ffcc);transition:width .2s linear}
@@ -997,7 +1019,7 @@ class PixooMediaCard extends HTMLElement {
         .locked{pointer-events:none!important;filter:grayscale(.25)!important}
         #modes-buttons-container button.act-btn.active{cursor:default}
         #device-channels-container button.act-btn.active{cursor:pointer;pointer-events:auto}
-        #progress-toggle-btn,#textbg-toggle-btn,#pixoo-power-btn{cursor:pointer!important;pointer-events:auto!important}
+        #progress-toggle-btn,#textbg-toggle-btn,#pixoo-power-btn,#master-control-btn,#full-control-btn{cursor:pointer!important;pointer-events:auto!important}
         .l-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;vertical-align:middle}
         .l-dot.avail{background-color:var(--pixoo-primary);box-shadow:0 0 6px var(--pixoo-primary)}
         .l-dot.unavail{background-color:var(--pixoo-disabled-text)}
@@ -1030,12 +1052,22 @@ class PixooMediaCard extends HTMLElement {
         <div class="overlay" id="card-ambient-overlay"></div>
         <div class="content" id="card-content">
           <div class="col-display" id="col-display">
+            <div class="ai-error-banner" id="ai-error-banner" style="display:none;">
+              <span class="ai-err-icon">⚠️</span>
+              <span class="ai-err-text" id="ai-error-text"></span>
+              <button class="ai-err-dismiss" id="ai-error-dismiss" title="Dismiss error">✕</button>
+            </div>
             <div class="disp" id="display-wrapper" data-section="display">
               <img id="artwork" src="${DEFAULT_PREVIEW_SVG}" alt="Pixoo Artwork">
               <div class="grid"></div>
               <div class="pixoo-pixel-progress" id="pixoo-pixel-progress" style="display:none;"><div class="pixoo-pixel-progress-fill" id="pixoo-pixel-progress-fill"></div></div>
               <div class="badge" id="activity-badge" style="display:none;"><div class="dot"></div><span id="activity-text">Playing</span></div>
-              <div class="hud" id="render-overlay" style="display:none;"><div class="spin"></div><div class="hud-txt" id="render-text">Generating Display...</div></div>
+              <div class="hud" id="render-overlay" style="display:none;">
+                <div class="spin"></div>
+                <div class="hud-txt" id="render-text">Generating Display...</div>
+                <div class="hud-sub" id="render-sub" style="display:none;"></div>
+                <div class="hud-prog-bar" id="render-prog-bar" style="display:none;"><div class="hud-prog-fill" id="render-prog-fill" style="width:0%;"></div></div>
+              </div>
             </div>
           </div>
           <div class="col-others" id="col-others">
@@ -1234,6 +1266,13 @@ class PixooMediaCard extends HTMLElement {
                       <select id="overlay-align-select"><option value="Clock Right, Temp Left">Align: Def</option><option value="Clock Left, Temp Right">Align: Rev</option><option value="Centered">Align: Ctr</option></select>
                     </div>
                   </div>
+                  <div id="cat-system-control">
+                    <div class="cat-ttl">Master & Full Control</div>
+                    <div class="row">
+                      <button class="act-btn" id="master-control-btn">Master Control: On</button>
+                      <button class="act-btn" id="full-control-btn">Full Control: Off</button>
+                    </div>
+                  </div>
                 </div>
               </div>
               <div class="box adv stats" id="stats-panel" data-section="stats" style="display:none;">
@@ -1253,6 +1292,11 @@ class PixooMediaCard extends HTMLElement {
       art.addEventListener('load', () => {
         const s = this._hass?.states[this._config?.entity_sensor];
         if (this._pendingTargetMode && s?.attributes?.ai_generating !== true) {
+          this._releaseRenderingLock();
+        }
+      });
+      art.addEventListener('error', () => {
+        if (this._pendingTargetMode) {
           this._releaseRenderingLock();
         }
       });
@@ -1336,6 +1380,14 @@ class PixooMediaCard extends HTMLElement {
       this._handleFeatureToggle('textbg-toggle-btn', ['switch', 'select', 'input_boolean'], ['pixoo64_media_text_background', 'text_background', 'text_bg'], '_textBgLocalState', 'Text BG');
     });
 
+    root.getElementById('master-control-btn')?.addEventListener('click', () => {
+      this._handleFeatureToggle('master-control-btn', ['switch', 'input_boolean'], ['pixoo64_media_master_control', 'master_control'], '_masterControlLocalState', 'Master Control');
+    });
+
+    root.getElementById('full-control-btn')?.addEventListener('click', () => {
+      this._handleFeatureToggle('full-control-btn', ['switch', 'input_boolean'], ['pixoo64_media_full_control', 'full_control'], '_fullControlLocalState', 'Full Control');
+    });
+
     root.getElementById('filter-select')?.addEventListener('change', (e) => {
       const fe = this._findDeviceEntity(['select'], ['pixoo64_media_image_filter', 'image_filter']);
       if (fe && this._hass) {
@@ -1363,6 +1415,14 @@ class PixooMediaCard extends HTMLElement {
       root.getElementById(`${secId}-toggle`)?.addEventListener('click', () => {
         this._toggleSectionCollapsed(secId);
       });
+    });
+    root.getElementById('ai-error-dismiss')?.addEventListener('click', () => {
+      const s = this._hass?.states[this._config?.entity_sensor];
+      if (s?.attributes?.ai_last_error) {
+        this._dismissedAiError = s.attributes.ai_last_error;
+      }
+      const b = root.getElementById('ai-error-banner');
+      if (b) b.style.display = 'none';
     });
     this._restoreAllSectionsCollapsed();
     root.getElementById('chart-type-select')?.addEventListener('change', () => {
@@ -1763,6 +1823,8 @@ class PixooMediaCard extends HTMLElement {
     const cpEnt = this._findDeviceEntity(['select'], ['pixoo64_media_crop_mode', 'crop_mode']);
     const prEnt = this._findDeviceEntity(['switch', 'select', 'input_boolean'], ['pixoo64_media_progress_bar', 'progress_bar', 'show_progress', 'progress']);
     const tbEnt = this._findDeviceEntity(['switch', 'select', 'input_boolean'], ['pixoo64_media_text_background', 'text_background', 'text_bg']);
+    const mcEnt = this._findDeviceEntity(['switch', 'input_boolean'], ['pixoo64_media_master_control', 'master_control']);
+    const fcEnt = this._findDeviceEntity(['switch', 'input_boolean'], ['pixoo64_media_full_control', 'full_control']);
 
     const sA = sState?.attributes || {};
     const mA = mState?.attributes || {};
@@ -1791,6 +1853,8 @@ class PixooMediaCard extends HTMLElement {
       mState ? `${mState.state}_${mA.volume_level}_${mA.media_position}` : '',
       prEnt ? this._hass.states[prEnt]?.state : '',
       tbEnt ? this._hass.states[tbEnt]?.state : '',
+      mcEnt ? this._hass.states[mcEnt]?.state : '',
+      fcEnt ? this._hass.states[fcEnt]?.state : '',
       mEnt ? this._hass.states[mEnt]?.state : '',
       cpEnt ? this._hass.states[cpEnt]?.state : '',
       fEnt ? this._hass.states[fEnt]?.state : '',
@@ -1974,7 +2038,9 @@ class PixooMediaCard extends HTMLElement {
       const img = this.shadowRoot.getElementById('artwork');
       const isValidUrl = (u) => typeof u === 'string' && u.length > 0 && !u.startsWith('cache://') && u !== 'Fallback Image' && u !== 'TV Icon' && (u.startsWith('/') || u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:'));
       const rawImg = Array.isArray(sA.image_url) ? sA.image_url[0] : sA.image_url;
-      const sameTrack = !sA.media_title || !mA.media_title || (sA.media_title.toLowerCase().trim() === mA.media_title.toLowerCase().trim());
+      const sTitle = (sA.media_title || '').toLowerCase().trim();
+      const mTitle = (mA.media_title || '').toLowerCase().trim();
+      const sameTrack = !sTitle || !mTitle || sTitle === mTitle || mTitle.includes(sTitle) || sTitle.includes(mTitle);
       const validLive = (sameTrack && isValidUrl(sA.live_display_url)) ? sA.live_display_url : null;
       const validRemote = (sameTrack && isValidUrl(sA.original_image_url) && sA.original_image_url.startsWith('https://'))
         ? sA.original_image_url
@@ -1987,7 +2053,7 @@ class PixooMediaCard extends HTMLElement {
       const live = isMediaPlaying ? (validLive || validRemote || validEntityPic || validRaw || DEFAULT_PREVIEW_SVG) : DEFAULT_PREVIEW_SVG;
 
       if (live && this._lastLiveImage !== live && img) {
-        if (!isAiGenerating || sA.image_source === 'AI') {
+        if (!isAiGenerating || sA.image_source === 'AI' || validLive) {
           this._lastLiveImage = live;
           
           let freshSrc = live;
@@ -2085,6 +2151,23 @@ class PixooMediaCard extends HTMLElement {
         itms.push({ l: 'RAM Status', v: ps && !['None', '', null].includes(ps) ? ps : 'Idle' });
         if (isSlider && sA.slider_status && !['Idle', 'None', '', null].includes(sA.slider_status)) itms.push({ l: 'Slider', v: sA.slider_status });
         itms.push({ l: 'Image Cache', v: `${sA.general_cache_size || 0} / ${sA.general_cache_limit || 40}` });
+        if (isAiGenerating || (sA.ai_status && sA.ai_status !== 'Idle')) {
+          itms.push({ l: 'AI Status', v: sA.ai_status });
+          if (sA.ai_progress) itms.push({ l: 'AI Progress', v: sA.ai_progress });
+        }
+        if (sA.ai_model) {
+          itms.push({ l: 'AI Model', v: String(sA.ai_model).split('/').pop() });
+          const rawCost = sA.ai_model_cost_display || (sA.ai_model_cost !== undefined && sA.ai_model_cost !== null ? (sA.ai_model_cost === 0 ? 'Free' : `${sA.ai_model_cost}`) : null);
+          const costVal = rawCost ? (rawCost === 'Free' ? 'Free' : rawCost) : (String(sA.ai_model).toLowerCase().includes('free') || String(sA.ai_model).toLowerCase().includes('schnell') ? 'Free' : null);
+          if (costVal) {
+            itms.push({ l: 'Image Cost', v: costVal === 'Free' ? '🪙 Free' : `🪙 ${costVal}` });
+          }
+        }
+        if (sA.pollen_balance !== undefined && sA.pollen_balance !== null) {
+          const type = (sA.pollen_paid && sA.pollen_paid > 0) ? 'Paid' : 'Quest';
+          itms.push({ l: 'Pollen Balance', v: `🪙 ${sA.pollen_balance} (${type})` });
+        }
+        if (sA.ai_last_error) itms.push({ l: 'AI Error', v: sA.ai_last_error });
 
         if (sp.style.display !== 'block') sp.style.display = 'block';
         const html = itms.map((x) => `<div class="stat-item"><span class="stat-lbl">${x.l}:</span><span class="stat-val">${x.v}</span></div>`).join('');
@@ -2128,6 +2211,32 @@ class PixooMediaCard extends HTMLElement {
       tBtn.classList.toggle('active', isT);
     }
 
+    const isMc = mcEnt && this._hass.states[mcEnt]
+      ? ['on', 'enabled', 'true'].includes((this._hass.states[mcEnt]?.state || '').toLowerCase())
+      : sA.master_control !== undefined
+        ? ['true', 'on', 'enabled'].includes(String(sA.master_control).toLowerCase())
+        : true;
+    this._masterControlLocalState = isMc;
+    const mcBtn = this.shadowRoot.getElementById('master-control-btn');
+    if (mcBtn) {
+      const txt = isMc ? 'Master Control: On' : 'Master Control: Off';
+      if (mcBtn.textContent !== txt) mcBtn.textContent = txt;
+      mcBtn.classList.toggle('active', isMc);
+    }
+
+    const isFc = fcEnt && this._hass.states[fcEnt]
+      ? ['on', 'enabled', 'true'].includes((this._hass.states[fcEnt]?.state || '').toLowerCase())
+      : sA.full_control !== undefined
+        ? ['true', 'on', 'enabled'].includes(String(sA.full_control).toLowerCase())
+        : false;
+    this._fullControlLocalState = isFc;
+    const fcBtn = this.shadowRoot.getElementById('full-control-btn');
+    if (fcBtn) {
+      const txt = isFc ? 'Full Control: On' : 'Full Control: Off';
+      if (fcBtn.textContent !== txt) fcBtn.textContent = txt;
+      fcBtn.classList.toggle('active', isFc);
+    }
+
     if (this._config.show_modes !== false) {
       if (mdWrap && mdWrap.style.display !== 'block') mdWrap.style.display = 'block';
       const bOpts = (mEnt && this._hass.states[mEnt]?.attributes?.options) || ['Standard', 'Vinyl', 'Lyrics'];
@@ -2165,14 +2274,10 @@ class PixooMediaCard extends HTMLElement {
             if (tgt.startsWith('Vinyl')) {
               if (curLMe !== 'Vinyl') this._savedNonVinylCrop = curLCe;
               const tc = tgt === 'Vinyl (Zoom)' ? 'Crop' : tgt === 'Vinyl (Extra Zoom)' ? 'Extra Crop' : 'No Crop';
-              if (lCe) this._hass.callService('select', 'select_option', { entity_id: lCe, option: tc });
-              if (lMe) this._hass.callService('select', 'select_option', { entity_id: lMe, option: 'Vinyl' });
+              if (lCe && curLCe !== tc) this._hass.callService('select', 'select_option', { entity_id: lCe, option: tc });
+              if (lMe && curLMe !== 'Vinyl') this._hass.callService('select', 'select_option', { entity_id: lMe, option: 'Vinyl' });
             } else {
-              if (curLMe === 'Vinyl' && lCe) this._hass.callService('select', 'select_option', { entity_id: lCe, option: this._savedNonVinylCrop || 'No Crop' });
-              if (lMe) this._hass.callService('select', 'select_option', { entity_id: lMe, option: tgt });
-            }
-            if (this._hass && this._config.entity_sensor) {
-              this._hass.callService('homeassistant', 'update_entity', { entity_id: this._config.entity_sensor });
+              if (lMe && curLMe !== tgt) this._hass.callService('select', 'select_option', { entity_id: lMe, option: tgt });
             }
             mdCont.querySelectorAll('button').forEach((btn) => btn.classList.toggle('active', btn.getAttribute('data-mode') === tgt));
           });
@@ -2257,18 +2362,45 @@ class PixooMediaCard extends HTMLElement {
       notifWrap.style.display = 'none';
     }
 
+    const errBanner = this.shadowRoot.getElementById('ai-error-banner');
+    const errText = this.shadowRoot.getElementById('ai-error-text');
+    if (sA.ai_last_error && sA.ai_last_error !== this._dismissedAiError) {
+      if (errBanner && errText) {
+        errText.textContent = sA.ai_last_error;
+        errBanner.style.display = 'flex';
+      }
+    } else if (errBanner) {
+      errBanner.style.display = 'none';
+    }
+
     if (isAiGenerating) {
       this._startRenderingLock('AI Art');
       const rt = this.shadowRoot.getElementById('render-text');
       if (rt) rt.textContent = sA.ai_status || 'Generating AI Artwork...';
+      const rs = this.shadowRoot.getElementById('render-sub');
+      if (rs) {
+        rs.style.display = 'block';
+        const rawCost = sA.ai_model_cost_display || (sA.ai_model_cost !== undefined && sA.ai_model_cost !== null ? (sA.ai_model_cost === 0 ? 'Free' : `${sA.ai_model_cost}`) : null);
+        const costStr = rawCost ? (rawCost === 'Free' ? 'Free' : rawCost) : (String(sA.ai_model || '').toLowerCase().includes('free') ? 'Free' : '');
+        const costBadge = costStr ? ` • 🪙 ${costStr}` : '';
+        rs.textContent = sA.ai_model ? `Engine: ${String(sA.ai_model).split('/').pop()}${costBadge}` : '';
+      }
+      const rf = this.shadowRoot.getElementById('render-prog-fill');
+      const rpb = this.shadowRoot.getElementById('render-prog-bar');
+      if (rf && rpb) {
+        rpb.style.display = 'block';
+        rf.style.width = sA.ai_progress || '45%';
+      }
       const ab = this.shadowRoot.getElementById('activity-badge');
       const at = this.shadowRoot.getElementById('activity-text');
       if (ab && at) {
         ab.style.display = 'flex';
-        at.textContent = sA.ai_status || 'AI Generating...';
+        at.textContent = sA.ai_progress ? `AI: ${sA.ai_progress}` : (sA.ai_status || 'AI Generating...');
       }
-    } else if (this._pendingTargetMode === 'AI Art') {
-      this._releaseRenderingLock();
+    } else if (this._pendingTargetMode === 'AI Art' || this._pendingTargetMode === 'Force AI') {
+      if (sA.configured_mode === 'Force AI' || sA.active_mode === 'Force AI' || sA.ai_last_error || sA.image_source === 'AI') {
+        this._releaseRenderingLock();
+      }
     }
 
     if (syEnt && this._hass.states[syEnt]?.state !== undefined) {

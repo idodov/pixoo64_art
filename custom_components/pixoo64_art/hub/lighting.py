@@ -104,8 +104,9 @@ class HubPrefetchMixin:
         self._cleanup_timers(["_prefetch_timer_unsub"])
         if not self.media_data or getattr(self.media_data, "media_duration", 0) <= 0:
             return
-        is_anim_mode = any(getattr(self.config, k, False) for k in ("spotify_slide", "artist_slide", "vinyl_mode", "cassette_mode", "force_ai"))
-        prefetch_offset = 25.0 if is_anim_mode else 10.0
+        is_force_ai = bool(self.ui_state.get("display_mode") == "Force AI" or getattr(self.config, "force_ai", False))
+        is_anim_mode = is_force_ai or any(getattr(self.config, k, False) for k in ("spotify_slide", "artist_slide", "vinyl_mode", "cassette_mode"))
+        prefetch_offset = 30.0 if is_force_ai else (25.0 if is_anim_mode else 10.0)
         delay = (float(self.media_data.media_duration) - self._get_current_media_position()) - prefetch_offset
         if delay > 0:
             self._prefetch_timer_unsub = async_call_later(self.hass, delay, self._execute_prefetch)
@@ -137,6 +138,7 @@ class HubPrefetchMixin:
                     dummy.artist, dummy.title, dummy.title_original, dummy.album, dummy.picture = artist, title_clean, title_original, album, url
                     dummy.queue_total = getattr(self.media_data, "queue_total", 0)
                     dummy.track_number = getattr(self.media_data, "track_number", 1) + 1
+                    dummy.is_next_prefetch = True
                     self._cancel_tasks(["_prefetch_task"])
                     self._prefetch_task = self.hass.async_create_task(self._run_prefetch_and_update_status(url, dummy))
                     return
@@ -347,6 +349,11 @@ class HubPrefetchMixin:
             self.playlist_prefetch_status = "Disabled in settings"
             self._update_prefetch_sensor_state()
             return
+        is_force_ai = bool(self.ui_state.get("display_mode") == "Force AI" or getattr(self.config, "force_ai", False))
+        if is_force_ai:
+            self.playlist_prefetch_status = "Disabled (Force AI active)"
+            self._update_prefetch_sensor_state()
+            return
         if getattr(self.config, "spotify_slide", False) or getattr(self.config, "artist_slide", False):
             self.playlist_prefetch_status = "Disabled (Slider active)"
             self._update_prefetch_sensor_state()
@@ -426,6 +433,9 @@ class HubPrefetchMixin:
             self._is_processing_image = False
             await self.media_data.update(state)
             if not self.media_data.title and not getattr(self.media_data, "playing_tv", False):
+                if self._is_player_active(state):
+                    _LOGGER.debug("Pixoo64 force_update: media title empty but player is active. Keeping display.")
+                    return
                 await self._send_off_command()
                 return
             self._fetch_external_temperature()
@@ -438,5 +448,8 @@ class HubPrefetchMixin:
             self._active_song_key, self.media_data.track_changed = None, True
             self.current_task = self.hass.async_create_task(self._process_and_send())
             self._playlist_prefetch_task = self.hass.async_create_task(self._run_playlist_prefetch())
+        elif state and state.state == "paused":
+            await self.media_data.update(state)
+            await self._handle_media_change(None)
         else:
             await self._send_off_command()

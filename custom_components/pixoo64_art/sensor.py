@@ -30,6 +30,8 @@ class PixooStatusSensor(SensorEntity):
             "spotify_slider_last_error": None,
             "current_track_plays": 0,
             "current_track_rank": None,
+            "ai_model_cost": 0.0,
+            "ai_model_cost_display": "Free",
         }
 
     @property

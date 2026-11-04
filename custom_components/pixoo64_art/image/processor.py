@@ -43,6 +43,7 @@ class ImageProcessor:
         self.raw_image_cache: OrderedDict = OrderedDict()
         self.color_analyzer = ColorAnalyzer(config)
         self.cropper = ImageCropper()
+        self.last_fetch_error: Optional[str] = None
         self.filter_service = ImageFilterService()
         self._font_cache: Dict[Tuple[str, int], ImageFont.FreeTypeFont] = {}
         self._gif_lock = threading.Lock()
@@ -116,8 +117,19 @@ class ImageProcessor:
             urls_to_try.append(url)
 
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        if "gen.pollinations.ai" in url or "pollinations.ai" in url:
+            api_key = str(getattr(self.config, "pollinations", "") or getattr(self.config, "pollinations_key", "") or "").strip()
+            if not api_key and "key=" in url:
+                import urllib.parse
+                parsed = urllib.parse.urlparse(url)
+                qs = urllib.parse.parse_qs(parsed.query)
+                if "key" in qs:
+                    api_key = qs["key"][0]
+            if api_key.startswith("sk_"):
+                headers["Authorization"] = f"Bearer {api_key}"
+                headers["X-Client-Id"] = "pk_BGuQDoVvDvRQ4k8T"
         is_internal = is_relative or "/api/media_player_proxy/" in url or "127.0.0.1" in url
-        timeout_sec = 20 if "pollinations.ai" in url else (2 if is_internal else 8)
+        timeout_sec = 25 if "pollinations.ai" in url else (2 if is_internal else 8)
 
         for target_url in urls_to_try:
             try:
@@ -129,10 +141,46 @@ class ImageProcessor:
                                 self.raw_image_cache[url] = data
                                 if len(self.raw_image_cache) > self.cache_size:
                                     self.raw_image_cache.popitem(last=False)
+                            self.last_fetch_error = None
                             return data
                     elif not is_relative:
-                        _LOGGER.warning("HTTP %s when fetching image: %s", response.status, target_url)
+                        err_text = ""
+                        try:
+                            body = await response.text()
+                            if "error" in body:
+                                import json
+                                b_json = json.loads(body)
+                                err_text = b_json.get("error", {}).get("message") or b_json.get("message", "")
+                        except Exception:
+                            pass
+
+                        if "pollinations.ai" in target_url:
+                            if response.status == 400:
+                                msg = err_text or "Invalid request parameters for selected model."
+                                self.last_fetch_error = f"Pollinations 400: {msg}"
+                                _LOGGER.warning("HTTP 400 from Pollinations AI: %s", msg)
+                            elif response.status == 401:
+                                msg = err_text or "Publishable key (pk_) cannot authenticate server requests. A secret key (sk_) is required, or clear key for free tier."
+                                self.last_fetch_error = f"Pollinations 401: {msg}"
+                                _LOGGER.warning("HTTP 401 from Pollinations AI: %s", msg)
+                            elif response.status == 402:
+                                if "insufficient" in err_text.lower() or "balance" in err_text.lower():
+                                    msg = "Insufficient Pollen balance. Top up at enter.pollinations.ai"
+                                else:
+                                    msg = err_text or "Free limit reached (1 image every 45s per IP)."
+                                self.last_fetch_error = f"Pollinations 402: {msg}"
+                                _LOGGER.warning("HTTP 402 from Pollinations AI: %s", msg)
+                            elif response.status in (500, 502, 503, 504):
+                                self.last_fetch_error = f"Pollinations server busy (HTTP {response.status})"
+                                _LOGGER.warning("HTTP %s from Pollinations AI (service busy)", response.status)
+                            else:
+                                self.last_fetch_error = f"Pollinations HTTP {response.status}"
+                                _LOGGER.warning("HTTP %s when fetching image: %s", response.status, target_url)
+                        else:
+                            self.last_fetch_error = f"HTTP {response.status}"
+                            _LOGGER.warning("HTTP %s when fetching image: %s", response.status, target_url)
             except Exception as e:
+                self.last_fetch_error = str(e)
                 if not is_relative:
                     _LOGGER.warning("Exception fetching image from %s: %s", target_url, e)
                 else:
@@ -145,7 +193,8 @@ class ImageProcessor:
         await self.get_image(url, media_data)
 
     async def get_image(self, url: str, media_data: "MediaData", spotify_slide: bool = False) -> Optional[dict]:
-        crop_mode = "No Crop" if getattr(media_data, "radio_logo", False) else getattr(self.config, "crop_mode", "Crop" if getattr(self.config, "crop_borders", False) else "No Crop")
+        is_ai_art = bool(getattr(media_data, "pic_source", "") in ("AI", "AI (Cached)") or getattr(self.config, "force_ai", False))
+        crop_mode = "No Crop" if (is_ai_art or getattr(media_data, "radio_logo", False)) else getattr(self.config, "crop_mode", "Crop" if getattr(self.config, "crop_borders", False) else "No Crop")
         filter_mode = getattr(self.config, "image_filter", "None")
         has_lyrics = bool(getattr(self.config, "show_lyrics", False) and getattr(media_data, "lyrics", None))
         cache_key = (
@@ -205,7 +254,8 @@ class ImageProcessor:
     ) -> Optional[dict]:
         filter_mode = getattr(self.config, "image_filter", "None")
         radio_logo = getattr(media_data, "radio_logo", False)
-        cropped_img = self.cropper.crop_image_borders(img_300, self.config, radio_logo)
+        is_ai_art = bool(getattr(media_data, "pic_source", "") in ("AI", "AI (Cached)") or getattr(self.config, "force_ai", False))
+        cropped_img = img_300 if is_ai_art else self.cropper.crop_image_borders(img_300, self.config, radio_logo)
         palette = dict(palette)
         palette["font_color"] = self.color_analyzer.get_optimal_font_color(
             cropped_img.resize((50, 50), Image.Resampling.NEAREST), self.config
@@ -289,7 +339,8 @@ class ImageProcessor:
                 or getattr(self.config, "artist_slide", False)
             )
             filter_mode = getattr(self.config, "image_filter", "None")
-            crop_mode = getattr(self.config, "crop_mode", "No Crop")
+            is_ai_art = bool(getattr(media_data, "pic_source", "") in ("AI", "AI (Cached)") or getattr(self.config, "force_ai", False))
+            crop_mode = "No Crop" if is_ai_art else getattr(self.config, "crop_mode", "No Crop")
             if is_static and "pil_image" in result and not spotify_slide:
                 album_tag = media_data.album if getattr(media_data, "album", None) else media_data.title
                 s_key = f"std_{media_data.artist}_{album_tag}_{filter_mode}_{crop_mode}"

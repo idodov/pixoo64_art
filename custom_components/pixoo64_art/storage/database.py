@@ -144,7 +144,7 @@ def generate_artwork_cache_key(
     clean_album = normalize_string(resolved_album)
 
     if is_ai or force_ai:
-        return f"track:{clean_artist}_{clean_title}"
+        return f"ai:{clean_artist}_{clean_title}"
 
     has_valid_album = bool(
         clean_album

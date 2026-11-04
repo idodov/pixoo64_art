@@ -64,41 +64,20 @@ def _validate_api_credentials(user_input: dict) -> dict:
         errors[CONF_TIDAL_CLIENT_SECRET] = "tidal_secret_required"
     elif t_sec and not t_id:
         errors[CONF_TIDAL_CLIENT_ID] = "tidal_id_required"
+
+    p_key = str(user_input.get(CONF_POLLINATIONS_KEY) or "").strip()
+    if p_key and p_key.startswith("pk_"):
+        errors[CONF_POLLINATIONS_KEY] = "pollinations_publishable_key"
+
     return errors
 
 
 async def async_get_pollinations_models(hass, api_key: str = None) -> list:
     """Fetch available AI models dynamically from Pollinations with optional API key."""
-    fallback_models = [selector.SelectOptionDict(value="black-forest-labs/flux.1-schnell", label="FLUX.1 Schnell (Black Forest Labs)")]
-    try:
-        session = async_get_clientsession(hass)
-        headers = {"User-Agent": "Mozilla/5.0"}
-        if api_key and str(api_key).strip():
-            headers["Authorization"] = f"Bearer {str(api_key).strip()}"
-
-        async with session.get("https://gen.pollinations.ai/models", headers=headers, timeout=5) as response:
-            if response.status == 200:
-                data = await response.json()
-                parsed_models = []
-                for model in data:
-                    if model.get("category") == "image" or "image" in model.get("output_modalities", []):
-                        model_id = model.get("name")
-                        if not model_id:
-                            continue
-                        title = model.get("title", model_id)
-                        publisher = model.get("publisher", "Unknown")
-                        try:
-                            cost = float(model.get("pricing", {}).get("completionImageTokens", 0))
-                        except (ValueError, TypeError):
-                            cost = 0.0
-                        cost_display = "Free" if cost == 0 else f"{cost:.8f}".rstrip("0").rstrip(".")
-                        parsed_models.append({"id": model_id, "label": f"{title} ({publisher}) | 💰 {cost_display}", "cost": cost})
-                parsed_models.sort(key=lambda x: x["cost"])
-                models = [selector.SelectOptionDict(value=m["id"], label=m["label"]) for m in parsed_models]
-                return models if models else fallback_models
-    except Exception as e:
-        _LOGGER.warning("Failed to fetch dynamic AI models, using fallback: %s", e)
-    return fallback_models
+    from .providers.ai import async_fetch_pollinations_models
+    session = async_get_clientsession(hass)
+    raw_models = await async_fetch_pollinations_models(session, api_key)
+    return [selector.SelectOptionDict(value=m["id"], label=m["label"]) for m in raw_models]
 
 
 class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -315,6 +294,20 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
 
         if not self._ai_models_cache:
             self._ai_models_cache = await async_get_pollinations_models(self.hass, api_key=get_current(CONF_POLLINATIONS_KEY, ""))
+
+        cur_ai_model = get_current("ai_model", "black-forest-labs/flux.1-schnell")
+        avail_model_values = [
+            (opt.value if hasattr(opt, "value") else opt.get("value", ""))
+            for opt in self._ai_models_cache
+        ]
+        if cur_ai_model and cur_ai_model not in avail_model_values:
+            self._ai_models_cache.insert(
+                0,
+                selector.SelectOptionDict(
+                    value=cur_ai_model,
+                    label=f"{cur_ai_model.split('/')[-1].capitalize()} (Saved)",
+                ),
+            )
 
         streaming_schema = {
             vol.Optional(CONF_SPOTIFY_CLIENT_ID, description={"suggested_value": get_current(CONF_SPOTIFY_CLIENT_ID, "")}): TEXT_SELECTOR,

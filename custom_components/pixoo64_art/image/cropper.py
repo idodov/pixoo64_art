@@ -13,6 +13,8 @@ class ImageCropper:
 
     @classmethod
     def crop_image_borders(cls, img: Image.Image, config: "Config", radio_logo: bool) -> Image.Image:
+        if getattr(config, "force_ai", False) or str(getattr(config, "display_mode", "")).lower() == "force ai":
+            return img
         crop_mode = getattr(config, "crop_mode", "No Crop")
         if radio_logo or crop_mode == "No Crop" or not getattr(config, "crop_borders", False):
             return img

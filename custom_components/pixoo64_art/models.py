@@ -136,6 +136,8 @@ class Config:
         self.pixoo_ip = get_val("pixoo_ip")
         self.pixoo_url = f"http://{self.pixoo_ip}:80/post" if self.pixoo_ip else None
         self.pollinations = get_val("pollinations_key", "")
+        self.pollinations_auth_method = get_val("pollinations_auth_method", "key")
+        self.ai_tier = get_val("ai_tier", "models" if str(self.pollinations or "").startswith("sk_") else "free")
         self.ai_fallback = get_val("ai_model", "black-forest-labs/flux.1-schnell")
         self.spotify_client_id = get_val("spotify_client_id", "")
         self.spotify_client_secret = get_val("spotify_client_secret", "")

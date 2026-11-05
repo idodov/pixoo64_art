@@ -11,6 +11,10 @@ CONF_PREFETCH_ENABLED = "prefetch_enabled"
 CONF_AUDIODB_ENABLED = "audiodb_enabled"
 
 # Options / Advanced Keys
+CONF_AI_TIER = "ai_tier"
+AI_TIER_FREE = "free"
+AI_TIER_MODELS = "models"
+AI_TIER_OPTIONS = [AI_TIER_FREE, AI_TIER_MODELS]
 CONF_POLLINATIONS_KEY = "pollinations_key"
 CONF_SPOTIFY_CLIENT_ID = "spotify_client_id"
 CONF_SPOTIFY_CLIENT_SECRET = "spotify_client_secret"

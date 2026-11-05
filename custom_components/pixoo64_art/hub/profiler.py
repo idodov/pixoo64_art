@@ -221,8 +221,9 @@ class HubStateAndConfigMixin:
         """Fetch and update Pollen balance for secret key."""
         key = str(getattr(self.config, "pollinations", "") or getattr(self.config, "pollinations_key", "") or "").strip()
         from ..providers.ai import async_get_pollen_balance, get_model_cost, async_fetch_pollinations_models
+        is_login = getattr(self.config, "pollinations_auth_method", "key") == "login"
         try:
-            await async_fetch_pollinations_models(self.websession, key)
+            await async_fetch_pollinations_models(self.websession, key, is_login=is_login)
         except Exception:
             pass
         cost, cost_display = get_model_cost(getattr(self.config, "ai_fallback", "flux"))
@@ -231,8 +232,20 @@ class HubStateAndConfigMixin:
             attrs["ai_model_cost"] = cost
             attrs["ai_model_cost_display"] = cost_display
             self.sensor.update_state(self.sensor._attr_native_value, attrs)
-        if not key.startswith("sk_"):
+        ai_tier = str(getattr(self.config, "ai_tier", "models" if key.startswith("sk_") else "free")).lower()
+        if ai_tier == "free" or not key.startswith("sk_"):
+            if self.sensor:
+                attrs = dict(self.sensor._attr_extra_state_attributes or {})
+                attrs["ai_tier"] = "Free Tier"
+                attrs["pollen_balance"] = "Free"
+                attrs["ai_model_cost"] = 0.0
+                attrs["ai_model_cost_display"] = "Free"
+                self.sensor.update_state(self.sensor._attr_native_value, attrs)
             return
+        if self.sensor:
+            attrs = dict(self.sensor._attr_extra_state_attributes or {})
+            attrs["ai_tier"] = "Model Services"
+            self.sensor.update_state(self.sensor._attr_native_value, attrs)
         data = await async_get_pollen_balance(self.websession, key)
         if data and "balance" in data:
             self.pollen_balance = round(float(data["balance"]), 2)

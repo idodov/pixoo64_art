@@ -471,7 +471,8 @@ class FallbackService(BaseProvider):
         is_next = getattr(media_data, "is_next_prefetch", False)
         is_live = not is_next
         api_key = str(getattr(self.config, "pollinations", "") or getattr(self.config, "pollinations_key", "") or "").strip()
-        is_free_tier = not api_key.startswith("sk_")
+        ai_tier = str(getattr(self.config, "ai_tier", "models" if api_key.startswith("sk_") else "free")).lower()
+        is_free_tier = (ai_tier == "free") or not api_key.startswith("sk_")
         raw_model = "flux" if is_free_tier else str(getattr(self.config, "ai_fallback", "black-forest-labs/flux.1-schnell") or "flux")
         model_label = "FLUX (Free)" if is_free_tier else raw_model.split("/")[-1].replace(".1", "").capitalize()
 

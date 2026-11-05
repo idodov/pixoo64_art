@@ -106,7 +106,7 @@ class HubDisplayMixin:
                     {"Command": "Channel/SetIndex", "SelectIndex": target_channel},
                 ],
             })
-            if getattr(self.config, "full_control", False):
+            if getattr(self.config, "full_control", False) or self.ui_state.get("full_control", False):
                 self.device_screen_on = False
                 await asyncio.sleep(0.1)
                 await self.pixoo_device.send_command({"Command": "Channel/OnOffScreen", "OnOff": 0})
@@ -379,7 +379,8 @@ class HubDisplayMixin:
             return
 
         was_pause = bool(force_screen_off or self.osd_mode == "Pause" or getattr(self, "_pause_timed_out", False))
-        should_screen_off = bool(was_pause or force_screen_off or getattr(self.config, "full_control", False) or not self.device_screen_on)
+        is_full_control = bool(self.ui_state.get("full_control", False) or getattr(self.config, "full_control", False))
+        should_screen_off = is_full_control
 
         self.is_art_visible = self.ai_generating = self._is_animation_active = False
         self._active_song_key = self.osd_mode = self.prefetch_next_artist = self.prefetch_next_title = None
@@ -463,7 +464,8 @@ class HubDisplayMixin:
         except Exception:
             pass
         media_state = self.hass.states.get(self.media_player)
-        if not (media_state and media_state.state in ["playing", "on"]) and getattr(self.config, "full_control", False) and not self.is_art_visible:
+        is_full_ctrl = bool(getattr(self.config, "full_control", False) or self.ui_state.get("full_control", False))
+        if not (media_state and media_state.state in ["playing", "on"]) and is_full_ctrl and not self.is_art_visible:
             was_screen_on = False
         self.notification_manager.is_active = True
         self._stop_lyrics_scheduler()
@@ -474,7 +476,7 @@ class HubDisplayMixin:
         if rechecked and rechecked.state in ["playing", "on"]:
             self.is_art_visible, self._active_song_key = False, None
             await self.force_update()
-        elif getattr(self.config, "full_control", False) and not was_screen_on:
+        elif is_full_ctrl and not was_screen_on:
             target_ret = 0 if getattr(self, "last_valid_index", 0) in (4, -1) or getattr(self, "last_valid_index", 0) < 0 else self.last_valid_index
             await self.pixoo_device.send_command({
                 "Command": "Draw/CommandList",

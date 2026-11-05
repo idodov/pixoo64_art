@@ -10,6 +10,9 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
+    AI_TIER_FREE,
+    AI_TIER_MODELS,
+    CONF_AI_TIER,
     CONF_AUDIODB_ENABLED,
     CONF_CHART_SIZE_LIMIT,
     CONF_CHART_SLIDE_DURATION,
@@ -72,11 +75,11 @@ def _validate_api_credentials(user_input: dict) -> dict:
     return errors
 
 
-async def async_get_pollinations_models(hass, api_key: str = None) -> list:
+async def async_get_pollinations_models(hass, api_key: str = None, is_login: bool = False) -> list:
     """Fetch available AI models dynamically from Pollinations with optional API key."""
     from .providers.ai import async_fetch_pollinations_models
     session = async_get_clientsession(hass)
-    raw_models = await async_fetch_pollinations_models(session, api_key)
+    raw_models = await async_fetch_pollinations_models(session, api_key, is_login=is_login)
     return [selector.SelectOptionDict(value=m["id"], label=m["label"]) for m in raw_models]
 
 
@@ -91,6 +94,7 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self):
         self._user_data = {}
         self._discovered_devices = None
+        self._device_auth = None
 
     async def _discover_devices(self):
         self._discovered_devices = {}
@@ -192,8 +196,25 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             errors = _validate_api_credentials(user_input)
             if not errors:
-                self._user_data.update(user_input)
-                return self.async_create_entry(title=f"Pixoo64 ({self._user_data.get(CONF_PIXOO_IP)})", data=self._user_data)
+                want_login = bool(user_input.get("login_pollinations", False))
+                p_key = str(user_input.get(CONF_POLLINATIONS_KEY) or "").strip()
+
+                if want_login:
+                    self._device_auth = None
+                    self._user_data.update(user_input)
+                    return await self.async_step_pollinations_auth()
+                elif p_key.startswith("sk_"):
+                    user_input[CONF_AI_TIER] = AI_TIER_MODELS
+                    user_input["pollinations_auth_method"] = "key"
+                    user_input.pop("login_pollinations", None)
+                    self._user_data.update(user_input)
+                    return self.async_create_entry(title=f"Pixoo64 ({self._user_data.get(CONF_PIXOO_IP)})", data=self._user_data)
+                else:
+                    if user_input.get(CONF_AI_TIER) == AI_TIER_FREE:
+                        user_input[CONF_POLLINATIONS_KEY] = ""
+                    user_input.pop("login_pollinations", None)
+                    self._user_data.update(user_input)
+                    return self.async_create_entry(title=f"Pixoo64 ({self._user_data.get(CONF_PIXOO_IP)})", data=self._user_data)
 
         dynamic_ai_models = await async_get_pollinations_models(self.hass)
         schema = vol.Schema({
@@ -207,17 +228,84 @@ class Pixoo64ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_PLAYLIST_PREFETCH, default="Disabled"): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=["Disabled", "±5 Songs", "±10 Songs"], mode=selector.SelectSelectorMode.DROPDOWN)
             ),
+            vol.Optional(CONF_AI_TIER, default=AI_TIER_FREE): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        selector.SelectOptionDict(value=AI_TIER_FREE, label="Free Tier (No Key or Login Needed)"),
+                        selector.SelectOptionDict(value=AI_TIER_MODELS, label="Model Services (Faster, Custom Models)"),
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
             vol.Optional(CONF_POLLINATIONS_KEY): PASSWORD_SELECTOR,
+            vol.Optional("login_pollinations", default=False): selector.BooleanSelector(),
             vol.Optional("ai_model", default="black-forest-labs/flux.1-schnell"): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=dynamic_ai_models, mode=selector.SelectSelectorMode.DROPDOWN)
             ),
         })
         return self.async_show_form(step_id="apis", data_schema=schema, errors=errors)
 
+    async def async_step_pollinations_auth(self, user_input=None):
+        """Handle Pollinations OAuth device flow authorization."""
+        errors = {}
+        session = async_get_clientsession(self.hass)
+
+        if not self._device_auth:
+            from .providers.ai import async_request_device_code
+            data = await async_request_device_code(session)
+            if not data:
+                errors["base"] = "pollinations_connect_error"
+                return await self.async_step_apis()
+            self._device_auth = data
+
+        if user_input is not None:
+            if user_input.get("cancel_login"):
+                self._device_auth = None
+                self._user_data[CONF_AI_TIER] = AI_TIER_FREE
+                self._user_data[CONF_POLLINATIONS_KEY] = ""
+                self._user_data.pop("login_pollinations", None)
+                return self.async_create_entry(title=f"Pixoo64 ({self._user_data.get(CONF_PIXOO_IP)})", data=self._user_data)
+
+            from .providers.ai import async_exchange_device_token
+            token, err = await async_exchange_device_token(session, self._device_auth.get("device_code", ""))
+            if token and token.startswith("sk_"):
+                self._user_data[CONF_POLLINATIONS_KEY] = token
+                self._user_data[CONF_AI_TIER] = AI_TIER_MODELS
+                self._user_data["pollinations_auth_method"] = "login"
+                self._user_data.pop("login_pollinations", None)
+                self._device_auth = None
+                return self.async_create_entry(title=f"Pixoo64 ({self._user_data.get(CONF_PIXOO_IP)})", data=self._user_data)
+            elif err == "authorization_pending":
+                errors["base"] = "pollinations_auth_pending"
+            elif err == "expired_token":
+                errors["base"] = "pollinations_auth_expired"
+                self._device_auth = None
+            else:
+                errors["base"] = "pollinations_auth_failed"
+
+        url = self._device_auth.get("verification_uri_complete") or "https://enter.pollinations.ai/device"
+        code = self._device_auth.get("user_code", "")
+
+        schema = vol.Schema({
+            vol.Optional("cancel_login", default=False): selector.BooleanSelector(),
+        })
+
+        return self.async_show_form(
+            step_id="pollinations_auth",
+            data_schema=schema,
+            description_placeholders={
+                "url": url,
+                "code": code,
+            },
+            errors=errors,
+        )
+
 
 class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
     def __init__(self):
         self._ai_models_cache = []
+        self._device_auth = None
+        self._saved_options = {}
 
     async def async_step_init(self, user_input=None):
         errors = {}
@@ -271,9 +359,26 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
             cleaned_input.pop(CONF_CLEAR_CACHE_TRIGGER, None)
 
             errors = _validate_api_credentials(cleaned_input)
+
+            want_login = bool(cleaned_input.get("login_pollinations", False))
+            raw_key_input = str(user_input.get("ai_section", {}).get(CONF_POLLINATIONS_KEY) or "").strip()
+
+            if want_login and not errors:
+                self._device_auth = None
+                self._saved_options = cleaned_input
+                return await self.async_step_pollinations_auth()
+            elif raw_key_input.startswith("sk_"):
+                cleaned_input[CONF_POLLINATIONS_KEY] = raw_key_input
+                cleaned_input[CONF_AI_TIER] = AI_TIER_MODELS
+                cleaned_input["pollinations_auth_method"] = "key"
+                cleaned_input.pop("login_pollinations", None)
+            else:
+                cleaned_input.pop("login_pollinations", None)
+
             if cleaned_input.get("reload_ai_models", False):
                 api_key = cleaned_input.get(CONF_POLLINATIONS_KEY) or get_val(CONF_POLLINATIONS_KEY, "")
-                self._ai_models_cache = await async_get_pollinations_models(self.hass, api_key=api_key)
+                is_login = (cleaned_input.get("pollinations_auth_method") or get_val("pollinations_auth_method", "key")) == "login"
+                self._ai_models_cache = await async_get_pollinations_models(self.hass, api_key=api_key, is_login=is_login)
                 cleaned_input["reload_ai_models"] = False
                 return await self._show_options_form(cleaned_input, errors)
 
@@ -282,6 +387,60 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
                 return self.async_create_entry(title="", data=cleaned_input)
 
         return await self._show_options_form(cleaned_input if user_input else None, errors)
+
+    async def async_step_pollinations_auth(self, user_input=None):
+        """Handle Pollinations OAuth device flow authorization in options."""
+        errors = {}
+        session = async_get_clientsession(self.hass)
+
+        if not self._device_auth:
+            from .providers.ai import async_request_device_code
+            data = await async_request_device_code(session)
+            if not data:
+                errors["base"] = "pollinations_connect_error"
+                return await self._show_options_form(self._saved_options, errors)
+            self._device_auth = data
+
+        if user_input is not None:
+            if user_input.get("cancel_login"):
+                self._device_auth = None
+                self._saved_options[CONF_AI_TIER] = AI_TIER_FREE
+                self._saved_options.pop("login_pollinations", None)
+                return self.async_create_entry(title="", data=self._saved_options)
+
+            from .providers.ai import async_exchange_device_token
+            token, err = await async_exchange_device_token(session, self._device_auth.get("device_code", ""))
+            if token and token.startswith("sk_"):
+                self._saved_options[CONF_POLLINATIONS_KEY] = token
+                self._saved_options[CONF_AI_TIER] = AI_TIER_MODELS
+                self._saved_options["pollinations_auth_method"] = "login"
+                self._saved_options.pop("login_pollinations", None)
+                self._device_auth = None
+                return self.async_create_entry(title="", data=self._saved_options)
+            elif err == "authorization_pending":
+                errors["base"] = "pollinations_auth_pending"
+            elif err == "expired_token":
+                errors["base"] = "pollinations_auth_expired"
+                self._device_auth = None
+            else:
+                errors["base"] = "pollinations_auth_failed"
+
+        url = self._device_auth.get("verification_uri_complete") or "https://enter.pollinations.ai/device"
+        code = self._device_auth.get("user_code", "")
+
+        schema = vol.Schema({
+            vol.Optional("cancel_login", default=False): selector.BooleanSelector(),
+        })
+
+        return self.async_show_form(
+            step_id="pollinations_auth",
+            data_schema=schema,
+            description_placeholders={
+                "url": url,
+                "code": code,
+            },
+            errors=errors,
+        )
 
     async def _show_options_form(self, current_values: dict = None, errors: dict = None):
         entry = self.config_entry
@@ -292,8 +451,14 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
                 return current_values[key]
             return options.get(key, data.get(key, default))
 
+        cur_auth_method = get_current("pollinations_auth_method", "key")
+        is_login = (cur_auth_method == "login")
         if not self._ai_models_cache:
-            self._ai_models_cache = await async_get_pollinations_models(self.hass, api_key=get_current(CONF_POLLINATIONS_KEY, ""))
+            self._ai_models_cache = await async_get_pollinations_models(
+                self.hass,
+                api_key=get_current(CONF_POLLINATIONS_KEY, ""),
+                is_login=is_login,
+            )
 
         cur_ai_model = get_current("ai_model", "black-forest-labs/flux.1-schnell")
         avail_model_values = [
@@ -308,6 +473,9 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
                     label=f"{cur_ai_model.split('/')[-1].capitalize()} (Saved)",
                 ),
             )
+
+        cur_key = get_current(CONF_POLLINATIONS_KEY, "")
+        cur_tier = get_current(CONF_AI_TIER, AI_TIER_MODELS if str(cur_key).startswith("sk_") else AI_TIER_FREE)
 
         streaming_schema = {
             vol.Optional(CONF_SPOTIFY_CLIENT_ID, description={"suggested_value": get_current(CONF_SPOTIFY_CLIENT_ID, "")}): TEXT_SELECTOR,
@@ -357,7 +525,17 @@ class Pixoo64OptionsFlowHandler(config_entries.OptionsFlow):
             }), {"collapsed": False}),
             vol.Required("streaming_api_section"): section(vol.Schema(streaming_schema), {"collapsed": False}),
             vol.Required("ai_section"): section(vol.Schema({
-                vol.Optional(CONF_POLLINATIONS_KEY, description={"suggested_value": get_current(CONF_POLLINATIONS_KEY, "")}): PASSWORD_SELECTOR,
+                vol.Optional(CONF_AI_TIER, default=cur_tier): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            selector.SelectOptionDict(value=AI_TIER_FREE, label="Free Tier (No Key or Login Needed)"),
+                            selector.SelectOptionDict(value=AI_TIER_MODELS, label="Model Services (Faster, Custom Models)"),
+                        ],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(CONF_POLLINATIONS_KEY, description={"suggested_value": cur_key}): PASSWORD_SELECTOR,
+                vol.Optional("login_pollinations", default=False): selector.BooleanSelector(),
                 vol.Optional("ai_model", default=get_current("ai_model", "black-forest-labs/flux.1-schnell")): selector.SelectSelector(
                     selector.SelectSelectorConfig(options=self._ai_models_cache, mode=selector.SelectSelectorMode.DROPDOWN)
                 ),

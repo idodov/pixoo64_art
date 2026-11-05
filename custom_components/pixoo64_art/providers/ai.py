@@ -42,15 +42,16 @@ def get_model_cost(model_name: Optional[str]) -> tuple[float, str]:
     return 0.0, "Free"
 
 
-async def async_fetch_pollinations_models(session: aiohttp.ClientSession, api_key: str = None) -> list:
+async def async_fetch_pollinations_models(session: aiohttp.ClientSession, api_key: str = None, is_login: bool = False) -> list:
     """Fetch available AI models dynamically and update pricing lookup table."""
+    multiplier = 1.25 if is_login else 1.0
     fallback_models = [
         {"id": "black-forest-labs/flux.1-schnell", "label": "FLUX.1 Schnell (Black Forest Labs) | 🪙 Free", "cost": 0.0},
         {"id": "flux", "label": "FLUX (Classic) | 🪙 Free", "cost": 0.0},
         {"id": "turbo", "label": "Turbo / Lightning (Fast) | 🪙 Free", "cost": 0.0},
         {"id": "flux-realism", "label": "FLUX Realism | 🪙 Free", "cost": 0.0},
-        {"id": "recraft/recraft-v4.1-vector", "label": "Recraft V4.1 Vector | 🪙 0.00625", "cost": 0.00625},
-        {"id": "black-forest-labs/flux.1-dev", "label": "FLUX.1 Dev | 🪙 0.003125", "cost": 0.003125},
+        {"id": "recraft/recraft-v4.1-vector", "label": f"Recraft V4.1 Vector | 🪙 {round(0.005 * multiplier, 6)}", "cost": round(0.005 * multiplier, 6)},
+        {"id": "black-forest-labs/flux.1-dev", "label": f"FLUX.1 Dev | 🪙 {round(0.0025 * multiplier, 6)}", "cost": round(0.0025 * multiplier, 6)},
     ]
     try:
         clean_key = str(api_key or "").strip()
@@ -83,7 +84,7 @@ async def async_fetch_pollinations_models(session: aiohttp.ClientSession, api_ke
                         base_cost = float(model.get("pricing", {}).get("completionImageTokens", 0))
                     except (ValueError, TypeError):
                         base_cost = 0.0
-                    cost = round(base_cost * 1.25, 8)
+                    cost = round(base_cost * multiplier, 8)
                     cost_display = "Free" if cost == 0 else f"{cost:.8f}".rstrip("0").rstrip(".")
                     MODEL_PRICING_MAP[model_id.lower()] = {"cost": cost, "cost_display": cost_display}
                     parsed_models.append({"id": model_id, "label": f"{title} ({publisher}) | 🪙 {cost_display}", "cost": cost})
@@ -161,9 +162,10 @@ class AiArtProvider(BaseProvider):
     def format_prompt_url(self, artist: Optional[str], title: str) -> Optional[str]:
         """Format a deterministic Pollinations AI URL for the given artist and title."""
         api_key = str(getattr(self.config, "pollinations", "") or getattr(self.config, "pollinations_key", "") or "").strip()
-        encoded_prompt, seed, model = self._get_prompt_and_seed(artist, title)
+        ai_tier = str(getattr(self.config, "ai_tier", "models" if api_key.startswith("sk_") else "free")).lower()
 
-        if api_key.startswith("sk_"):
+        if ai_tier != "free" and api_key.startswith("sk_"):
+            encoded_prompt, seed, model = self._get_prompt_and_seed(artist, title)
             # Authenticated via Bearer token in HTTP headers and query param key
             url_params = f"?model={model}&width=512&height=512&seed={seed}&nologo=true&key={api_key}"
             return f"https://gen.pollinations.ai/image/{encoded_prompt}{url_params}"
@@ -174,6 +176,44 @@ class AiArtProvider(BaseProvider):
             )
 
         return self.format_free_prompt_url(artist, title)
+
+
+async def async_request_device_code(session: aiohttp.ClientSession) -> Optional[dict]:
+    """Request a new OAuth device authorization code from Pollinations."""
+    try:
+        url = "https://enter.pollinations.ai/api/device/code"
+        payload = {"client_id": POLLINATIONS_CLIENT_ID}
+        headers = {"Content-Type": "application/json", "User-Agent": "Pixoo64-HA-Integration"}
+        async with session.post(url, json=payload, headers=headers, timeout=10) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            _LOGGER.warning("Pollinations device code request failed with HTTP %s", resp.status)
+    except Exception as err:
+        _LOGGER.warning("Error requesting Pollinations device code: %s", err)
+    return None
+
+
+async def async_exchange_device_token(session: aiohttp.ClientSession, device_code: str) -> tuple[Optional[str], Optional[str]]:
+    """Poll or exchange device code for an access token (sk_...) from Pollinations."""
+    try:
+        url = "https://enter.pollinations.ai/api/device/token"
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "Pixoo64-HA-Integration",
+        }
+        data = {
+            "device_code": device_code,
+            "client_id": POLLINATIONS_CLIENT_ID,
+        }
+        async with session.post(url, data=data, headers=headers, timeout=10) as resp:
+            resp_data = await resp.json(content_type=None)
+            if resp.status == 200 and "access_token" in resp_data:
+                return resp_data["access_token"], None
+            err_code = resp_data.get("error", "unknown_error")
+            return None, err_code
+    except Exception as err:
+        _LOGGER.warning("Error exchanging Pollinations device token: %s", err)
+        return None, "network_error"
 
 
 async def async_get_pollen_balance(session: aiohttp.ClientSession, api_key: str) -> Optional[dict]:

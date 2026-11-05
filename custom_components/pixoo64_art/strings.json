@@ -73,7 +73,9 @@
           "discogs_token": "Discogs Personal Token",
           "artwork_race_mode": "Fast Artwork Race Mode (API Priority)",
           "playlist_prefetch_range": "Playlist Queue Pre-fetch (Fast Skip)",
-          "pollinations_key": "Pollinations AI Secret Key",
+          "ai_tier": "AI Service Tier",
+          "pollinations_key": "Pollinations AI Secret Key (sk_...)",
+          "login_pollinations": "Log in with Pollinations Account",
           "ai_model": "AI Art Generation Model"
         },
         "data_description": {
@@ -85,14 +87,27 @@
           "discogs_token": "Personal token from [Discogs Developer Settings](https://www.discogs.com/settings/developers) for physical releases.",
           "artwork_race_mode": "Races the local media player proxy and fast streaming APIs in parallel, taking whichever finishes first to eliminate delays.",
           "playlist_prefetch_range": "Pre-fetches surrounding queue tracks (±5 or ±10 songs) into RAM. Requires active streaming keys.",
-          "pollinations_key": "Optional. Secret Key starting with 'sk_' from https://enter.pollinations.ai/keys. Leave empty to use the free tier (1 image every 45s). Type 'clear' to remove.",
+          "ai_tier": "Choose between the Free Tier (no key or account needed) or Model Services (faster generation with premium models). Model Services requires an API key or Pollinations login.",
+          "pollinations_key": "Secret Key ('sk_...') for Model Services from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys). If you log in via the option below or use Free Tier, leave this empty.",
+          "login_pollinations": "Switch ON and submit to log in and authorize using your Pollinations.ai account in your browser via Pollinations Connect.",
           "ai_model": "Select the generative image model used when 'Force AI Art' is switched on."
+        }
+      },
+      "pollinations_auth": {
+        "title": "Log in with Pollinations.ai",
+        "description": "### 🔗 Link your Pollinations.ai Account\n\n1. Open the authorization link: **[👉 Click here to Authorize on Pollinations.ai]({url})**\n*(Direct URL: {url})*\n\n2. Verify your code is: **`{code}`** and click **Authorize** in your browser.\n\n3. Return here and click **Submit** below.\n\n*(Check 'Cancel' below if you want to use the Free Tier instead.)*",
+        "data": {
+          "cancel_login": "Cancel and continue with Free Tier"
         }
       }
     },
     "error": {
       "cannot_connect": "Could not connect to Pixoo64. Please check the IP address and power.",
       "pollinations_publishable_key": "Publishable keys ('pk_...') are for client-side web apps only and cannot authenticate Home Assistant. Use a secret key starting with 'sk_' from https://enter.pollinations.ai/keys, or clear this field to use the free tier.",
+      "pollinations_connect_error": "Could not connect to Pollinations device login service.",
+      "pollinations_auth_pending": "Authorization is still pending. Please approve access on Pollinations.ai in your browser first, then click Submit.",
+      "pollinations_auth_expired": "The authorization code has expired. Please try again.",
+      "pollinations_auth_failed": "Pollinations authorization failed. Please try again or enter your secret key directly.",
       "spotify_id_required": "Spotify Client Secret was provided without a Client ID.",
       "spotify_secret_required": "Spotify Client ID was provided without a Client Secret.",
       "tidal_id_required": "TIDAL Client Secret was provided without a Client ID.",
@@ -195,23 +210,38 @@
           },
           "ai_section": {
             "name": "Generative AI Art (Pollinations.ai)",
-            "description": "Configure conceptual pixel art generation using Pollinations AI. Works free without a key, or use a Pollinations secret key (sk_...) for higher rate limits and premium models.",
+            "description": "Configure conceptual pixel art generation using Pollinations AI. Works free without a key or login, or use Model Services with a secret key or Pollinations account login.",
             "data": {
+              "ai_tier": "AI Service Tier",
               "pollinations_key": "Pollinations AI Secret Key (sk_...)",
+              "login_pollinations": "Log in with Pollinations Account",
               "ai_model": "AI Art Generation Model",
               "reload_ai_models": "Reload AI Engine Models List"
             },
             "data_description": {
-              "pollinations_key": "Optional. Home Assistant requires a secret key starting with 'sk_' from https://enter.pollinations.ai/keys. Leave empty to use the free tier. Type 'clear' to remove.",
+              "ai_tier": "Choose between the Free Tier (no key or account needed) or Model Services (faster generation with premium models). Model Services requires an API key or Pollinations login.",
+              "pollinations_key": "Secret Key ('sk_...') for Model Services from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys). If you log in via the option below or use Free Tier, leave this empty. Type 'clear' to remove.",
+              "login_pollinations": "Switch ON and submit to log in and authorize using your Pollinations.ai account in your browser via Pollinations Connect.",
               "ai_model": "Generative model used to create AI album art when 'Force AI Art' is switched on.",
               "reload_ai_models": "Switch ON and click Submit to re-fetch the latest models from the Pollinations API on the spot (without changing your key or closing settings)."
             }
           }
         }
+      },
+      "pollinations_auth": {
+        "title": "Log in with Pollinations.ai",
+        "description": "### 🔗 Link your Pollinations.ai Account\n\n1. Open the authorization link: **[👉 Click here to Authorize on Pollinations.ai]({url})**\n*(Direct URL: {url})*\n\n2. Verify your code is: **`{code}`** and click **Authorize** in your browser.\n\n3. Return here and click **Submit** below.\n\n*(Check 'Cancel' below if you want to use the Free Tier instead.)*",
+        "data": {
+          "cancel_login": "Cancel and continue with Free Tier"
+        }
       }
     },
     "error": {
       "pollinations_publishable_key": "Publishable keys ('pk_...') are for client-side web apps only and cannot authenticate Home Assistant. Use a secret key starting with 'sk_' from https://enter.pollinations.ai/keys, or clear this field to use the free tier.",
+      "pollinations_connect_error": "Could not connect to Pollinations device login service.",
+      "pollinations_auth_pending": "Authorization is still pending. Please approve access on Pollinations.ai in your browser first, then click Submit.",
+      "pollinations_auth_expired": "The authorization code has expired. Please try again.",
+      "pollinations_auth_failed": "Pollinations authorization failed. Please try again or enter your secret key directly.",
       "spotify_id_required": "Spotify Client Secret was provided without a Client ID.",
       "spotify_secret_required": "Spotify Client ID was provided without a Client Secret.",
       "tidal_id_required": "TIDAL Client Secret was provided without a Client ID.",

@@ -598,7 +598,7 @@ The integration supports generative AI pop-art via **Pollinations.ai** for track
 
 * **Free Tier (Zero Config / No Key Needed):** In integration settings, select **Free Tier** (or leave credentials empty). Generation routes through the free public endpoint (`image.pollinations.ai`) producing crisp `512×512` images at no cost.
 * **Model Services (Secret Key or Browser Login):** For faster generations, higher rate limits, and custom models (FLUX, Recraft Vector, etc.), select **Model Services**. You can authenticate by:
-  * **Entering a Secret Key (`sk_...`)** from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys).
+  * **Entering a Secret Key (`sk_...`)** from [enter.pollinations.ai/keys](https://enter.pollinations.ai/?ref=19820046).
   * **OR Logging in with your Pollinations account**: Toggle **Log in with Pollinations Account**, submit, and follow the short browser authorization link.
 * **⚠️ Publishable Keys (`pk_...`) are NOT supported:** When creating an "App" on Pollinations, it generates an App / Publishable Key (`pk_...`). These are intended strictly for client-side browser payment widgets (*Pollinations Pay*). Passing a `pk_` key to Home Assistant will cause Pollinations to reject requests with `HTTP 401 Unauthorized`. Use a **Secret Key (`sk_`)**, the built-in **Browser Login**, or the **Free Tier**.
 

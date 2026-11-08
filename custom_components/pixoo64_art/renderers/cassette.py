@@ -134,7 +134,10 @@ class CassetteRenderer:
 
             if pil_frames:
                 c_key = f"cassette_{media_data.artist}_{media_data.title}"
-                media_data.live_display_url = image_processor.save_live_display_gif(pil_frames, 100, c_key)
+                if getattr(media_data, "_defer_live_gif", False):
+                    media_data._pending_live_gif = (pil_frames, 100, c_key)
+                else:
+                    media_data.live_display_url = image_processor.save_live_display_gif(pil_frames, 100, c_key)
         except Exception as e:
             _LOGGER.error("Error generating vintage cassette animation frames: %s", e)
         return frames_b64

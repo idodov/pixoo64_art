@@ -64,7 +64,7 @@ class MusicBrainzProvider(BaseProvider):
                     search_url,
                     params={"query": query_with_album, "fmt": "json"},
                     headers=headers,
-                    timeout=10,
+                    timeout=2.5,
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
@@ -78,7 +78,7 @@ class MusicBrainzProvider(BaseProvider):
                     search_url,
                     params={"query": query, "fmt": "json"},
                     headers=headers,
-                    timeout=10,
+                    timeout=2.5,
                 ) as response:
                     if response.status != 200:
                         return _ret(None, 2)
@@ -108,7 +108,7 @@ class MusicBrainzProvider(BaseProvider):
                 cover_art_url = f"https://coverartarchive.org/release/{release_id}"
                 try:
                     async with self.session.get(
-                        cover_art_url, headers=headers, timeout=12
+                        cover_art_url, headers=headers, timeout=2.5
                     ) as art_response:
                         if art_response.status != 200:
                             continue

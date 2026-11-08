@@ -52,7 +52,7 @@ class InternetArchiveProvider(BaseProvider):
 
         try:
             async with self.session.get(
-                search_url, params=params, headers=headers, timeout=8
+                search_url, params=params, headers=headers, timeout=2.0
             ) as response:
                 if response.status != 200:
                     return _ret(None, 2)

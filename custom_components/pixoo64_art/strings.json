@@ -53,17 +53,17 @@
           "max_cached_albums": "Maximum Cached Albums on Disk"
         },
         "data_description": {
-          "audiodb_enabled": "Query [TheAudioDB](https://www.theaudiodb.com) for high-quality artist photos and discography album art. Recommended for Artist Gallery mode.",
-          "musicbrainz_enabled": "Query the open [MusicBrainz](https://musicbrainz.org) database if cover art cannot be retrieved directly from your player.",
-          "internet_archive_enabled": "Query the free [Internet Archive](https://archive.org) database for rare tracks, live concerts, and archival artwork.",
+          "audiodb_enabled": "Query TheAudioDB (https://www.theaudiodb.com) for high-quality artist photos and discography album art. Recommended for Artist Gallery mode.",
+          "musicbrainz_enabled": "Query the open MusicBrainz (https://musicbrainz.org) database if cover art cannot be retrieved directly from your player.",
+          "internet_archive_enabled": "Query the free Internet Archive (https://archive.org) database for rare tracks, live concerts, and archival artwork.",
           "prefetch_enabled": "Pre-downloads and processes the next upcoming track's artwork into RAM before the current track finishes for seamless transitions.",
           "enable_persistent_cache": "Saves master 300x300 album covers, precomputed color palettes, and artist slider frames to local disk (.storage/pixoo64) so artwork survives Home Assistant restarts.",
           "max_cached_albums": "Maximum number of album master images kept on disk before automatic LRU pruning."
         }
       },
       "apis": {
-        "title": "Streaming Services & AI API Keys",
-        "description": "Configure optional streaming and AI credentials. Generative AI works free out of the box via Pollinations (no key required). An optional Secret Key (sk_...) can be provided for zero rate limits and premium models.",
+        "title": "Streaming Services & AI Tier",
+        "description": "Configure optional streaming credentials and choose your AI generation tier.",
         "data": {
           "spotify_client_id": "Spotify Client ID",
           "spotify_client_secret": "Spotify Client Secret",
@@ -73,37 +73,70 @@
           "discogs_token": "Discogs Personal Token",
           "artwork_race_mode": "Fast Artwork Race Mode (API Priority)",
           "playlist_prefetch_range": "Playlist Queue Pre-fetch (Fast Skip)",
-          "ai_tier": "AI Service Tier",
-          "pollinations_key": "Pollinations AI Secret Key (sk_...)",
-          "login_pollinations": "Log in with Pollinations Account",
-          "ai_model": "AI Art Generation Model"
+          "ai_tier": "AI Generation Tier"
         },
         "data_description": {
-          "spotify_client_id": "Client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Required for 'Spotify Slider' mode.",
-          "spotify_client_secret": "Client Secret from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).",
-          "tidal_client_id": "Client ID from the [TIDAL Developer Platform](https://developer.tidal.com) for lossless cover matching.",
-          "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com).",
-          "lastfm_key": "API Key from [Last.fm Accounts](https://www.last.fm/api/account/create) for fallback artwork.",
-          "discogs_token": "Personal token from [Discogs Developer Settings](https://www.discogs.com/settings/developers) for physical releases.",
+          "spotify_client_id": "Client ID from the Spotify Developer Dashboard. Required for Spotify Slider mode.",
+          "spotify_client_secret": "Client Secret from the Spotify Developer Dashboard.",
+          "tidal_client_id": "Client ID from the TIDAL Developer Platform for lossless cover matching.",
+          "tidal_client_secret": "Client Secret from the TIDAL Developer Platform.",
+          "lastfm_key": "API Key from Last.fm Accounts for fallback artwork.",
+          "discogs_token": "Personal token from Discogs Developer Settings for physical releases.",
           "artwork_race_mode": "Races the local media player proxy and fast streaming APIs in parallel, taking whichever finishes first to eliminate delays.",
-          "playlist_prefetch_range": "Pre-fetches surrounding queue tracks (±5 or ±10 songs) into RAM. Requires active streaming keys.",
-          "ai_tier": "Choose between the Free Tier (no key or account needed) or Model Services (faster generation with premium models). Model Services requires an API key or Pollinations login.",
-          "pollinations_key": "Secret Key ('sk_...') for Model Services from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys). If you log in via the option below or use Free Tier, leave this empty.",
-          "login_pollinations": "Switch ON and submit to log in and authorize using your Pollinations.ai account in your browser via Pollinations Connect.",
-          "ai_model": "Select the generative image model used when 'Force AI Art' is switched on."
+          "playlist_prefetch_range": "Pre-fetches surrounding queue tracks into RAM. Requires active streaming keys.",
+          "ai_tier": "Choose between the Free Tier (community models, no key or login needed) or Model Services (faster generation with custom models)."
+        }
+      },
+      "ai_auth": {
+        "title": "Pollinations AI Setup",
+        "description": "Configure Pollinations Model Services for fast generation and custom models.\n\nRecommendation: It's recommended to create an account through [enter.pollinations.ai](https://enter.pollinations.ai/?ref=19820046) to get started with faster generation.\n\nAPI Key vs Browser Login:\n• Secret API Key (sk_...): Direct server access with full account balance; no spending budget cap or expiry date enforced by browser consent.\n• Pollinations Login: Browser OAuth where you can customize a spending budget cap (e.g. 5 Pollen) and expiry duration on the consent screen.\n\nGet an API key or manage your account at [enter.pollinations.ai](https://enter.pollinations.ai/?ref=19820046).",
+        "data": {
+          "auth_method": "Authentication Method",
+          "cancel_setup": "Cancel and continue with Free Tier"
+        },
+        "data_description": {
+          "auth_method": "Choose whether to log in via your browser or enter a secret API key.",
+          "cancel_setup": "Switch ON and submit to cancel Model Services setup and continue with Free Tier."
+        }
+      },
+      "ai_key": {
+        "title": "Enter Pollinations Secret Key",
+        "description": "Enter your Pollinations Secret API Key (starting with 'sk_').\n\nRecommendation: If you do not have an API key yet, it's recommended to create an account through [enter.pollinations.ai](https://enter.pollinations.ai/?ref=19820046) to get started.",
+        "data": {
+          "pollinations_key": "Pollinations Secret Key (sk_...)",
+          "cancel_setup": "Cancel and continue with Free Tier"
+        },
+        "data_description": {
+          "pollinations_key": "Your secret API key starting with 'sk_'.",
+          "cancel_setup": "Switch ON and submit to cancel Model Services setup and continue with Free Tier."
         }
       },
       "pollinations_auth": {
         "title": "Log in with Pollinations.ai",
-        "description": "### 🔗 Link your Pollinations.ai Account\n\n1. Open the authorization link: **[👉 Click here to Authorize on Pollinations.ai]({url})**\n*(Direct URL: {url})*\n\n2. Verify your code is: **`{code}`** and click **Authorize** in your browser.\n\n3. Return here and click **Submit** below.\n\n*(Check 'Cancel' below if you want to use the Free Tier instead.)*",
+        "description": "Link your Pollinations.ai Account\n\n1. Open the authorization link: [Click here to Authorize on Pollinations.ai]({url})\nDirect URL: {url}\n\n2. Verify your code is: {code} and click Authorize in your browser.\n\n3. Return here and click Submit below.\n\n(Check Cancel below if you want to use the Free Tier instead.)",
         "data": {
           "cancel_login": "Cancel and continue with Free Tier"
+        },
+        "data_description": {
+          "cancel_login": "Switch ON and submit to cancel browser login and continue with Free Tier."
+        }
+      },
+      "ai_model_select": {
+        "title": "Choose AI Generation Model",
+        "description": "Select the generative image model to use when 'Force AI Art' is switched on.",
+        "data": {
+          "ai_model": "AI Art Generation Model"
+        },
+        "data_description": {
+          "ai_model": "Generative model from Pollinations catalog to produce conceptual pixel album covers."
         }
       }
     },
     "error": {
       "cannot_connect": "Could not connect to Pixoo64. Please check the IP address and power.",
-      "pollinations_publishable_key": "Publishable keys ('pk_...') are for client-side web apps only and cannot authenticate Home Assistant. Use a secret key starting with 'sk_' from https://enter.pollinations.ai/keys, or clear this field to use the free tier.",
+      "pollinations_publishable_key": "Publishable keys ('pk_...') are for client-side web apps only and cannot authenticate Home Assistant. Use a secret key starting with 'sk_' from enter.pollinations.ai, or use the free tier.",
+      "invalid_api_key": "Please enter a valid Pollinations Secret Key starting with 'sk_'.",
+      "api_key_required": "Please enter your Pollinations Secret Key starting with 'sk_'.",
       "pollinations_connect_error": "Could not connect to Pollinations device login service.",
       "pollinations_auth_pending": "Authorization is still pending. Please approve access on Pollinations.ai in your browser first, then click Submit.",
       "pollinations_auth_expired": "The authorization code has expired. Please try again.",
@@ -119,6 +152,18 @@
       "init": {
         "title": "Pixoo64 Settings",
         "description": "Configure playback tracking, persistent caching, ambient lighting, and external APIs.",
+        "data": {
+          "ai_tier": "AI Service Tier",
+          "ai_model": "AI Art Generation Model",
+          "reload_ai_models": "Reload AI Engine Models List",
+          "reconfigure_ai": "Change AI Account / API Key"
+        },
+        "data_description": {
+          "ai_tier": "Choose between Free Tier or Model Services. Selecting Model Services when unauthenticated will open the setup screen.",
+          "ai_model": "Generative model used to create AI album art when 'Force AI Art' is switched on.",
+          "reload_ai_models": "Switch ON and click Submit to re-fetch the latest models from Pollinations.",
+          "reconfigure_ai": "Switch ON and click Submit to log into a different Pollinations account or enter a new API key."
+        },
         "sections": {
           "media_section": {
             "name": "Media Player & Screen Tracking",
@@ -179,9 +224,9 @@
               "internet_archive_enabled": "Search Internet Archive (Free)"
             },
             "data_description": {
-              "audiodb_enabled": "Query [TheAudioDB](https://www.theaudiodb.com) for artist pictures and discographies. Free and requires no account.",
-              "musicbrainz_enabled": "Query the open [MusicBrainz](https://musicbrainz.org) database for album art. Free and requires no account.",
-              "internet_archive_enabled": "Query the free [Internet Archive](https://archive.org) for rare tracks and live concerts."
+              "audiodb_enabled": "Query TheAudioDB (https://www.theaudiodb.com) for artist pictures and discographies. Free and requires no account.",
+              "musicbrainz_enabled": "Query the open MusicBrainz (https://musicbrainz.org) database for album art. Free and requires no account.",
+              "internet_archive_enabled": "Query the free Internet Archive (https://archive.org) for rare tracks and live concerts."
             }
           },
           "streaming_api_section": {
@@ -198,46 +243,83 @@
               "playlist_prefetch_range": "Playlist Queue Pre-fetch (Fast Skip)"
             },
             "data_description": {
-              "spotify_client_id": "Client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Enables 'Spotify Slider' mode. Leave blank to remove.",
-              "spotify_client_secret": "Client Secret from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Leave blank to keep existing.",
-              "tidal_client_id": "Client ID from the [TIDAL Developer Platform](https://developer.tidal.com) for lossless cover matching. Leave blank to remove.",
-              "tidal_client_secret": "Client Secret from the [TIDAL Developer Platform](https://developer.tidal.com). Leave blank to keep existing.",
-              "lastfm_key": "API Key from [Last.fm Accounts](https://www.last.fm/api/account/create) for fallback artwork. Leave blank to keep existing key, or type 'clear' to remove.",
-              "discogs_token": "Personal token from [Discogs Developer Settings](https://www.discogs.com/settings/developers) for physical releases. Leave blank to keep existing token, or type 'clear' to remove.",
+              "spotify_client_id": "Client ID from the Spotify Developer Dashboard. Enables Spotify Slider mode. Leave blank to remove.",
+              "spotify_client_secret": "Client Secret from the Spotify Developer Dashboard. Leave blank to keep existing.",
+              "tidal_client_id": "Client ID from the TIDAL Developer Platform for lossless cover matching. Leave blank to remove.",
+              "tidal_client_secret": "Client Secret from the TIDAL Developer Platform. Leave blank to keep existing.",
+              "lastfm_key": "API Key from Last.fm Accounts for fallback artwork. Leave blank to keep existing key, or type 'clear' to remove.",
+              "discogs_token": "Personal token from Discogs Developer Settings for physical releases. Leave blank to keep existing token, or type 'clear' to remove.",
               "artwork_race_mode": "When ON: Races the local media player proxy and fast streaming APIs in parallel, taking whichever finishes first to eliminate delays. Appears only when API keys are configured (default: OFF).",
-              "playlist_prefetch_range": "Pre-fetches surrounding queue tracks (±5 or ±10 songs) into RAM. Requires active streaming keys."
+              "playlist_prefetch_range": "Pre-fetches surrounding queue tracks into RAM. Requires active streaming keys."
             }
           },
           "ai_section": {
             "name": "Generative AI Art (Pollinations.ai)",
-            "description": "Configure conceptual pixel art generation using Pollinations AI. Works free without a key or login, or use Model Services with a secret key or Pollinations account login.",
+            "description": "Configure conceptual pixel art generation using Pollinations AI. Free Tier works out of the box with community models. Model Services unlocks fast generation and custom models.\n\nRecommendation: It's recommended to create an account through enter.pollinations.ai to get started with faster generation.",
             "data": {
               "ai_tier": "AI Service Tier",
-              "pollinations_key": "Pollinations AI Secret Key (sk_...)",
-              "login_pollinations": "Log in with Pollinations Account",
               "ai_model": "AI Art Generation Model",
-              "reload_ai_models": "Reload AI Engine Models List"
+              "reload_ai_models": "Reload AI Engine Models List",
+              "reconfigure_ai": "Change AI Account / API Key"
             },
             "data_description": {
-              "ai_tier": "Choose between the Free Tier (no key or account needed) or Model Services (faster generation with premium models). Model Services requires an API key or Pollinations login.",
-              "pollinations_key": "Secret Key ('sk_...') for Model Services from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys). If you log in via the option below or use Free Tier, leave this empty. Type 'clear' to remove.",
-              "login_pollinations": "Switch ON and submit to log in and authorize using your Pollinations.ai account in your browser via Pollinations Connect.",
+              "ai_tier": "Choose between Free Tier or Model Services. Selecting Model Services when unauthenticated will open the setup screen.",
               "ai_model": "Generative model used to create AI album art when 'Force AI Art' is switched on.",
-              "reload_ai_models": "Switch ON and click Submit to re-fetch the latest models from the Pollinations API on the spot (without changing your key or closing settings)."
+              "reload_ai_models": "Switch ON and click Submit to re-fetch the latest models from Pollinations.",
+              "reconfigure_ai": "Switch ON and click Submit to log into a different Pollinations account or enter a new API key."
             }
           }
         }
       },
+      "ai_auth": {
+        "title": "Pollinations AI Setup",
+        "description": "Configure Pollinations Model Services for fast generation and custom models.\n\nRecommendation: It's recommended to create an account through [enter.pollinations.ai](https://enter.pollinations.ai/?ref=19820046) to get started with faster generation.\n\nAPI Key vs Browser Login:\n• Secret API Key (sk_...): Direct server access with full account balance; no spending budget cap or expiry date enforced by browser consent.\n• Pollinations Login: Browser OAuth where you can customize a spending budget cap (e.g. 5 Pollen) and expiry duration on the consent screen.\n\nGet an API key or manage your account at [enter.pollinations.ai](https://enter.pollinations.ai/?ref=19820046).",
+        "data": {
+          "auth_method": "Authentication Method",
+          "cancel_setup": "Cancel and continue with Free Tier"
+        },
+        "data_description": {
+          "auth_method": "Choose whether to log in via your browser or enter a secret API key.",
+          "cancel_setup": "Switch ON and submit to cancel Model Services setup and continue with Free Tier."
+        }
+      },
+      "ai_key": {
+        "title": "Enter Pollinations Secret Key",
+        "description": "Enter your Pollinations Secret API Key (starting with 'sk_').\n\nRecommendation: If you do not have an API key yet, it's recommended to create an account through [enter.pollinations.ai](https://enter.pollinations.ai/?ref=19820046) to get started.",
+        "data": {
+          "pollinations_key": "Pollinations Secret Key (sk_...)",
+          "cancel_setup": "Cancel and continue with Free Tier"
+        },
+        "data_description": {
+          "pollinations_key": "Your secret API key starting with 'sk_'.",
+          "cancel_setup": "Switch ON and submit to cancel Model Services setup and continue with Free Tier."
+        }
+      },
       "pollinations_auth": {
         "title": "Log in with Pollinations.ai",
-        "description": "### 🔗 Link your Pollinations.ai Account\n\n1. Open the authorization link: **[👉 Click here to Authorize on Pollinations.ai]({url})**\n*(Direct URL: {url})*\n\n2. Verify your code is: **`{code}`** and click **Authorize** in your browser.\n\n3. Return here and click **Submit** below.\n\n*(Check 'Cancel' below if you want to use the Free Tier instead.)*",
+        "description": "Link your Pollinations.ai Account\n\n1. Open the authorization link: [Click here to Authorize on Pollinations.ai]({url})\nDirect URL: {url}\n\n2. Verify your code is: {code} and click Authorize in your browser.\n\n3. Return here and click Submit below.\n\n(Check Cancel below if you want to use the Free Tier instead.)",
         "data": {
           "cancel_login": "Cancel and continue with Free Tier"
+        },
+        "data_description": {
+          "cancel_login": "Switch ON and submit to cancel browser login and continue with Free Tier."
+        }
+      },
+      "ai_model_select": {
+        "title": "Choose AI Generation Model",
+        "description": "Select the generative image model to use when 'Force AI Art' is switched on.",
+        "data": {
+          "ai_model": "AI Art Generation Model"
+        },
+        "data_description": {
+          "ai_model": "Generative model from Pollinations catalog to produce conceptual pixel album covers."
         }
       }
     },
     "error": {
-      "pollinations_publishable_key": "Publishable keys ('pk_...') are for client-side web apps only and cannot authenticate Home Assistant. Use a secret key starting with 'sk_' from https://enter.pollinations.ai/keys, or clear this field to use the free tier.",
+      "pollinations_publishable_key": "Publishable keys ('pk_...') are for client-side web apps only and cannot authenticate Home Assistant. Use a secret key starting with 'sk_' from enter.pollinations.ai, or use the free tier.",
+      "invalid_api_key": "Please enter a valid Pollinations Secret Key starting with 'sk_'.",
+      "api_key_required": "Please enter your Pollinations Secret Key starting with 'sk_'.",
       "pollinations_connect_error": "Could not connect to Pollinations device login service.",
       "pollinations_auth_pending": "Authorization is still pending. Please approve access on Pollinations.ai in your browser first, then click Submit.",
       "pollinations_auth_expired": "The authorization code has expired. Please try again.",

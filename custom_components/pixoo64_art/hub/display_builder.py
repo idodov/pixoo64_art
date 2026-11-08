@@ -42,11 +42,15 @@ class DisplayLayerBuilder:
 
         def _append_clk_tmp(y_pos: int):
             if show_clk:
-                text_items.append({"TextId": 2, "type": 5, "x": x_c, "y": y_pos, "dir": 0, "font": 18, "TextWidth": 32, "Textheight": 16, "speed": 100, "align": 1, "color": font_color})
+                w_c = min(32, max(16, 64 - x_c))
+                h_c = min(16, max(6, 64 - y_pos))
+                text_items.append({"TextId": 2, "type": 5, "x": x_c, "y": y_pos, "dir": 0, "font": 18, "TextWidth": w_c, "Textheight": h_c, "speed": 100, "align": 1, "color": font_color})
             if show_tmp:
                 t_val = getattr(media_data, "temperature", None)
                 t_type = 22 if t_val else 17
-                text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_pos, "dir": 0, "font": 18, "TextWidth": 20, "Textheight": 6, "speed": 100, "align": 1, "color": font_color, "TextString": str(t_val) if t_type == 22 else ""})
+                w_t = min(20, max(14, 64 - x_t))
+                h_t = min(6, max(6, 64 - y_pos))
+                text_items.append({"TextId": 3, "type": t_type, "x": x_t, "y": y_pos, "dir": 0, "font": 18, "TextWidth": w_t, "Textheight": h_t, "speed": 100, "align": 1, "color": font_color, "TextString": str(t_val) if t_type == 22 else ""})
 
         if osd_mode:
             if osd_mode == "Pause":
@@ -94,18 +98,17 @@ class HubDisplayMixin:
     """Mixin for PixooHub managing text/lyrics/clock/progress schedulers and display power/notifications."""
 
     async def _handle_tv_display(self, configured_mode: str) -> bool:
-        await self.control_light("off")
-        await self.control_wled_light("off")
+        await asyncio.gather(
+            self.control_light("off"),
+            self.control_wled_light("off"),
+            return_exceptions=True,
+        )
         if not getattr(self.config, "tv_mode", False) or self.media_data.picture == "TV_IS_ON":
             target_channel = 0 if getattr(self, "last_valid_index", 0) in (4, -1) or getattr(self, "last_valid_index", 0) < 0 else self.last_valid_index
-            await self.pixoo_device.send_command({
-                "Command": "Draw/CommandList",
-                "CommandList": [
-                    {"Command": "Draw/ClearHttpText"},
-                    {"Command": "Draw/ResetHttpGifId"},
-                    {"Command": "Channel/SetIndex", "SelectIndex": target_channel},
-                ],
-            })
+            await self.pixoo_device.send_command({"Command": "Draw/ClearHttpText"})
+            self._active_text_ids = set()
+            self._active_text_layers = {}
+            await self.pixoo_device.send_command({"Command": "Channel/SetIndex", "SelectIndex": target_channel})
             if getattr(self.config, "full_control", False) or self.ui_state.get("full_control", False):
                 self.device_screen_on = False
                 await asyncio.sleep(0.1)
@@ -140,6 +143,15 @@ class HubDisplayMixin:
             self.spotify_slider_frames = self.media_data.slider_frames if ok else 0
         if ok:
             self._is_animation_active = True
+        self._mark_hardware_text_wiped()
+
+    _ALL_MANAGED_TEXT_IDS = frozenset((1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 19, 20, 21))
+
+    def _mark_hardware_text_wiped(self) -> None:
+        """Record that hardware HTTP text layers were wiped by ResetHttpGifId / SendHttpGif."""
+        self._active_text_layers = {}
+        self._active_text_ids = set()
+        self.last_text_payload_hash = None
 
     def request_text_render(self, force: bool = False) -> None:
         if self.notification_manager.is_active or getattr(self, "chart_active", False):
@@ -147,7 +159,8 @@ class HubDisplayMixin:
         if force:
             self._force_next_text_render = True
         self._cleanup_timers(["_pending_render_unsub"])
-        self._pending_render_unsub = async_call_later(self.hass, 0.2, self._execute_text_render)
+        delay = 0.02 if force else 0.08
+        self._pending_render_unsub = async_call_later(self.hass, delay, self._execute_text_render)
 
     async def _execute_text_render(self, now=None) -> None:
         self._pending_render_unsub = None
@@ -157,16 +170,14 @@ class HubDisplayMixin:
         self._force_next_text_render = False
         await self._render_and_send_text_layers(force=force)
 
-    async def _render_and_send_text_layers(self, force: bool = False) -> None:
-        if not self.is_art_visible or self.notification_manager.is_active or getattr(self, "chart_active", False) or getattr(self, "_is_processing_image", False):
-            return
+    async def _prepare_text_items(self) -> tuple[list[dict], int, set]:
         items = []
         font_color = getattr(self.media_data, "lyrics_font_color", "#FFFFFF")
         bg_color = getattr(self.media_data, "background_color", "#000000")
 
         if self.osd_mode:
             items.extend(await self._build_text_items_list(font_color, bg_color, scope="static"))
-        elif self.lyrics_active_mode and self.current_lyrics_items:
+        elif self.lyrics_active_mode and self.current_lyrics_items is not None:
             items.extend(self.current_lyrics_items)
         else:
             if not self.cached_static_items:
@@ -182,16 +193,117 @@ class HubDisplayMixin:
                 items.extend(pb)
 
         used_ids = {item.get("TextId") for item in items if "TextId" in item}
-        for i in range(1, 22):
-            if i not in used_ids:
-                items.append({"TextId": i, "type": 22, "x": 0, "y": 64, "dir": 0, "font": 2, "TextWidth": 64, "Textheight": 16, "speed": 0, "align": 1, "TextString": "", "color": "#000000"})
+        active_hsh = hash(json.dumps(items, sort_keys=True))
+        return items, active_hsh, used_ids
 
-        hsh = hash(json.dumps(items, sort_keys=True))
-        if force or hsh != self.last_text_payload_hash:
-            await self.pixoo_device.send_command({"Command": "Draw/SendHttpItemList", "ItemList": items})
-            self.last_text_payload_hash = hsh
+    async def _render_and_send_text_layers(self, force: bool = False) -> None:
+        if (
+            not self.is_art_visible
+            or self.notification_manager.is_active
+            or getattr(self, "chart_active", False)
+            or (not force and getattr(self, "_is_processing_image", False))
+        ):
+            return
+        self._cleanup_timers(["_pending_render_unsub"])
+        self._force_next_text_render = False
 
-    async def _calculate_and_schedule_next(self) -> None:
+        items, active_hsh, current_ids = await self._prepare_text_items()
+        prev_layers = getattr(self, "_active_text_layers", {})
+
+        # 1. Blank discontinued text IDs in-place without calling ClearHttpText
+        # (Draw/ClearHttpText wipes ALL text layers on Pixoo firmware regardless of arguments).
+        ids_to_clear = set(prev_layers.keys()) - current_ids
+        blank_items = []
+        if ids_to_clear:
+            for t_id in sorted(ids_to_clear):
+                blank_items.append({
+                    "TextId": t_id,
+                    "type": 22,
+                    "x": 0,
+                    "y": 0,
+                    "dir": 0,
+                    "font": 2,
+                    "TextWidth": 64,
+                    "Textheight": 16,
+                    "speed": 0,
+                    "align": 2,
+                    "TextString": "",
+                    "color": "#000000",
+                })
+                prev_layers.pop(t_id, None)
+
+        # 2. Check if text layers actually changed
+        has_changed = (
+            force
+            or bool(blank_items)
+            or active_hsh != getattr(self, "last_text_payload_hash", None)
+            or any(t_id not in prev_layers for t_id in current_ids)
+        )
+        if not has_changed:
+            return
+
+        # 3. Always dispatch full active items + blanking items via Draw/SendHttpItemList.
+        # This guarantees persistent widgets (digital clock, temp) are never lost or
+        # swallowed by a previous frame decode, updating in-place with zero flicker.
+        items_to_send = list(blank_items) + list(items)
+        if items_to_send:
+            await self.pixoo_device.send_command({"Command": "Draw/SendHttpItemList", "ItemList": items_to_send}, force=force)
+
+        self._active_text_layers = {
+            item["TextId"]: json.dumps(item, sort_keys=True)
+            for item in items
+            if "TextId" in item
+        }
+        self._active_text_ids = current_ids
+        self.last_text_payload_hash = active_hsh
+
+    async def _send_frame_with_text(self, b64_frame: str, pic_speed: int = 10000, channel_switch: bool = False) -> None:
+        """Send the image frame and active HTTP text layers back-to-back under a single device lock."""
+        self._cleanup_timers(["_pending_render_unsub"])
+        self._force_next_text_render = False
+        self.is_art_visible = True
+
+        items: list[dict] = []
+        active_hsh: Optional[int] = None
+        current_ids: set = set()
+        if not self.notification_manager.is_active and not getattr(self, "chart_active", False):
+            items, active_hsh, current_ids = await self._prepare_text_items()
+
+        cmds = []
+        if channel_switch:
+            cmds.append({"Command": "Channel/SetIndex", "SelectIndex": 4})
+            self.select_index = 4
+        cmds.append({"Command": "Draw/ResetHttpGifId"})
+        cmds.append({
+            "Command": "Draw/SendHttpGif",
+            "PicNum": 1,
+            "PicWidth": 64,
+            "PicOffset": 0,
+            "PicID": 0,
+            "PicSpeed": pic_speed,
+            "PicData": b64_frame,
+        })
+        frame_payload = {"Command": "Draw/CommandList", "CommandList": cmds}
+        text_payload = {"Command": "Draw/SendHttpItemList", "ItemList": items} if items else None
+
+        self._mark_hardware_text_wiped()
+        frame_ok, text_ok = await self.pixoo_device.send_frame_and_text(frame_payload, text_payload)
+        if frame_ok and text_ok and items:
+            self._active_text_layers = {
+                item["TextId"]: json.dumps(item, sort_keys=True)
+                for item in items
+                if "TextId" in item
+            }
+            self._active_text_ids = current_ids
+            self.last_text_payload_hash = active_hsh
+
+    async def _resend_text_after_image(self) -> None:
+        """Immediately re-apply active text layers after a multi-frame animation upload."""
+        self._mark_hardware_text_wiped()
+        self.is_art_visible = True
+        await self._render_and_send_text_layers(force=True)
+
+    async def _calculate_and_schedule_next(self, send_now: bool = True) -> None:
         if self.notification_manager.is_active or getattr(self, "chart_active", False) or not self.lyrics_active_mode:
             return
         self.scheduler_generation_id += 1
@@ -201,16 +313,12 @@ class HubDisplayMixin:
         self.current_lyrics_items = []
         font_id = getattr(self.config, "lyrics_font", 2)
 
-        for i in range(6):
-            if layout and i < len(layout):
-                it = layout[i]
+        if layout:
+            for i, it in enumerate(layout[:6]):
                 self.current_lyrics_items.append({"TextId": i + 10, "type": 22, "x": 0, "y": int(it["y"]), "dir": int(it["dir"]), "font": font_id, "TextWidth": 64, "Textheight": 16, "speed": 0, "align": 2, "TextString": it["text"], "color": getattr(self.media_data, "lyrics_font_color", "#FFFFFF")})
-            else:
-                self.current_lyrics_items.append({"TextId": i + 10, "type": 22, "x": 0, "y": 0, "dir": 0, "font": font_id, "TextWidth": 64, "Textheight": 12, "speed": 0, "align": 2, "TextString": "", "color": "#000000"})
-        for i in range(1, 7):
-            self.current_lyrics_items.append({"TextId": i, "type": 22, "x": 0, "y": 64, "dir": 0, "font": 2, "TextWidth": 64, "Textheight": 12, "speed": 0, "align": 1, "TextString": "", "color": "#000000"})
 
-        self.request_text_render()
+        if send_now:
+            self.request_text_render()
         self._cleanup_timers(["_lyrics_timer_unsub"])
 
         async def _next_lyrics(_now=None):
@@ -236,32 +344,33 @@ class HubDisplayMixin:
 
         async def _tick(event_time):
             self._clock_timer_unsub = None
-            if self.clock_timer_gen_id != gen_id or not getattr(self.config, "analog_clock", False) or not self.is_art_visible or getattr(self, "chart_active", False):
+            if (
+                self.clock_timer_gen_id != gen_id
+                or not getattr(self.config, "analog_clock", False)
+                or not self.is_art_visible
+                or getattr(self, "chart_active", False)
+                or getattr(self, "_is_processing_image", False)
+                or self.notification_manager.is_active
+                or self.osd_mode == "Pause"
+            ):
                 return
             current_song_key = f"{self.media_data.artist}_{self.media_data.title}".strip().lower()
             if not self._current_clock_pil_img or self._current_clock_song_key != current_song_key:
                 return
             clock_b64 = await self.hass.async_add_executor_job(self.image_processor.generate_analog_clock_frame, self._current_clock_pil_img, self.media_data)
-            if self.clock_timer_gen_id != gen_id or self._current_clock_song_key != current_song_key:
+            if (
+                self.clock_timer_gen_id != gen_id
+                or self._current_clock_song_key != current_song_key
+                or getattr(self, "_is_processing_image", False)
+                or self.notification_manager.is_active
+                or self.osd_mode == "Pause"
+            ):
                 return
             if clock_b64:
+                self._current_rendered_b64 = clock_b64
+                self._cleanup_timers(["_pending_render_unsub"])
                 self._current_live_gif_url = self.media_data.live_display_url
-                await self.pixoo_device.send_command({
-                    "Command": "Draw/CommandList",
-                    "CommandList": [
-                        {"Command": "Draw/ResetHttpGifId"},
-                        {
-                            "Command": "Draw/SendHttpGif",
-                            "PicNum": 1,
-                            "PicWidth": 64,
-                            "PicOffset": 0,
-                            "PicID": 0,
-                            "PicSpeed": 10000,
-                            "PicData": clock_b64,
-                        },
-                    ],
-                })
-                await self._render_and_send_text_layers(force=True)
+                await self._send_frame_with_text(clock_b64)
                 self.update_sensor_callback()
             self._schedule_analog_clock_tick()
 
@@ -394,21 +503,20 @@ class HubDisplayMixin:
         self._stop_lyrics_scheduler()
         self._cleanup_timers()
         self._cancel_tasks(["_prefetch_task", "_playlist_prefetch_task", "_early_send_task"])
-        await self.control_light("off")
-        await self.control_wled_light("off")
+        await asyncio.gather(
+            self.control_light("off"),
+            self.control_wled_light("off"),
+            return_exceptions=True,
+        )
 
         target_channel = 0 if getattr(self, "last_valid_index", 0) in (4, -1) or getattr(self, "last_valid_index", 0) < 0 else self.last_valid_index
         _LOGGER.info("Pixoo64 _send_off_command: force_screen_off=%s, was_pause=%s, should_screen_off=%s, target_channel=%s", force_screen_off, was_pause, should_screen_off, target_channel)
 
         await self.pixoo_device.send_command({"Command": "Draw/ClearHttpText"}, force=True)
-        await self.pixoo_device.send_command({"Command": "Draw/ResetHttpGifId"}, force=True)
-        await asyncio.sleep(0.08)
-
-        await self.pixoo_device.send_command({
-            "Command": "Channel/SetIndex",
-            "SelectIndex": target_channel,
-        }, force=True)
-        await asyncio.sleep(0.35)
+        self._active_text_ids = set()
+        self._active_text_layers = {}
+        await self.pixoo_device.send_command({"Command": "Channel/SetIndex", "SelectIndex": target_channel}, force=True)
+        await asyncio.sleep(0.15)
 
         if should_screen_off:
             self.device_screen_on = False
@@ -471,34 +579,30 @@ class HubDisplayMixin:
         self._stop_lyrics_scheduler()
         self._cleanup_timers()
         self._cancel_tasks()
+        self._active_text_ids = set()
+        self._active_text_layers = {}
         await self.notification_manager.display(payload)
         rechecked = self.hass.states.get(self.media_player)
         if rechecked and rechecked.state in ["playing", "on"]:
+            if payload.get("burned_text") in (False, "false", "0", "no", "off"):
+                await self.pixoo_device.send_command({"Command": "Draw/ClearHttpText"})
+            self._active_text_ids = set()
+            self._active_text_layers = {}
             self.is_art_visible, self._active_song_key = False, None
             await self.force_update()
         elif is_full_ctrl and not was_screen_on:
             target_ret = 0 if getattr(self, "last_valid_index", 0) in (4, -1) or getattr(self, "last_valid_index", 0) < 0 else self.last_valid_index
-            await self.pixoo_device.send_command({
-                "Command": "Draw/CommandList",
-                "CommandList": [
-                    {"Command": "Draw/ClearHttpText"},
-                    {"Command": "Draw/ResetHttpGifId"},
-                ],
-            })
-            await asyncio.sleep(0.05)
+            await self.pixoo_device.send_command({"Command": "Draw/ClearHttpText"})
+            self._active_text_ids = set()
+            self._active_text_layers = {}
             await self.pixoo_device.send_command({"Command": "Channel/SetIndex", "SelectIndex": target_ret})
             await asyncio.sleep(0.1)
             await self.pixoo_device.send_command({"Command": "Channel/OnOffScreen", "OnOff": 0})
             self.is_art_visible, self._active_song_key = False, None
         else:
             target_ret = 0 if getattr(self, "last_valid_index", 0) in (4, -1) or getattr(self, "last_valid_index", 0) < 0 else self.last_valid_index
-            await self.pixoo_device.send_command({
-                "Command": "Draw/CommandList",
-                "CommandList": [
-                    {"Command": "Draw/ClearHttpText"},
-                    {"Command": "Draw/ResetHttpGifId"},
-                ],
-            })
-            await asyncio.sleep(0.05)
+            await self.pixoo_device.send_command({"Command": "Draw/ClearHttpText"})
+            self._active_text_ids = set()
+            self._active_text_layers = {}
             await self.pixoo_device.send_command({"Command": "Channel/SetIndex", "SelectIndex": target_ret})
             await self.pixoo_device.send_command({"Command": "Channel/OnOffScreen", "OnOff": 1})

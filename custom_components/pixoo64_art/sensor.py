@@ -14,6 +14,25 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 class PixooStatusSensor(SensorEntity):
+    _unrecorded_attributes = frozenset({
+        "chart_leaderboard",
+        "chart_metadata",
+        "profile_song",
+        "profile_total",
+        "profile_first_frame",
+        "profile_artwork_pipeline",
+        "playlist_prefetch_status",
+        "playlist_window_range",
+        "prefetch_status",
+        "prefetch_next_artist",
+        "prefetch_next_title",
+        "slider_status",
+        "slider_last_error",
+        "ai_status",
+        "ai_progress",
+        "ai_last_error",
+    })
+
     def __init__(self, hub, entry):
         self.hub = hub
         self._attr_name = "Pixoo64 Status"
@@ -52,6 +71,11 @@ class PixooStatusSensor(SensorEntity):
 
 class PixooAnalyticsSensor(SensorEntity):
     """Dedicated analytics and database metrics sensor for Hit Parade and scrobbles."""
+    _unrecorded_attributes = frozenset({
+        "all_time_top_track",
+        "all_time_top_artist",
+        "last_scrobble",
+    })
 
     def __init__(self, hub, entry):
         self.hub = hub

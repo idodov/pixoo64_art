@@ -1,5 +1,6 @@
 """Ambient lighting controller and background queue/track prefetch mixin for PixooHub."""
 import asyncio
+from datetime import datetime
 import logging
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from homeassistant.helpers.event import async_call_later
@@ -18,9 +19,15 @@ class AmbientLightingController:
 
     def __init__(self, hass: "HomeAssistant", websession: "aiohttp.ClientSession", config: "Config") -> None:
         self.hass, self.websession, self.config = hass, websession, config
+        self._last_light_action: Optional[str] = None
+        self._last_light_rgb: Optional[tuple] = None
+        self._last_wled_action: Optional[str] = None
+        self._last_wled_colors: Optional[list] = None
 
     async def control_light(self, action: str, rgb_color: Optional[tuple] = None, is_night: bool = True) -> None:
-        if not is_night and getattr(self.config, "only_at_night", False):
+        if action == "on" and not is_night and getattr(self.config, "only_at_night", False):
+            return
+        if action == "on" and self._last_light_action == "on" and rgb_color is not None and rgb_color == self._last_light_rgb:
             return
         raw_entities = getattr(self.config, "light_entity", [])
         if not raw_entities:
@@ -40,27 +47,39 @@ class AmbientLightingController:
         if not entities:
             return
 
-        service_data = {"entity_id": entities}
-        if action == "on" and rgb_color:
-            r, g, b = int(rgb_color[0]), int(rgb_color[1]), int(rgb_color[2])
-            service_data["rgb_color"] = [255, 255, 255] if (r == 0 and g == 0 and b == 0) else [r, g, b]
-            service_data["transition"] = 1
-
-        try:
-            await self.hass.services.async_call("light", f"turn_{action}", service_data, blocking=True)
-        except Exception as e:
-            _LOGGER.debug("Batch light control error, trying individually: %s", e)
-            for entity_id in entities:
-                indiv_data = {"entity_id": entity_id}
-                if action == "on" and rgb_color:
-                    indiv_data["rgb_color"] = service_data["rgb_color"]
-                    indiv_data["transition"] = 1
+        if action == "off":
+            async def _turn_off_single(ent_id: str):
                 try:
-                    await self.hass.services.async_call("light", f"turn_{action}", indiv_data, blocking=True)
-                except Exception as ind_err:
-                    _LOGGER.error("Failed to control light %s (%s): %s", entity_id, action, ind_err)
+                    await self.hass.services.async_call("light", "turn_off", {"entity_id": ent_id}, blocking=True)
+                except Exception as err:
+                    _LOGGER.debug("Failed turning off light %s: %s", ent_id, err)
+
+            await asyncio.gather(*[_turn_off_single(e) for e in entities], return_exceptions=True)
+        else:
+            service_data = {"entity_id": entities}
+            if rgb_color:
+                r, g, b = int(rgb_color[0]), int(rgb_color[1]), int(rgb_color[2])
+                service_data["rgb_color"] = [255, 255, 255] if (r == 0 and g == 0 and b == 0) else [r, g, b]
+                service_data["transition"] = 1
+
+            try:
+                await self.hass.services.async_call("light", "turn_on", service_data, blocking=True)
+            except Exception as e:
+                _LOGGER.debug("Batch light control error, trying individually: %s", e)
+                async def _turn_on_single(ent_id: str):
+                    indiv_data = {"entity_id": ent_id}
+                    if rgb_color:
+                        indiv_data["rgb_color"] = service_data["rgb_color"]
+                        indiv_data["transition"] = 1
+                    try:
+                        await self.hass.services.async_call("light", "turn_on", indiv_data, blocking=True)
+                    except Exception as ind_err:
+                        _LOGGER.error("Failed to control light %s (on): %s", ent_id, ind_err)
+
+                await asyncio.gather(*[_turn_on_single(e) for e in entities], return_exceptions=True)
 
         if action == "off":
+            self._last_light_action, self._last_light_rgb = "off", None
             pending_retry = [
                 eid for eid in entities
                 if not self.hass.states.get(eid) or self.hass.states.get(eid).state in ("unavailable", "unknown")
@@ -77,12 +96,16 @@ class AmbientLightingController:
 
                 async_call_later(self.hass, 5.0, _retry_off)
                 async_call_later(self.hass, 12.0, _retry_off)
+        else:
+            self._last_light_action, self._last_light_rgb = "on", rgb_color
 
     async def control_wled_light(self, action: str, colors: Optional[list] = None, is_night: bool = True) -> None:
         if not is_night and getattr(self.config, "only_at_night", False):
             return
         wled_ip = getattr(self.config, "wled_ip", None)
         if not wled_ip:
+            return
+        if action == "on" and self._last_wled_action == "on" and colors is not None and colors == self._last_wled_colors:
             return
         payload: dict = {"on": (action == "on")}
         if action == "on" and colors:
@@ -93,6 +116,10 @@ class AmbientLightingController:
         try:
             async with self.websession.post(f"http://{wled_ip}/json/state", json=payload, timeout=5) as resp:
                 resp.raise_for_status()
+                if action == "on":
+                    self._last_wled_action, self._last_wled_colors = "on", list(colors) if colors else None
+                else:
+                    self._last_wled_action, self._last_wled_colors = "off", None
         except Exception as e:
             _LOGGER.debug("Failed to control WLED at %s (%s): %s", wled_ip, action, e)
 
@@ -258,6 +285,7 @@ class HubPrefetchMixin:
             self.prefetch_status = f"Early Slider Error: {e}"
             self.spotify_slider_last_error = str(e)
         finally:
+            self._mark_hardware_text_wiped()
             self._is_processing_image = False
             self._update_prefetch_sensor_state()
 
@@ -282,10 +310,16 @@ class HubPrefetchMixin:
         self._update_prefetch_sensor_state()
         self._early_slider_sent_for = tag
         try:
-            await self.pixoo_device.send_command({"Command": "Channel/OnOffScreen", "OnOff": 1}, force=True)
-            await self.pixoo_device.send_command({"Command": "Channel/SetIndex", "SelectIndex": 4}, force=True)
-            await self.pixoo_device.send_command({"Command": "Draw/ResetHttpGifId"}, force=True)
-            await asyncio.sleep(0.05)
+            init_cmds = []
+            if not getattr(self, "device_screen_on", True):
+                init_cmds.append({"Command": "Channel/OnOffScreen", "OnOff": 1})
+                self.device_screen_on = True
+            if getattr(self, "select_index", None) != 4 or getattr(self, "_is_animation_active", False):
+                init_cmds.append({"Command": "Channel/SetIndex", "SelectIndex": 4})
+                self.select_index = 4
+            init_cmds.append({"Command": "Draw/ResetHttpGifId"})
+            self._mark_hardware_text_wiped()
+            await self.pixoo_device.send_command({"Command": "Draw/CommandList", "CommandList": init_cmds}, force=True)
             for offset, b64_frame in enumerate(frames):
                 await self.pixoo_device.send_command({
                     "Command": "Draw/SendHttpGif", "PicNum": len(frames), "PicWidth": 64, "PicOffset": offset, "PicID": 0, "PicSpeed": speed, "PicData": b64_frame
@@ -296,6 +330,7 @@ class HubPrefetchMixin:
         except Exception as e:
             self.prefetch_status = f"Early {label} Error: {e}"
         finally:
+            self._mark_hardware_text_wiped()
             self._is_processing_image = False
             self._update_prefetch_sensor_state()
 
@@ -343,7 +378,9 @@ class HubPrefetchMixin:
                     return str(artist), str(cleaned), str(album), url, str(title), int(duration)
         return None
 
-    async def _run_playlist_prefetch(self) -> None:
+    async def _run_playlist_prefetch(self, delay_start: float = 0.0) -> None:
+        if delay_start > 0:
+            await asyncio.sleep(delay_start)
         pref_setting = str(getattr(self.config, "playlist_prefetch_range", "Disabled") or "Disabled")
         if "disabled" in pref_setting.lower():
             self.playlist_prefetch_status = "Disabled in settings"
@@ -385,14 +422,16 @@ class HubPrefetchMixin:
                 continue
             clean_t = str(self.media_data.clean_title(title) if clean_flag else title)
             clean_a = str(artist)
-            mem_tag = f"master_{clean_a}_{clean_t}_{f_mode}_{c_mode}"
+            dummy_media = MediaData(self.hass, self.config, self.image_processor, self.websession)
+            dummy_media.is_prefetch = True
+            dummy_media.artist, dummy_media.title, dummy_media.album, dummy_media.picture = clean_a, clean_t, str(album), url
+            from ..storage.database import generate_artwork_cache_key
+            s_key = generate_artwork_cache_key(clean_a, str(album) or None, clean_t)
+            mem_tag = self.fallback_service._ram_master_key(dummy_media, s_key, f_mode, c_mode, False)
             if mem_tag in self.image_processor.image_cache:
                 cached_count += 1
                 self.playlist_cached_count = cached_count
                 continue
-            dummy_media = MediaData(self.hass, self.config, self.image_processor, self.websession)
-            dummy_media.is_prefetch = True
-            dummy_media.artist, dummy_media.title, dummy_media.album, dummy_media.picture = clean_a, clean_t, str(album), url
             try:
                 if await self.fallback_service.get_final_url(url, dummy_media):
                     cached_count += 1
@@ -411,14 +450,14 @@ class HubPrefetchMixin:
 
     async def _run_debounced_callback(self, event) -> None:
         try:
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.08)
             await self._handle_media_change(event)
         except asyncio.CancelledError:
             pass
         except Exception as e:
             _LOGGER.error("Error in state change callback: %s", e)
 
-    async def force_update(self) -> None:
+    async def force_update(self, fast_ui_change: bool = False) -> None:
         self._apply_logic_matrix()
         if not self.ui_state.get("master_control", True):
             await self._send_off_command()
@@ -431,7 +470,35 @@ class HubPrefetchMixin:
             self._cleanup_timers()
             self._cancel_tasks(["current_task", "_playlist_prefetch_task", "_early_send_task", "_lyrics_bg_task"])
             self._is_processing_image = False
-            await self.media_data.update(state)
+
+            raw_st_title = str(state.attributes.get("media_title") or "")
+            clean_st_title = (
+                self.media_data.clean_title(raw_st_title) if getattr(self.config, "clean_title", True) else raw_st_title
+            ).strip().lower()
+            same_loaded_track = bool(
+                fast_ui_change
+                and self.media_data.title
+                and clean_st_title
+                and clean_st_title == str(self.media_data.title).strip().lower()
+            )
+            if same_loaded_track:
+                try:
+                    self.media_data.media_position = float(state.attributes.get("media_position", self.media_data.media_position))
+                    self.media_data.media_duration = float(state.attributes.get("media_duration", self.media_data.media_duration))
+                    pos_str = state.attributes.get("media_position_updated_at")
+                    if isinstance(pos_str, datetime):
+                        self.media_data.media_position_updated_at = pos_str
+                    elif pos_str:
+                        self.media_data.media_position_updated_at = datetime.fromisoformat(str(pos_str).replace("Z", "+00:00"))
+                except Exception:
+                    pass
+                self.media_data.show_progress_bar = self.config.progress_bar_enabled and self.media_data.media_duration > 0
+                self.media_data.live_display_url = None
+                self.media_data.pic_source = None
+                self.media_data.pic_url = None
+            else:
+                await self.media_data.update(state)
+
             if not self.media_data.title and not getattr(self.media_data, "playing_tv", False):
                 if self._is_player_active(state):
                     _LOGGER.debug("Pixoo64 force_update: media title empty but player is active. Keeping display.")
@@ -439,15 +506,28 @@ class HubPrefetchMixin:
                 await self._send_off_command()
                 return
             self._fetch_external_temperature()
-            queue, current_idx = await self._fetch_player_queue()
-            if queue:
-                self.media_data.queue_total = len(queue)
-                self.chart_controller.inspect_queue_for_album_session({"queue": queue}, self.media_data.artist, self.media_data.title, self.media_data.album or "")
-            if current_idx is not None:
-                self.media_data.track_number = current_idx + 1
-            self._active_song_key, self.media_data.track_changed = None, True
-            self.current_task = self.hass.async_create_task(self._process_and_send())
-            self._playlist_prefetch_task = self.hass.async_create_task(self._run_playlist_prefetch())
+            self._active_song_key, self.media_data.track_changed = None, (not same_loaded_track)
+            self.current_task = self.hass.async_create_task(self._process_and_send(fast_ui_change=fast_ui_change))
+
+            if not fast_ui_change:
+                async def _deferred_queue_sync():
+                    try:
+                        await asyncio.sleep(1.5)
+                        queue, current_idx = await self._fetch_player_queue()
+                        if queue:
+                            self.media_data.queue_total = len(queue)
+                            self.chart_controller.inspect_queue_for_album_session(
+                                {"queue": queue}, self.media_data.artist, self.media_data.title, self.media_data.album or ""
+                            )
+                        if current_idx is not None:
+                            self.media_data.track_number = current_idx + 1
+                        await self._run_playlist_prefetch(delay_start=1.5)
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as err:
+                        _LOGGER.debug("Deferred queue sync note: %s", err)
+
+                self._playlist_prefetch_task = self.hass.async_create_task(_deferred_queue_sync())
         elif state and state.state == "paused":
             await self.media_data.update(state)
             await self._handle_media_change(None)

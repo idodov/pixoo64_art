@@ -10,7 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import CoreState, HomeAssistant
 
-from .const import DOMAIN
+from .const import CONF_PIXOO_IP, DOMAIN
 from .hub import PixooHub
 from .services import async_register_services, async_unregister_services
 

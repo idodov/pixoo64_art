@@ -313,6 +313,7 @@ class ChartController:
         """Immediately abort an active chart sequence and optionally restore current view."""
         was_active = self.hub.chart_active
         self.hub.chart_active = False
+        self.hub._is_animation_active = True
         if self._chart_task and not self._chart_task.done():
             self._chart_task.cancel()
             try:
@@ -364,6 +365,7 @@ class ChartController:
         self, items: List[Dict[str, Any]], chart_type: str, timeframe: str, period_label: str, direction: str, limit: int, slide_sec: float
     ) -> None:
         self.hub.chart_active = True
+        self.hub._is_animation_active = True
         saved_live_url = getattr(self.hub.media_data, "live_display_url", None)
         try:
             await self.hub.pixoo.send_command({"Command": "Channel/OnOffScreen", "OnOff": 1})
@@ -423,6 +425,7 @@ class ChartController:
             _LOGGER.error("Error running Hit Parade chart sequence: %s", err)
         finally:
             self.hub.media_data.live_display_url = saved_live_url
+            self.hub._is_animation_active = True
             if self.hub.chart_active:
                 self.hub.chart_active = False
                 await self.hub.async_restore_current_view()

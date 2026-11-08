@@ -135,10 +135,19 @@ class Config:
         self.media_player = get_val("media_player", "media_player.living_room")
         self.pixoo_ip = get_val("pixoo_ip")
         self.pixoo_url = f"http://{self.pixoo_ip}:80/post" if self.pixoo_ip else None
-        self.pollinations = get_val("pollinations_key", "")
-        self.pollinations_auth_method = get_val("pollinations_auth_method", "key")
-        self.ai_tier = get_val("ai_tier", "models" if str(self.pollinations or "").startswith("sk_") else "free")
-        self.ai_fallback = get_val("ai_model", "black-forest-labs/flux.1-schnell")
+        self.ai_tier = str(get_val("ai_tier", "free") or "free").lower()
+        key_val = str(get_val("pollinations_key", "") or "").strip()
+        if self.ai_tier == "free" or not key_val.startswith("sk_"):
+            self.pollinations = ""
+            self.pollinations_key = ""
+            self.pollinations_auth_method = "key"
+            self.ai_fallback = "flux"
+            self.ai_tier = "free"
+        else:
+            self.pollinations = key_val
+            self.pollinations_key = key_val
+            self.pollinations_auth_method = get_val("pollinations_auth_method", "key")
+            self.ai_fallback = get_val("ai_model", "black-forest-labs/flux.1-schnell")
         self.spotify_client_id = get_val("spotify_client_id", "")
         self.spotify_client_secret = get_val("spotify_client_secret", "")
         self.musicbrainz = get_val("musicbrainz_enabled", True)
@@ -389,6 +398,8 @@ class MediaData:
         self.playlist = attributes.get('media_playlist') or attributes.get('playlist') or ""
         self.track_number = int(attributes.get('media_track', 1)) if str(attributes.get('media_track', '')).isdigit() else 1
         self.live_display_url = None
+        self.pic_source = None
+        self.pic_url = None
 
         original_picture = attributes.get('entity_picture')
         if original_picture and (re.match(r'^[a-zA-Z]:\\', original_picture) or original_picture.startswith("file://")):

@@ -32,6 +32,7 @@ class SpotifyService(BaseProvider):
         self.spotify_data: Optional[dict] = None
         self.last_match_tier: int = 1
         self.album_image_map: dict[str, str] = {}
+        self._json_cache: dict[tuple[str, str], dict] = {}
         self._semaphore = asyncio.Semaphore(5)
 
     async def get_spotify_access_token(self) -> Optional[str]:
@@ -60,7 +61,7 @@ class SpotifyService(BaseProvider):
         url = f"https://api.spotify.com/v1/{endpoint}"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         try:
-            async with self.session.get(url, headers=headers, params=params, timeout=10) as resp:
+            async with self.session.get(url, headers=headers, params=params, timeout=3.0) as resp:
                 if resp.status == 200:
                     return await resp.json()
                 if resp.status == 401:
@@ -72,11 +73,18 @@ class SpotifyService(BaseProvider):
     async def get_spotify_json(self, artist: str, title: str) -> Optional[dict]:
         clean_title = re.sub(r"[\'\"()]", "", str(title or "")).strip()
         clean_artist = re.sub(r"[\'\"()]", "", str(artist or "")).strip()
+        cache_key = (clean_artist.lower(), clean_title.lower())
+        if cache_key in self._json_cache:
+            return self._json_cache[cache_key]
         params = {"q": f'track:"{clean_title}" artist:"{clean_artist}"', "type": "track", "limit": 50}
         data = await self._async_spotify_request("search", params=params)
-        if data and data.get("tracks", {}).get("items"):
-            return data
-        return await self._async_spotify_request("search", {"q": f"{clean_artist} {clean_title}", "type": "track", "limit": 50})
+        if not (data and data.get("tracks", {}).get("items")):
+            data = await self._async_spotify_request("search", {"q": f"{clean_artist} {clean_title}", "type": "track", "limit": 50})
+        if data:
+            if len(self._json_cache) > 40:
+                self._json_cache.pop(next(iter(self._json_cache)))
+            self._json_cache[cache_key] = data
+        return data
 
     async def get_spotify_artist_image_url_by_name(self, artist_name: str) -> Optional[str]:
         if not artist_name:
@@ -338,10 +346,10 @@ class SpotifyService(BaseProvider):
             if tracks:
                 self.spotify_data = response_json
                 best_album_id, first_album_id = await self.spotify_best_album(tracks, media_data.artist, known_album)
-                if best_album_id and self.last_match_tier == 1:
+                if best_album_id:
                     return best_album_id, first_album_id
 
-            if known_album:
+            if not tracks and known_album:
                 c_artist = re.sub(r"[\'\"()]", "", str(media_data.artist or "")).strip()
                 c_album = re.sub(r"[\'\"()]", "", str(known_album)).strip()
                 a_data = await self._async_spotify_request("search", params={"q": f'album:"{c_album}" artist:"{c_artist}"', "type": "album", "limit": 5})

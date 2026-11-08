@@ -1,6 +1,7 @@
 """Pollinations AI prompt and URL generator provider."""
 
 import logging
+import time
 from typing import TYPE_CHECKING, Optional
 import urllib.parse
 import aiohttp
@@ -42,8 +43,18 @@ def get_model_cost(model_name: Optional[str]) -> tuple[float, str]:
     return 0.0, "Free"
 
 
+_MODELS_CACHE: dict[tuple[str, bool], tuple[float, list]] = {}
+
+
 async def async_fetch_pollinations_models(session: aiohttp.ClientSession, api_key: str = None, is_login: bool = False) -> list:
     """Fetch available AI models dynamically and update pricing lookup table."""
+    clean_key = str(api_key or "").strip()
+    cache_key = (clean_key[:12], bool(is_login))
+    now = time.monotonic()
+    cached = _MODELS_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < 3600.0:
+        return cached[1]
+
     multiplier = 1.25 if is_login else 1.0
     fallback_models = [
         {"id": "black-forest-labs/flux.1-schnell", "label": "FLUX.1 Schnell (Black Forest Labs) | 🪙 Free", "cost": 0.0},
@@ -54,7 +65,6 @@ async def async_fetch_pollinations_models(session: aiohttp.ClientSession, api_ke
         {"id": "black-forest-labs/flux.1-dev", "label": f"FLUX.1 Dev | 🪙 {round(0.0025 * multiplier, 6)}", "cost": round(0.0025 * multiplier, 6)},
     ]
     try:
-        clean_key = str(api_key or "").strip()
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         if clean_key.startswith("sk_"):
             headers["Authorization"] = f"Bearer {clean_key}"
@@ -89,7 +99,9 @@ async def async_fetch_pollinations_models(session: aiohttp.ClientSession, api_ke
                     MODEL_PRICING_MAP[model_id.lower()] = {"cost": cost, "cost_display": cost_display}
                     parsed_models.append({"id": model_id, "label": f"{title} ({publisher}) | 🪙 {cost_display}", "cost": cost})
             parsed_models.sort(key=lambda x: x["cost"])
-            return parsed_models if parsed_models else fallback_models
+            if parsed_models:
+                _MODELS_CACHE[cache_key] = (now, parsed_models)
+                return parsed_models
     except Exception as e:
         _LOGGER.warning("Failed to fetch dynamic AI models: %s", e)
     return fallback_models
@@ -161,21 +173,17 @@ class AiArtProvider(BaseProvider):
 
     def format_prompt_url(self, artist: Optional[str], title: str) -> Optional[str]:
         """Format a deterministic Pollinations AI URL for the given artist and title."""
+        ai_tier = str(getattr(self.config, "ai_tier", "free")).lower()
         api_key = str(getattr(self.config, "pollinations", "") or getattr(self.config, "pollinations_key", "") or "").strip()
-        ai_tier = str(getattr(self.config, "ai_tier", "models" if api_key.startswith("sk_") else "free")).lower()
 
-        if ai_tier != "free" and api_key.startswith("sk_"):
-            encoded_prompt, seed, model = self._get_prompt_and_seed(artist, title)
-            # Authenticated via Bearer token in HTTP headers and query param key
-            url_params = f"?model={model}&width=512&height=512&seed={seed}&nologo=true&key={api_key}"
-            return f"https://gen.pollinations.ai/image/{encoded_prompt}{url_params}"
+        # If on Free Tier or no valid secret key, ALWAYS use the free tier endpoint
+        if ai_tier == "free" or not api_key.startswith("sk_"):
+            return self.format_free_prompt_url(artist, title)
 
-        if api_key.startswith("pk_"):
-            _LOGGER.debug(
-                "Pollinations key starts with 'pk_'. Server calls require a secret key ('sk_'). Using free tier (image.pollinations.ai)."
-            )
-
-        return self.format_free_prompt_url(artist, title)
+        encoded_prompt, seed, model = self._get_prompt_and_seed(artist, title)
+        # Authenticated via Bearer token in HTTP headers and query param key
+        url_params = f"?model={model}&width=512&height=512&seed={seed}&nologo=true&key={api_key}"
+        return f"https://gen.pollinations.ai/image/{encoded_prompt}{url_params}"
 
 
 async def async_request_device_code(session: aiohttp.ClientSession) -> Optional[dict]:

@@ -131,7 +131,10 @@ class VinylRenderer:
             if pil_frames:
                 speed_ms = 70 if len(pil_frames) > 16 else 140
                 v_key = f"vinyl_{media_data.artist}_{media_data.title}_{crop_mode}"
-                media_data.live_display_url = image_processor.save_live_display_gif(pil_frames, speed_ms, v_key)
+                if getattr(media_data, "_defer_live_gif", False):
+                    media_data._pending_live_gif = (pil_frames, speed_ms, v_key)
+                else:
+                    media_data.live_display_url = image_processor.save_live_display_gif(pil_frames, speed_ms, v_key)
         except Exception as e:
             _LOGGER.error("Error generating enhanced vinyl animation frames: %s", e)
         return frames_b64

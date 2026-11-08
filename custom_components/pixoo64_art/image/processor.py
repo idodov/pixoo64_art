@@ -1,6 +1,7 @@
 """Core image processor, caching, base64 encoder, and Lovelace GIF saver."""
 import base64
 from collections import OrderedDict
+import hashlib
 from io import BytesIO
 import logging
 import os
@@ -47,6 +48,12 @@ class ImageProcessor:
         self.filter_service = ImageFilterService()
         self._font_cache: Dict[Tuple[str, int], ImageFont.FreeTypeFont] = {}
         self._gif_lock = threading.Lock()
+        self._gif_files_lru: OrderedDict[str, None] = OrderedDict()
+        self._gif_dir_initialized: bool = False
+        self._entity_cache: Dict[str, object] = {}
+        self._content_cache: OrderedDict = OrderedDict()
+        # Analog clock: Lovelace preview GIF throttling (device still updates every minute)
+        self._clock_gif_last: Dict[str, float] = {}
 
     async def get_raw_image_data(self, url: str) -> Optional[bytes]:
         if not url or not isinstance(url, str):
@@ -65,25 +72,43 @@ class ImageProcessor:
                 if cfg_player and cfg_player not in target_ids:
                     target_ids.append(cfg_player)
 
-                comp = self.hass.data.get("media_player") or self.hass.data.get("entity_components", {}).get("media_player")
                 entity = None
-                if comp and hasattr(comp, "get_entity"):
-                    for eid in target_ids:
-                        entity = comp.get_entity(eid)
-                        if entity:
-                            break
+                for eid in target_ids:
+                    cached_ent = self._entity_cache.get(eid)
+                    if cached_ent is not None and getattr(cached_ent, "hass", None) is not None:
+                        entity = cached_ent
+                        break
+
                 if not entity:
-                    for val in list(self.hass.data.values()):
-                        if hasattr(val, "get_entity"):
-                            for eid in target_ids:
-                                entity = val.get_entity(eid)
-                                if entity:
-                                    break
-                        if entity:
-                            break
+                    comp = self.hass.data.get("media_player") or self.hass.data.get("entity_components", {}).get("media_player")
+                    if comp and hasattr(comp, "get_entity"):
+                        for eid in target_ids:
+                            entity = comp.get_entity(eid)
+                            if entity:
+                                self._entity_cache[eid] = entity
+                                break
+                    if not entity:
+                        for val in list(self.hass.data.values()):
+                            if hasattr(val, "get_entity"):
+                                for eid in target_ids:
+                                    entity = val.get_entity(eid)
+                                    if entity:
+                                        self._entity_cache[eid] = entity
+                                        break
+                            if entity:
+                                break
+
+                if not entity:
+                    _LOGGER.debug("Pixoo64 proxy entity not found for target_ids=%s", target_ids)
+                else:
+                    _LOGGER.debug("Pixoo64 proxy entity found: %s", entity.entity_id)
 
                 if entity and hasattr(entity, "async_get_media_image"):
-                    img_tuple = await entity.async_get_media_image()
+                    try:
+                        img_tuple = await asyncio.wait_for(entity.async_get_media_image(), timeout=1.5)
+                    except asyncio.TimeoutError:
+                        _LOGGER.debug("Direct in-memory proxy fetch timed out after 1.5s")
+                        img_tuple = None
                     if img_tuple and img_tuple[0]:
                         data = img_tuple[0]
                         if not is_tokenless:
@@ -91,6 +116,12 @@ class ImageProcessor:
                             if len(self.raw_image_cache) > self.cache_size:
                                 self.raw_image_cache.popitem(last=False)
                         return data
+                    elif entity:
+                        # Entity exists in memory and returned empty/None for media image.
+                        # Querying the HTTP proxy endpoint for this exact entity will also return 404.
+                        # Fast-fail immediately to avoid wasting seconds on HTTP timeouts!
+                        _LOGGER.debug("Pixoo64 proxy entity has no media image in-memory, fast-failing")
+                        return None
             except Exception as ex:
                 _LOGGER.debug("Direct in-memory proxy fetch note: %s", ex)
 
@@ -98,26 +129,28 @@ class ImageProcessor:
         urls_to_try = []
         is_relative = url.startswith("/")
         if is_relative:
-            base_url = None
-            try:
-                from homeassistant.helpers.network import get_url
-                base_url = get_url(self.hass, allow_internal=True)
-            except Exception:
-                pass
-            if not base_url:
-                base_url = getattr(self.hass.config, "internal_url", None) or getattr(self.hass.config, "external_url", None)
-            if base_url:
-                cand = f"{base_url.rstrip('/')}{url}"
-                if cand not in urls_to_try:
-                    urls_to_try.append(cand)
             port = getattr(getattr(self.hass.config, "api", None), "port", 8123) or 8123
+            # Prioritize fast local loopback first (typically <10ms)
             urls_to_try.append(f"http://127.0.0.1:{port}{url}")
-            urls_to_try.append(f"https://127.0.0.1:{port}{url}")
+            # Only consider external base_url if NOT a media_player_proxy
+            if "/api/media_player_proxy/" not in url:
+                base_url = None
+                try:
+                    from homeassistant.helpers.network import get_url
+                    base_url = get_url(self.hass, allow_internal=True)
+                except Exception:
+                    pass
+                if not base_url:
+                    base_url = getattr(self.hass.config, "internal_url", None) or getattr(self.hass.config, "external_url", None)
+                if base_url:
+                    cand = f"{base_url.rstrip('/')}{url}"
+                    if cand not in urls_to_try:
+                        urls_to_try.append(cand)
         else:
             urls_to_try.append(url)
 
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        if "gen.pollinations.ai" in url or "pollinations.ai" in url:
+        if "gen.pollinations.ai" in url:
             api_key = str(getattr(self.config, "pollinations", "") or getattr(self.config, "pollinations_key", "") or "").strip()
             if not api_key and "key=" in url:
                 import urllib.parse
@@ -129,11 +162,14 @@ class ImageProcessor:
                 headers["Authorization"] = f"Bearer {api_key}"
                 headers["X-Client-Id"] = "pk_BGuQDoVvDvRQ4k8T"
         is_internal = is_relative or "/api/media_player_proxy/" in url or "127.0.0.1" in url
-        timeout_sec = 25 if "pollinations.ai" in url else (2 if is_internal else 8)
+        timeout_sec = 25 if "pollinations.ai" in url else (0.8 if is_internal else 8)
 
         for target_url in urls_to_try:
+            t0_cand = time.perf_counter()
             try:
                 async with self.session.get(target_url, headers=headers, timeout=timeout_sec, ssl=False) as response:
+                    elapsed = time.perf_counter() - t0_cand
+                    _LOGGER.debug("Pixoo64 fetch cand %s -> %s in %.3fs", target_url, response.status, elapsed)
                     if response.status == 200:
                         data = await response.read()
                         if data:
@@ -193,8 +229,8 @@ class ImageProcessor:
         await self.get_image(url, media_data)
 
     async def get_image(self, url: str, media_data: "MediaData", spotify_slide: bool = False) -> Optional[dict]:
-        is_ai_art = bool(getattr(media_data, "pic_source", "") in ("AI", "AI (Cached)") or getattr(self.config, "force_ai", False))
-        crop_mode = "No Crop" if (is_ai_art or getattr(media_data, "radio_logo", False)) else getattr(self.config, "crop_mode", "Crop" if getattr(self.config, "crop_borders", False) else "No Crop")
+        is_ai_art = bool(str(getattr(media_data, "pic_source", "") or "") in ("AI", "AI (Cached)", "AI (RAM)") or getattr(self.config, "force_ai", False))
+        crop_mode = "No Crop" if is_ai_art else getattr(self.config, "crop_mode", "Crop" if getattr(self.config, "crop_borders", False) else "No Crop")
         filter_mode = getattr(self.config, "image_filter", "None")
         has_lyrics = bool(getattr(self.config, "show_lyrics", False) and getattr(media_data, "lyrics", None))
         cache_key = (
@@ -226,6 +262,22 @@ class ImageProcessor:
         if not raw_data:
             return None
 
+        # L2 content-hash dedup: proxy/tokenized URLs change per track even when the artwork bytes are identical.
+        # Reuse the processed result for identical bytes + identical render settings (skips decode/crop/palette/resize).
+        content_key = f"{hashlib.blake2b(raw_data, digest_size=16).hexdigest()}{cache_key[len(url):]}"
+        if content_key in self._content_cache:
+            self._content_cache.move_to_end(content_key)
+            cached_res = self._content_cache[content_key]
+            for attr in ("color1", "color2", "color3", "font_color", "brightness", "brightness_lower_part", "background_color", "background_color_rgb"):
+                if attr in cached_res:
+                    setattr(media_data, attr, cached_res[attr])
+            if cached_res.get("live_display_url"):
+                media_data.live_display_url = cached_res["live_display_url"]
+            self.image_cache[cache_key] = cached_res
+            if len(self.image_cache) > self.cache_size:
+                self.image_cache.popitem(last=False)
+            return cached_res
+
         result = await self.hass.async_add_executor_job(self._process_image, raw_data, media_data, spotify_slide)
         if result:
             is_static = not (
@@ -235,7 +287,13 @@ class ImageProcessor:
                 or getattr(self.config, "spotify_slide", False)
                 or getattr(self.config, "artist_slide", False)
             )
-            if is_static and "pil_image" in result and not spotify_slide:
+            if (
+                is_static
+                and "pil_image" in result
+                and not spotify_slide
+                and not getattr(media_data, "is_prefetch", False)
+                and not getattr(media_data, "_defer_live_gif", False)
+            ):
                 album_tag = media_data.album if getattr(media_data, "album", None) else media_data.title
                 s_key = f"std_{media_data.artist}_{album_tag}_{filter_mode}_{crop_mode}"
                 live_url = await self.async_save_live_display_gif([result["pil_image"]], 1000, s_key)
@@ -247,6 +305,9 @@ class ImageProcessor:
             self.image_cache[cache_key] = result
             if len(self.image_cache) > self.cache_size:
                 self.image_cache.popitem(last=False)
+            self._content_cache[content_key] = result
+            if len(self._content_cache) > self.cache_size:
+                self._content_cache.popitem(last=False)
         return result
 
     def _apply_scaling_and_filters(
@@ -254,12 +315,13 @@ class ImageProcessor:
     ) -> Optional[dict]:
         filter_mode = getattr(self.config, "image_filter", "None")
         radio_logo = getattr(media_data, "radio_logo", False)
-        is_ai_art = bool(getattr(media_data, "pic_source", "") in ("AI", "AI (Cached)") or getattr(self.config, "force_ai", False))
+        is_ai_art = bool(str(getattr(media_data, "pic_source", "") or "") in ("AI", "AI (Cached)", "AI (RAM)") or getattr(self.config, "force_ai", False))
         cropped_img = img_300 if is_ai_art else self.cropper.crop_image_borders(img_300, self.config, radio_logo)
         palette = dict(palette)
-        palette["font_color"] = self.color_analyzer.get_optimal_font_color(
-            cropped_img.resize((50, 50), Image.Resampling.NEAREST), self.config
-        )
+        if cropped_img is not img_300 or "font_color" not in palette:
+            palette["font_color"] = self.color_analyzer.get_optimal_font_color(cropped_img, self.config)
+        elif not getattr(self.config, "text_bg", False) and not getattr(self.config, "force_font_color", None):
+            palette["font_color"] = "#ffffff"
         img = self.filter_service.apply_pre_scale(cropped_img, filter_mode)
         resample_method = Image.Resampling.LANCZOS if getattr(self.config, "kernel", True) else Image.Resampling.BILINEAR
         img = img.resize((64, 64), resample_method)
@@ -309,7 +371,7 @@ class ImageProcessor:
                     return None
                 img = self.fixed_size(img)
                 clean_300 = img.resize((300, 300), Image.Resampling.BILINEAR)
-                palette = self.color_analyzer.extract_info(clean_300.resize((64, 64), Image.Resampling.BILINEAR), media_data)
+                palette = self.color_analyzer.extract_info(clean_300, media_data)
                 return self._apply_scaling_and_filters(clean_300, palette, media_data, spotify_slide)
         except Exception as e:
             _LOGGER.error("Image processing failed: %s", e)
@@ -319,7 +381,7 @@ class ImageProcessor:
         return ColorAnalyzer.get_image_palette(img)
 
     async def render_from_master(
-        self, master_img: Image.Image, palette: dict, media_data: "MediaData", spotify_slide: bool = False
+        self, master_img: Image.Image, palette: dict, media_data: "MediaData", spotify_slide: bool = False, mem_key: Optional[str] = None
     ) -> Optional[dict]:
         """Render 64x64 frame from a cached 300x300 master PIL Image and precomputed palette."""
         def _sync_render():
@@ -339,15 +401,21 @@ class ImageProcessor:
                 or getattr(self.config, "artist_slide", False)
             )
             filter_mode = getattr(self.config, "image_filter", "None")
-            is_ai_art = bool(getattr(media_data, "pic_source", "") in ("AI", "AI (Cached)") or getattr(self.config, "force_ai", False))
+            is_ai_art = bool(str(getattr(media_data, "pic_source", "") or "") in ("AI", "AI (Cached)", "AI (RAM)") or getattr(self.config, "force_ai", False))
             crop_mode = "No Crop" if is_ai_art else getattr(self.config, "crop_mode", "No Crop")
-            if is_static and "pil_image" in result and not spotify_slide:
+            if (
+                is_static
+                and "pil_image" in result
+                and not spotify_slide
+                and not getattr(media_data, "is_prefetch", False)
+                and not getattr(media_data, "_defer_live_gif", False)
+            ):
                 album_tag = media_data.album if getattr(media_data, "album", None) else media_data.title
                 s_key = f"std_{media_data.artist}_{album_tag}_{filter_mode}_{crop_mode}"
                 live_url = await self.async_save_live_display_gif([result["pil_image"]], 1000, s_key)
                 result["live_display_url"] = live_url
                 media_data.live_display_url = live_url
-            mem_tag = f"master_{media_data.artist}_{media_data.title}_{filter_mode}_{crop_mode}"
+            mem_tag = mem_key or f"master_{media_data.artist}_{media_data.title}_{filter_mode}_{crop_mode}"
             if getattr(media_data, "original_image_url", None):
                 result["original_image_url"] = media_data.original_image_url
             self.image_cache[mem_tag] = result
@@ -409,7 +477,17 @@ class ImageProcessor:
             filter_mode = getattr(self.config, "image_filter", "None")
             clock_img = self.text_clock_img(self.filter_service.apply_post_scale(clock_img, filter_mode), {}, media_data)
             c_key = f"clock_{media_data.artist}_{media_data.title}_{filter_mode}"
-            media_data.live_display_url = self.save_live_display_gif([clock_img], 1000, c_key)
+            if getattr(media_data, "_defer_live_gif", False):
+                media_data._pending_live_gif = ([clock_img], 1000, c_key)
+                self._clock_gif_last = {c_key: time.monotonic()}
+            else:
+                # Throttle the Lovelace preview write to once per 5 minutes per track (the device itself
+                # still receives a fresh clock frame every minute).
+                now_m = time.monotonic()
+                last_m = self._clock_gif_last.get(c_key)
+                if last_m is None or (now_m - last_m) >= 300 or not getattr(media_data, "live_display_url", None):
+                    self._clock_gif_last = {c_key: now_m}
+                    media_data.live_display_url = self.save_live_display_gif([clock_img], 1000, c_key)
             return self.gbase64(clock_img)
         except Exception as e:
             _LOGGER.error("Error generating analog clock frame: %s", e)
@@ -471,31 +549,42 @@ class ImageProcessor:
                 safe_key = "".join(c if c.isalnum() or c in "-_" else "_" for c in cache_key).strip("_")[:100]
                 filename = f"pixoo_{safe_key or 'art'}.gif"
                 file_path = os.path.join(cache_dir, filename)
-                pil_frames[0].convert("RGBA").save(
-                    file_path,
-                    save_all=True,
-                    append_images=[f.convert("RGBA") for f in pil_frames[1:]],
-                    duration=duration_ms,
-                    loop=0,
-                    disposal=2,
-                    optimize=False,
-                )
+                if len(pil_frames) == 1:
+                    pil_frames[0].convert("RGBA").save(file_path, format="GIF", optimize=False)
+                else:
+                    pil_frames[0].convert("RGBA").save(
+                        file_path,
+                        save_all=True,
+                        append_images=[f.convert("RGBA") for f in pil_frames[1:]],
+                        duration=duration_ms,
+                        loop=0,
+                        disposal=2,
+                        optimize=False,
+                    )
                 try:
-                    entries = []
-                    for f in os.listdir(cache_dir):
-                        if f.startswith("pixoo_"):
-                            p = os.path.join(cache_dir, f)
+                    if not self._gif_dir_initialized:
+                        entries = []
+                        for f in os.listdir(cache_dir):
+                            if f.startswith("pixoo_"):
+                                p = os.path.join(cache_dir, f)
+                                try:
+                                    entries.append((os.path.getmtime(p), p))
+                                except OSError:
+                                    pass
+                        entries.sort(key=lambda item: item[0])
+                        for _, p in entries:
+                            self._gif_files_lru[p] = None
+                        self._gif_dir_initialized = True
+
+                    self._gif_files_lru[file_path] = None
+                    self._gif_files_lru.move_to_end(file_path)
+                    while len(self._gif_files_lru) > self.cache_size:
+                        oldest, _ = self._gif_files_lru.popitem(last=False)
+                        if oldest != file_path:
                             try:
-                                entries.append((os.path.getmtime(p), p))
+                                os.remove(oldest)
                             except OSError:
                                 pass
-                    entries.sort(key=lambda item: item[0])
-                    while len(entries) > self.cache_size:
-                        _, oldest = entries.pop(0)
-                        try:
-                            os.remove(oldest)
-                        except OSError:
-                            pass
                 except OSError:
                     pass
                 return f"/local/pixoo_cache/{filename}?t={int(time.time() * 1000)}"
@@ -508,4 +597,7 @@ class ImageProcessor:
 
     def shutdown(self) -> None:
         self.image_cache.clear()
+        self._content_cache.clear()
         self.raw_image_cache.clear()
+        self._gif_files_lru.clear()
+        self._entity_cache.clear()

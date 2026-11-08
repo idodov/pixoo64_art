@@ -3,6 +3,12 @@ import re
 
 DOMAIN = "pixoo64_art"
 
+# Hardware / Communication Endpoints
+DEFAULT_PIXOO_ENDPOINTS = [
+    "http://{host}:80/post",
+    "http://{host}:9000/divoom_api",
+]
+
 # Configuration Keys
 CONF_PIXOO_IP = "pixoo_ip"
 CONF_MEDIA_PLAYER = "media_player"
@@ -15,6 +21,9 @@ CONF_AI_TIER = "ai_tier"
 AI_TIER_FREE = "free"
 AI_TIER_MODELS = "models"
 AI_TIER_OPTIONS = [AI_TIER_FREE, AI_TIER_MODELS]
+CONF_AUTH_METHOD = "auth_method"
+AUTH_METHOD_KEY = "api_key"
+AUTH_METHOD_LOGIN = "login"
 CONF_POLLINATIONS_KEY = "pollinations_key"
 CONF_SPOTIFY_CLIENT_ID = "spotify_client_id"
 CONF_SPOTIFY_CLIENT_SECRET = "spotify_client_secret"

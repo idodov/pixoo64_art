@@ -6,8 +6,9 @@ from typing import Any, Optional, Tuple
 from homeassistant.helpers.event import async_call_later
 
 from ..const import (
-    CONF_CHART_SIZE_LIMIT, CONF_CHART_SLIDE_DURATION, CONF_FIRST_DAY_OF_WEEK, CONF_LIGHT_ENTITY,
-    CONF_MAX_CACHED_ALBUMS, CONF_MEDIA_PLAYER, CONF_PERSISTENT_CACHE_ENABLED, CONF_PLAYLIST_PREFETCH, CONF_WLED_IP,
+    CONF_AI_TIER, CONF_CHART_SIZE_LIMIT, CONF_CHART_SLIDE_DURATION, CONF_FIRST_DAY_OF_WEEK, CONF_LIGHT_ENTITY,
+    CONF_MAX_CACHED_ALBUMS, CONF_MEDIA_PLAYER, CONF_PERSISTENT_CACHE_ENABLED, CONF_PLAYLIST_PREFETCH,
+    CONF_POLLINATIONS_KEY, CONF_WLED_IP,
     DEFAULT_CHART_SIZE_LIMIT, DEFAULT_CHART_SLIDE_DURATION, DEFAULT_FIRST_DAY_OF_WEEK,
     DEFAULT_MAX_CACHED_ALBUMS, DEFAULT_PERSISTENT_CACHE_ENABLED,
 )
@@ -196,8 +197,16 @@ class HubStateAndConfigMixin:
 
         if self.sensor:
             from ..providers.ai import get_model_cost
-            active_model = model or getattr(self.config, "ai_fallback", "flux")
-            cost, cost_display = get_model_cost(active_model)
+            ai_tier_active = str(getattr(self.config, "ai_tier", "free")).lower()
+            key_active = str(getattr(self.config, "pollinations", "") or getattr(self.config, "pollinations_key", "") or "").strip()
+            is_free = (ai_tier_active == "free") or not key_active.startswith("sk_")
+            if is_free:
+                active_model = "FLUX (Free)"
+                cost = 0.0
+                cost_display = "Free"
+            else:
+                active_model = model or getattr(self.config, "ai_fallback", "flux")
+                cost, cost_display = get_model_cost(active_model)
             attrs = dict(self.sensor._attr_extra_state_attributes or {})
             attrs["ai_generating"] = self.ai_generating
             attrs["ai_status"] = self.ai_status
@@ -206,7 +215,10 @@ class HubStateAndConfigMixin:
             attrs["ai_model"] = active_model
             attrs["ai_model_cost"] = cost
             attrs["ai_model_cost_display"] = cost_display
-            if getattr(self, "pollen_balance", None) is not None:
+            if is_free:
+                attrs["ai_tier"] = "Free Tier"
+                attrs["pollen_balance"] = "Free"
+            elif getattr(self, "pollen_balance", None) is not None:
                 attrs["pollen_balance"] = self.pollen_balance
                 attrs["pollen_tier"] = getattr(self, "pollen_tier", None)
                 attrs["pollen_paid"] = getattr(self, "pollen_paid", None)
@@ -220,6 +232,18 @@ class HubStateAndConfigMixin:
     async def async_refresh_pollen_balance(self) -> None:
         """Fetch and update Pollen balance for secret key."""
         key = str(getattr(self.config, "pollinations", "") or getattr(self.config, "pollinations_key", "") or "").strip()
+        ai_tier = str(getattr(self.config, "ai_tier", "models" if key.startswith("sk_") else "free")).lower()
+        if ai_tier == "free" or not key.startswith("sk_"):
+            if self.sensor:
+                attrs = dict(self.sensor._attr_extra_state_attributes or {})
+                attrs["ai_tier"] = "Free Tier"
+                attrs["pollen_balance"] = "Free"
+                attrs["ai_model"] = "FLUX (Free)"
+                attrs["ai_model_cost"] = 0.0
+                attrs["ai_model_cost_display"] = "Free"
+                self.sensor.update_state(self.sensor._attr_native_value, attrs)
+            return
+
         from ..providers.ai import async_get_pollen_balance, get_model_cost, async_fetch_pollinations_models
         is_login = getattr(self.config, "pollinations_auth_method", "key") == "login"
         try:
@@ -229,22 +253,9 @@ class HubStateAndConfigMixin:
         cost, cost_display = get_model_cost(getattr(self.config, "ai_fallback", "flux"))
         if self.sensor:
             attrs = dict(self.sensor._attr_extra_state_attributes or {})
+            attrs["ai_tier"] = "Model Services"
             attrs["ai_model_cost"] = cost
             attrs["ai_model_cost_display"] = cost_display
-            self.sensor.update_state(self.sensor._attr_native_value, attrs)
-        ai_tier = str(getattr(self.config, "ai_tier", "models" if key.startswith("sk_") else "free")).lower()
-        if ai_tier == "free" or not key.startswith("sk_"):
-            if self.sensor:
-                attrs = dict(self.sensor._attr_extra_state_attributes or {})
-                attrs["ai_tier"] = "Free Tier"
-                attrs["pollen_balance"] = "Free"
-                attrs["ai_model_cost"] = 0.0
-                attrs["ai_model_cost_display"] = "Free"
-                self.sensor.update_state(self.sensor._attr_native_value, attrs)
-            return
-        if self.sensor:
-            attrs = dict(self.sensor._attr_extra_state_attributes or {})
-            attrs["ai_tier"] = "Model Services"
             self.sensor.update_state(self.sensor._attr_native_value, attrs)
         data = await async_get_pollen_balance(self.websession, key)
         if data and "balance" in data:
@@ -293,7 +304,7 @@ class HubStateAndConfigMixin:
             _LOGGER.debug("Hardware state sync error: %s", e)
 
     def _cleanup_timers(self, timers=None) -> None:
-        for attr in timers or ["_progress_timer_unsub", "_lyrics_timer_unsub", "_pending_render_unsub", "_prefetch_timer_unsub", "_early_send_timer_unsub", "_pause_timeout_unsub", "_volume_osd_timer_unsub", "_clock_timer_unsub"]:
+        for attr in timers or ["_progress_timer_unsub", "_lyrics_timer_unsub", "_pending_render_unsub", "_prefetch_timer_unsub", "_early_send_timer_unsub", "_pause_timeout_unsub", "_volume_osd_timer_unsub", "_clock_timer_unsub", "_off_timer_unsub"]:
             unsub = getattr(self, attr, None)
             if unsub:
                 unsub()
@@ -362,8 +373,20 @@ class HubStateAndConfigMixin:
         options, data = self.entry.options, self.entry.data
         self.media_player = options.get(CONF_MEDIA_PLAYER, data.get(CONF_MEDIA_PLAYER, getattr(self, "media_player", "media_player.living_room")))
         self.config.media_player = self.media_player
-        self.config.pollinations = options.get("pollinations_key", data.get("pollinations_key", ""))
-        self.config.ai_fallback = options.get("ai_model", data.get("ai_model", "black-forest-labs/flux.1-schnell"))
+        ai_tier_raw = str(options.get(CONF_AI_TIER, data.get(CONF_AI_TIER, "free")) or "free").lower()
+        key_val = str(options.get(CONF_POLLINATIONS_KEY, data.get(CONF_POLLINATIONS_KEY, "")) or "").strip()
+        if ai_tier_raw == "free" or not key_val.startswith("sk_"):
+            self.config.ai_tier = "free"
+            self.config.pollinations = ""
+            self.config.pollinations_key = ""
+            self.config.pollinations_auth_method = "key"
+            self.config.ai_fallback = "flux"
+        else:
+            self.config.ai_tier = "models"
+            self.config.pollinations = key_val
+            self.config.pollinations_key = key_val
+            self.config.pollinations_auth_method = options.get("pollinations_auth_method", data.get("pollinations_auth_method", "key"))
+            self.config.ai_fallback = options.get("ai_model", data.get("ai_model", "black-forest-labs/flux.1-schnell"))
         self.config.spotify_client_id = options.get("spotify_client_id", data.get("spotify_client_id", ""))
         self.config.spotify_client_secret = options.get("spotify_client_secret", data.get("spotify_client_secret", ""))
         self.config.musicbrainz = options.get("musicbrainz_enabled", data.get("musicbrainz_enabled", True))
@@ -427,10 +450,6 @@ class HubStateAndConfigMixin:
         self.config.spotify_slide = ("slider" in m and "artist" not in m) and self.is_spotify_available
         self.config.artist_slide = "artist slide" in m or "artist gallery" in m
         self.config.force_ai = (display_mode == "Force AI" or bool(self.ui_state.get("force_ai", False))) and self.is_ai_available
-        if self.config.force_ai:
-            self.config.crop_mode = "No Crop"
-            self.config.crop_borders = False
-            self.config.crop_extra = False
         self.cached_static_items, self.last_text_payload_hash = [], None
 
     def _fetch_external_temperature(self) -> None:
@@ -439,11 +458,16 @@ class HubStateAndConfigMixin:
             s = self.hass.states.get(temp_ent)
             if s and s.state not in ("unknown", "unavailable"):
                 try:
-                    self.media_data.temperature = f"{int(float(s.state))}{s.attributes.get('unit_of_measurement', '').lower()}"
+                    new_temp = f"{int(float(s.state))}{s.attributes.get('unit_of_measurement', '').lower()}"
+                    if new_temp != getattr(self.media_data, "temperature", None):
+                        self.media_data.temperature = new_temp
+                        self.cached_static_items = []
                     return
                 except Exception:
                     pass
-        self.media_data.temperature = None
+        if getattr(self.media_data, "temperature", None) is not None:
+            self.media_data.temperature = None
+            self.cached_static_items = []
 
     def _is_player_active(self, state) -> bool:
         if not state:
@@ -511,6 +535,19 @@ class HubStateAndConfigMixin:
                     self._pause_timeout_unsub = async_call_later(self.hass, delay_sec, self._execute_pause_timeout)
             return
 
+        text_overlay_keys = {"text_position", "overlay_info", "overlay_position", "overlay_align", "text_background"}
+        if (
+            key in text_overlay_keys
+            and key != "text_background"
+            and not getattr(self.config, "text_bg", False)
+            and not getattr(self.config, "burned_text", False)
+            and not (key == "text_position" and getattr(self.config, "special_mode", False))
+        ):
+            self.cached_static_items = []
+            if self.is_art_visible and not getattr(self, "chart_active", False):
+                self.request_text_render(force=True)
+            return
+
         image_affecting_keys = {
             "display_mode", "crop_mode", "image_filter", "force_ai", "artwork_race_mode",
             "text_background", "text_position", "overlay_info", "overlay_position", "overlay_align",
@@ -529,17 +566,21 @@ class HubStateAndConfigMixin:
             return
 
         self._early_slider_sent_for = self._prefetched_media = None
-        self.image_processor.image_cache.clear()
+        if key == "artwork_race_mode":
+            self.image_processor.image_cache.clear()
+            self.image_processor._content_cache.clear()
         if hasattr(self, "media_data"):
             for attr in ("vinyl_frames_b64", "cassette_frames_b64", "slider_frames_b64", "slider_album_urls"):
                 setattr(self.media_data, attr, [])
             self.media_data.slider_artist_pic_url = self.media_data.slider_error = None
             self.media_data.slider_frames = 0
             self.media_data.spotify_slide_pass = self.media_data.artist_slide_pass = False
+            self.media_data.pic_source = None
 
         self._last_rendered_pic_url = self._last_rendered_album = self._last_rendered_artist = None
         self._last_rendered_mode = self._last_rendered_filter = self._last_rendered_crop = None
+        self._current_rendered_b64 = None
         self._cancel_tasks(["current_task", "_prefetch_task", "_playlist_prefetch_task", "_early_send_task"])
         self._active_song_key = None
         if not getattr(self, "chart_active", False):
-            self.current_task = self.hass.async_create_task(self.force_update())
+            self.current_task = self.hass.async_create_task(self.force_update(fast_ui_change=True))

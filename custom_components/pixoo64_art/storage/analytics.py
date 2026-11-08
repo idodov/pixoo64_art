@@ -182,11 +182,19 @@ class PixooAnalytics:
         return [int(r[0]) for r in rows if r and r[0]]
 
     def get_available_periods_sync(
-        self, timeframe: str = "Weekly", first_day_of_week: str = "Sunday", chart_type: Optional[str] = None
+        self,
+        timeframe: str = "Weekly",
+        first_day_of_week: str = "Sunday",
+        chart_type: Optional[str] = None,
+        preloaded_timestamps: Optional[List[int]] = None,
     ) -> List[str]:
         """Return ordered human-readable period labels for the given timeframe based on actual DB records."""
         tf = str(timeframe or "Weekly").strip().lower()
-        timestamps = self._get_all_event_timestamps_sync(chart_type=chart_type)
+        timestamps = (
+            preloaded_timestamps
+            if preloaded_timestamps is not None
+            else self._get_all_event_timestamps_sync(chart_type=chart_type)
+        )
         if tf in ("all-time", "all_time", "all"):
             return ["All History"] if timestamps else []
 
@@ -206,13 +214,16 @@ class PixooAnalytics:
             yesterday_date = (now_dt - timedelta(days=1)).date()
             for ts in timestamps:
                 dt = datetime.fromtimestamp(ts)
+                day_name = dt.strftime("%a")
                 if dt.date() == now_dt.date():
-                    _add("Today")
+                    _add(f"Today ({day_name})")
                 elif dt.date() == yesterday_date:
-                    _add("Yesterday")
+                    _add(f"Yesterday ({day_name})")
                 else:
-                    _add(dt.strftime("%d/%m/%Y"))
-            return labels
+                    _add(f"{day_name} ({dt.strftime('%d/%m')})")
+                if len(labels) >= 7:
+                    break
+            return labels[:7]
 
         if tf in ("weekly", "week"):
             now_w_start, now_w_end = get_week_bounds(now_dt, first_day_of_week)
@@ -220,13 +231,17 @@ class PixooAnalytics:
                 dt = datetime.fromtimestamp(ts)
                 w_start, w_end = get_week_bounds(dt, first_day_of_week)
                 _add(format_week_label(w_start, w_end, now_w_start, first_day_of_week))
-            return labels
+                if len(labels) >= 5:
+                    break
+            return labels[:5]
 
         if tf in ("monthly", "month"):
             for ts in timestamps:
                 dt = datetime.fromtimestamp(ts)
                 _add(f"{MONTH_NAMES[dt.month]} {dt.year}")
-            return labels
+                if len(labels) >= 12:
+                    break
+            return labels[:12]
 
         if tf in ("yearly", "year"):
             for ts in timestamps:
@@ -240,19 +255,35 @@ class PixooAnalytics:
         """Compute available chart types, eligible timeframes based on DB span, and available periods."""
         now = int(time.time())
         with self.db.get_connection() as conn:
-            row = conn.execute("SELECT MIN(played_at), COUNT(*) FROM play_history").fetchone()
-            min_ts = row[0] if (row and row[0]) else None
-            total_plays = row[1] if row else 0
-
-            alb_min_row = conn.execute("SELECT MIN(completed_at) FROM album_completions").fetchone()
-            if alb_min_row and alb_min_row[0]:
-                if min_ts is None or alb_min_row[0] < min_ts:
-                    min_ts = alb_min_row[0]
-
-            r_plays = conn.execute("SELECT COUNT(*) FROM play_history WHERE source = 'radio'").fetchone()[0] or 0
+            ph_rows = conn.execute("SELECT played_at, source FROM play_history ORDER BY played_at DESC").fetchall()
+            ac_rows = conn.execute("SELECT completed_at, release_type FROM album_completions ORDER BY completed_at DESC").fetchall()
             artists_cnt = conn.execute("SELECT COUNT(DISTINCT LOWER(artist)) FROM tracked_songs WHERE total_plays > 0").fetchone()[0] or 0
-            albs_cnt = conn.execute("SELECT COUNT(*) FROM album_completions WHERE (release_type IS NULL OR release_type = 'album')").fetchone()[0] or 0
-            eps_cnt = conn.execute("SELECT COUNT(*) FROM album_completions WHERE release_type = 'ep'").fetchone()[0] or 0
+
+        play_ts: List[int] = []
+        radio_ts: List[int] = []
+        for ts_val, src in ph_rows:
+            if ts_val:
+                iv = int(ts_val)
+                play_ts.append(iv)
+                if src == "radio":
+                    radio_ts.append(iv)
+
+        album_ts: List[int] = []
+        ep_ts: List[int] = []
+        for ts_val, r_type in ac_rows:
+            if ts_val:
+                iv = int(ts_val)
+                if r_type == "ep":
+                    ep_ts.append(iv)
+                else:
+                    album_ts.append(iv)
+
+        all_ts = sorted(set(play_ts) | set(album_ts) | set(ep_ts), reverse=True)
+        min_ts = all_ts[-1] if all_ts else None
+        total_plays = len(play_ts)
+        r_plays = len(radio_ts)
+        albs_cnt = len(album_ts)
+        eps_cnt = len(ep_ts)
 
         days_since_first = ((now - min_ts) / 86400.0) if min_ts else 0.0
 
@@ -281,14 +312,27 @@ class PixooAnalytics:
 
         periods_by_tf: Dict[str, List[str]] = {}
         for tf in available_timeframes:
-            periods_by_tf[tf] = self.get_available_periods_sync(timeframe=tf, first_day_of_week=first_day_of_week)
+            periods_by_tf[tf] = self.get_available_periods_sync(
+                timeframe=tf, first_day_of_week=first_day_of_week, preloaded_timestamps=all_ts
+            )
 
+        ts_by_ctype = {
+            "Top Tracks": play_ts,
+            "Top Radio Tracks": radio_ts,
+            "Top Artists": play_ts,
+            "Completed Albums": album_ts,
+            "Completed EPs": ep_ts,
+        }
         periods_by_type_tf: Dict[str, Dict[str, List[str]]] = {}
         for ctype in available_types:
             periods_by_type_tf[ctype] = {}
+            ctype_ts = ts_by_ctype.get(ctype, play_ts)
             for tf in available_timeframes:
                 periods_by_type_tf[ctype][tf] = self.get_available_periods_sync(
-                    timeframe=tf, first_day_of_week=first_day_of_week, chart_type=ctype
+                    timeframe=tf,
+                    first_day_of_week=first_day_of_week,
+                    chart_type=ctype,
+                    preloaded_timestamps=ctype_ts,
                 )
 
         return {
@@ -319,16 +363,35 @@ class PixooAnalytics:
             return 0, int(time.time()) + 86400
 
         if tf in ("daily", "day"):
-            if not lbl or lbl.lower() in ("today", "current", "current / latest", "current / today"):
+            lbl_lower = lbl.lower()
+            if not lbl or lbl_lower in ("today", "current", "current / latest", "current / today") or "today" in lbl_lower:
                 s = datetime(now_dt.year, now_dt.month, now_dt.day, 0, 0, 0)
-            elif lbl.lower() == "yesterday":
+            elif lbl_lower == "yesterday" or "yesterday" in lbl_lower:
                 y = now_dt - timedelta(days=1)
                 s = datetime(y.year, y.month, y.day, 0, 0, 0)
             else:
-                try:
-                    s = datetime.strptime(lbl, "%d/%m/%Y")
-                except ValueError:
-                    s = datetime(now_dt.year, now_dt.month, now_dt.day, 0, 0, 0)
+                matched_dt = None
+                for d in range(7):
+                    cand = now_dt - timedelta(days=d)
+                    day_abbr = cand.strftime("%a").lower()
+                    date_short = cand.strftime("%d/%m")
+                    date_full = cand.strftime("%d/%m/%Y")
+                    if (
+                        lbl_lower == day_abbr
+                        or f"({day_abbr})" in lbl_lower
+                        or day_abbr in lbl_lower
+                        or date_short in lbl
+                        or date_full in lbl
+                    ):
+                        matched_dt = cand
+                        break
+                if matched_dt:
+                    s = datetime(matched_dt.year, matched_dt.month, matched_dt.day, 0, 0, 0)
+                else:
+                    try:
+                        s = datetime.strptime(lbl, "%d/%m/%Y")
+                    except ValueError:
+                        s = datetime(now_dt.year, now_dt.month, now_dt.day, 0, 0, 0)
             e = s + timedelta(hours=23, minutes=59, seconds=59)
             return int(s.timestamp()), int(e.timestamp())
 
@@ -529,16 +592,44 @@ class PixooAnalytics:
             pass
 
         with self.db.get_connection() as conn:
-            songs_cnt = conn.execute("SELECT COUNT(*) FROM tracked_songs WHERE total_plays > 0").fetchone()[0] or 0
-            artists_cnt = conn.execute("SELECT COUNT(DISTINCT LOWER(artist)) FROM tracked_songs WHERE total_plays > 0").fetchone()[0] or 0
-            total_plays = conn.execute("SELECT COUNT(*) FROM play_history").fetchone()[0] or 0
+            ts_row = conn.execute(
+                "SELECT COUNT(*), COUNT(DISTINCT LOWER(artist)) FROM tracked_songs WHERE total_plays > 0"
+            ).fetchone()
+            songs_cnt = (ts_row[0] or 0) if ts_row else 0
+            artists_cnt = (ts_row[1] or 0) if ts_row else 0
+
+            ph_row = conn.execute(
+                """
+                SELECT
+                    COUNT(*),
+                    SUM(CASE WHEN played_at >= ? THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN played_at >= ? THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN played_at >= ? THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN source = 'radio' THEN 1 ELSE 0 END),
+                    MAX(played_at)
+                FROM play_history
+                """,
+                (day_start, week_start, month_start),
+            ).fetchone()
+            total_plays = int(ph_row[0] or 0) if ph_row else 0
+            p_today = int(ph_row[1] or 0) if ph_row else 0
+            p_week = int(ph_row[2] or 0) if ph_row else 0
+            p_month = int(ph_row[3] or 0) if ph_row else 0
+            r_plays = int(ph_row[4] or 0) if ph_row else 0
+            last_ts = ph_row[5] if (ph_row and ph_row[5]) else None
+
             masters_cnt = conn.execute("SELECT COUNT(*) FROM artwork_masters").fetchone()[0] or 0
-            p_today = conn.execute("SELECT COUNT(*) FROM play_history WHERE played_at >= ?", (day_start,)).fetchone()[0] or 0
-            p_week = conn.execute("SELECT COUNT(*) FROM play_history WHERE played_at >= ?", (week_start,)).fetchone()[0] or 0
-            p_month = conn.execute("SELECT COUNT(*) FROM play_history WHERE played_at >= ?", (month_start,)).fetchone()[0] or 0
-            r_plays = conn.execute("SELECT COUNT(*) FROM play_history WHERE source = 'radio'").fetchone()[0] or 0
-            albs_cnt = conn.execute("SELECT COUNT(*) FROM album_completions WHERE release_type = 'album'").fetchone()[0] or 0
-            eps_cnt = conn.execute("SELECT COUNT(*) FROM album_completions WHERE release_type = 'ep'").fetchone()[0] or 0
+
+            ac_row = conn.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN release_type = 'album' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN release_type = 'ep' THEN 1 ELSE 0 END)
+                FROM album_completions
+                """
+            ).fetchone()
+            albs_cnt = int(ac_row[0] or 0) if ac_row else 0
+            eps_cnt = int(ac_row[1] or 0) if ac_row else 0
 
             top_t = conn.execute(
                 """
@@ -560,8 +651,6 @@ class PixooAnalytics:
             ).fetchone()
             top_artist_str = f"{top_a[0]} ({top_a[1]} plays)" if top_a else None
 
-            last_row = conn.execute("SELECT MAX(played_at) FROM play_history").fetchone()
-            last_ts = last_row[0] if (last_row and last_row[0]) else None
             last_scrobble = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last_ts)) if last_ts else None
 
         return {

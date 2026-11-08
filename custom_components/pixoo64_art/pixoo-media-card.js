@@ -2350,6 +2350,9 @@ class PixooMediaCard extends HTMLElement {
               if (lCe && curLCe !== tc) this._hass.callService('select', 'select_option', { entity_id: lCe, option: tc });
               if (lMe && curLMe !== 'Vinyl') this._hass.callService('select', 'select_option', { entity_id: lMe, option: 'Vinyl' });
             } else {
+              if (curLMe === 'Vinyl' && this._savedNonVinylCrop && lCe && curLCe !== this._savedNonVinylCrop) {
+                this._hass.callService('select', 'select_option', { entity_id: lCe, option: this._savedNonVinylCrop });
+              }
               if (lMe && curLMe !== tgt) this._hass.callService('select', 'select_option', { entity_id: lMe, option: tgt });
             }
             mdCont.querySelectorAll('button').forEach((btn) => btn.classList.toggle('active', btn.getAttribute('data-mode') === tgt));

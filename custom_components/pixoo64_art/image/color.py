@@ -39,33 +39,38 @@ class ColorAnalyzer:
             return list(cls.MONO_PALETTE_DARK)
 
         proxy = img.convert("RGB").resize((48, 48), Image.Resampling.BILINEAR)
-        pixels = list(proxy.getdata())
+        raw_colors = proxy.getcolors(maxcolors=2304)
+        total_pixels = 2304
 
         buckets: Dict[Tuple[int, int, int], dict] = {}
         total_lum = 0.0
         chromatic_pixels = 0
 
-        for r, g, b in pixels:
-            rf, gf, bf = r / 255.0, g / 255.0, b / 255.0
-            h, s, v = colorsys.rgb_to_hsv(rf, gf, bf)
-            total_lum += v
-            if v < 0.14:
-                continue
-            if (v > 0.60 and s < 0.32) or (v > 0.85 and s < 0.45) or s < 0.20:
-                continue
+        if raw_colors:
+            for count, (r, g, b) in raw_colors:
+                max_c = r if (r >= g and r >= b) else (g if g >= b else b)
+                min_c = r if (r <= g and r <= b) else (g if g <= b else b)
+                v = max_c / 255.0
+                total_lum += v * count
+                if v < 0.14:
+                    continue
+                s = ((max_c - min_c) / float(max_c)) if max_c > 0 else 0.0
+                if (v > 0.60 and s < 0.32) or (v > 0.85 and s < 0.45) or s < 0.20:
+                    continue
 
-            chromatic_pixels += 1
-            key = (r >> 4, g >> 4, b >> 4)
-            if key not in buckets:
-                buckets[key] = {"count": 0, "r": 0, "g": 0, "b": 0}
-            b_data = buckets[key]
-            b_data["count"] += 1
-            b_data["r"] += r
-            b_data["g"] += g
-            b_data["b"] += b
+                chromatic_pixels += count
+                key = (r >> 4, g >> 4, b >> 4)
+                b_data = buckets.get(key)
+                if b_data is None:
+                    buckets[key] = {"count": count, "r": r * count, "g": g * count, "b": b * count}
+                else:
+                    b_data["count"] += count
+                    b_data["r"] += r * count
+                    b_data["g"] += g * count
+                    b_data["b"] += b * count
 
-        avg_lum = total_lum / max(1, len(pixels))
-        chromatic_ratio = chromatic_pixels / max(1, len(pixels))
+        avg_lum = total_lum / max(1, total_pixels)
+        chromatic_ratio = chromatic_pixels / max(1, total_pixels)
 
         if chromatic_ratio < 0.035 or not buckets:
             return list(cls.MONO_PALETTE_BRIGHT if avg_lum > 0.55 else cls.MONO_PALETTE_DARK)
@@ -129,8 +134,10 @@ class ColorAnalyzer:
     def get_optimal_font_color(cls, img: Image.Image, config: "Config") -> str:
         if getattr(config, 'force_font_color', None):
             return config.force_font_color
+        if not getattr(config, 'text_bg', False):
+            return "#ffffff"
 
-        small_thumb = img.resize((25, 25), Image.Resampling.NEAREST)
+        small_thumb = img if img.size == (25, 25) else img.resize((25, 25), Image.Resampling.NEAREST)
         colors_raw = small_thumb.getcolors(maxcolors=625) or []
 
         def vibrancy_score(item):
@@ -184,8 +191,7 @@ class ColorAnalyzer:
         brightness = int(sum(most_common_color_alternative_rgb) / 3)
         brightness_lower_part = round(1 - brightness / 255, 2) if 0 <= brightness <= 255 else 0
 
-        analysis_display = display_target.resize((50, 50), Image.Resampling.NEAREST)
-        font_color = cls.get_optimal_font_color(analysis_display, config)
+        font_color = cls.get_optimal_font_color(display_target, config)
 
         def _rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
             return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"

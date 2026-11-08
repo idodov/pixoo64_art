@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import sqlite3
+import threading
 from typing import Optional
 
 SCHEMA_SQL = """
@@ -170,15 +171,28 @@ class PixooDatabase:
         self.base_dir = base_dir
         self.db_path = db_path
         self.initialized = False
+        self._conn: Optional[sqlite3.Connection] = None
+        self._conn_lock = threading.Lock()
+        self._dir_created = False
 
     def get_connection(self) -> sqlite3.Connection:
-        """Open a configured SQLite connection with WAL and foreign keys enabled."""
-        os.makedirs(self.base_dir, exist_ok=True)
-        conn = sqlite3.connect(self.db_path, timeout=15.0)
-        conn.execute("PRAGMA journal_mode = WAL;")
-        conn.execute("PRAGMA synchronous = NORMAL;")
-        conn.execute("PRAGMA foreign_keys = ON;")
-        return conn
+        """Return a persistent configured SQLite connection with WAL and foreign keys enabled."""
+        with self._conn_lock:
+            if self._conn is not None:
+                try:
+                    self._conn.execute("SELECT 1;")
+                    return self._conn
+                except sqlite3.Error:
+                    self._conn = None
+            if not self._dir_created:
+                os.makedirs(self.base_dir, exist_ok=True)
+                self._dir_created = True
+            conn = sqlite3.connect(self.db_path, timeout=15.0, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode = WAL;")
+            conn.execute("PRAGMA synchronous = NORMAL;")
+            conn.execute("PRAGMA foreign_keys = ON;")
+            self._conn = conn
+            return conn
 
     def initialize_sync(self, masters_dir: str, artists_dir: str, icons_dir: Optional[str] = None) -> None:
         """Create filesystem directories and initialize SQLite schema."""

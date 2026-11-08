@@ -59,6 +59,56 @@ class FallbackService(BaseProvider):
     async def get_tidal_access_token(self):
         return await self.tidal_provider.get_access_token()
 
+    @staticmethod
+    def _decode_master_bytes(raw: bytes) -> Optional[Image.Image]:
+        try:
+            with Image.open(BytesIO(raw)) as im:
+                return im.convert("RGB")
+        except Exception as e:
+            _LOGGER.debug("Cached master decode failed: %s", e)
+            return None
+
+    def _ram_master_key(self, media_data: "MediaData", storage_cache_key: str, f_mode: str, c_mode: str, is_force_ai: bool) -> str:
+        """Album-level RAM key (same granularity as the disk master cache).
+
+        Consecutive tracks on the same album hit RAM instead of re-reading/decoding the disk master.
+        Burned-text mode draws the track title into the frame, so it stays per-track. Lyrics dimming
+        and display/overlay flags that alter the 64x64 frame are encoded in the key so mode/crop
+        switches never collide in RAM.
+        """
+        is_burned = bool(getattr(self.config, "burned", False) or getattr(self.config, "burned_text", False))
+        base = f"track:{media_data.artist}_{media_data.title}" if is_burned else storage_cache_key
+        has_ly = bool(getattr(self.config, "show_lyrics", False) and getattr(media_data, "lyrics", None))
+        mode_sig = (
+            f"sp{int(bool(getattr(self.config, 'special_mode', False)))}"
+            f"vn{int(bool(getattr(self.config, 'vinyl_mode', False)))}"
+            f"cs{int(bool(getattr(self.config, 'cassette_mode', False)))}"
+            f"ac{int(bool(getattr(self.config, 'analog_clock', False) or getattr(self.config, 'clock_Analog', False)))}"
+            f"tb{int(bool(getattr(self.config, 'text_bg', False)))}"
+            f"st{int(bool(getattr(self.config, 'show_text', False)))}"
+            f"tt{int(bool(getattr(self.config, 'top_text', False)))}"
+            f"sc{int(bool(getattr(self.config, 'show_clock', False)))}"
+            f"tp{int(bool(getattr(self.config, 'temperature', False)))}"
+            f"ot{int(bool(getattr(self.config, 'overlay_top', True)))}"
+            f"oa{getattr(self.config, 'overlay_align', 'Clock Right, Temp Left')}"
+            f"sn{int(bool(getattr(self.config, 'crop_Sensitivity', False)))}"
+            f"br{int(is_burned)}"
+        )
+        return f"master_{base}_{f_mode}_{c_mode}_{mode_sig}_ly{int(has_ly)}{'_ai' if is_force_ai else ''}"
+
+    def _store_ram_master(self, mem_tag: Optional[str], result: Optional[dict], source: Optional[str]) -> None:
+        if not mem_tag or not result or not result.get("base64_image"):
+            return
+        if source in ("Spotify Artist", "TheAudioDB", "Internal", "Radio Logo"):
+            return
+        if source and "pic_source" not in result:
+            result["pic_source"] = source
+        cache = self.image_processor.image_cache
+        cache[mem_tag] = result
+        cache.move_to_end(mem_tag)
+        while len(cache) > self.image_processor.cache_size:
+            cache.popitem(last=False)
+
     async def _persist_master_artwork(
         self, cache_key: str, proc_result: Optional[dict], source: str, original_url: Optional[str] = None
     ) -> None:
@@ -76,7 +126,11 @@ class FallbackService(BaseProvider):
         }
         if original_url and str(original_url).startswith("https://") and "/api/media_player_proxy/" not in str(original_url):
             palette["original_image_url"] = str(original_url)
-        await storage_mgr.async_save_master(cache_key, master_img, source, palette)
+        hass = getattr(self.image_processor, "hass", None)
+        if hass and hasattr(hass, "async_create_task"):
+            hass.async_create_task(storage_mgr.async_save_master(cache_key, master_img, source, palette))
+        else:
+            await storage_mgr.async_save_master(cache_key, master_img, source, palette)
 
     async def _resolve_remote_url_for_cached(
         self, source: str, media_data: "MediaData", known_album: Optional[str]
@@ -121,13 +175,15 @@ class FallbackService(BaseProvider):
         self.fail_txt = False
         self.fallback = False
         media_data.pic_url = None
-        if picture and isinstance(picture, str) and picture.startswith("https://") and "/api/media_player_proxy/" not in picture:
-            media_data.original_image_url = picture
+        media_data.pic_source = None
         is_force_ai = bool(
             (getattr(self.config, "force_ai", False) or (self.hub and self.hub.ui_state.get("display_mode") == "Force AI"))
-            and not getattr(media_data, "radio_logo", False)
             and not getattr(media_data, "playing_tv", False)
         )
+        if not is_force_ai and getattr(media_data, "original_image_url", None) and "pollinations" in str(media_data.original_image_url).lower():
+            media_data.original_image_url = None
+        if picture and isinstance(picture, str) and picture.startswith("https://") and "/api/media_player_proxy/" not in picture:
+            media_data.original_image_url = picture
         storage_cache_key = generate_artwork_cache_key(
             getattr(media_data, "artist", "") or "",
             getattr(media_data, "album", None),
@@ -161,9 +217,10 @@ class FallbackService(BaseProvider):
             }
 
         storage_mgr = getattr(self.image_processor, "storage_manager", None)
+        mem_tag: Optional[str] = None
         if not is_spotify_slider and not is_artist_slider and storage_mgr:
             f_mode, c_mode = getattr(self.config, "image_filter", "None"), ("No Crop" if is_force_ai else getattr(self.config, "crop_mode", "No Crop"))
-            mem_tag = f"master_{media_data.artist}_{media_data.title}_{f_mode}_{c_mode}{'_ai' if is_force_ai else ''}"
+            mem_tag = self._ram_master_key(media_data, storage_cache_key, f_mode, c_mode, is_force_ai)
             if mem_tag in self.image_processor.image_cache:
                 self.image_processor.image_cache.move_to_end(mem_tag)
                 cached_res = self.image_processor.image_cache[mem_tag]
@@ -171,20 +228,26 @@ class FallbackService(BaseProvider):
                     media_data.original_image_url = cached_res["original_image_url"]
                 elif song_cache_key in self._artwork_cache and str(self._artwork_cache[song_cache_key].get("url", "")).startswith("https://"):
                     media_data.original_image_url = self._artwork_cache[song_cache_key]["url"]
+                for pk in ("color1", "color2", "color3", "font_color", "brightness", "brightness_lower_part", "background_color", "background_color_rgb"):
+                    if pk in cached_res:
+                        setattr(media_data, pk, cached_res[pk])
                 media_data.pic_url = media_data.original_image_url or (picture if (picture and str(picture).startswith("https://") and "/api/media_player_proxy/" not in picture) else None) or cached_res.get("live_display_url") or f"cache://{storage_cache_key}"
-                media_data.pic_source = "RAM Cache"
+                cached_src = cached_res.get("pic_source")
+                media_data.pic_source = "AI (RAM)" if (is_force_ai or str(cached_src or "").startswith("AI")) else (f"{cached_src} (RAM)" if cached_src and "RAM" not in str(cached_src) and "Cached" not in str(cached_src) else (cached_src or "RAM Cache"))
                 if cached_res.get("live_display_url"):
                     media_data.live_display_url = cached_res["live_display_url"]
                 return cached_res
             cached_master = await storage_mgr.async_get_master(storage_cache_key)
             if cached_master:
                 if isinstance(cached_master, dict):
-                    with Image.open(BytesIO(cached_master["image_bytes"])) as im:
-                        master_img = im.convert("RGB")
+                    # JPEG decode off the event loop
+                    master_img = await self.image_processor.hass.async_add_executor_job(self._decode_master_bytes, cached_master["image_bytes"])
                     palette, cached_source = cached_master.get("palette", {}), cached_master.get("source", "Cache")
                 else:
                     master_img, palette, cached_source = cached_master
-                if is_force_ai and cached_source != "AI":
+                if master_img is None:
+                    cached_master = None
+                elif is_force_ai and cached_source != "AI":
                     cached_master = None
                 else:
                     if not media_data.original_image_url:
@@ -193,47 +256,66 @@ class FallbackService(BaseProvider):
                         elif song_cache_key in self._artwork_cache and str(self._artwork_cache[song_cache_key].get("url", "")).startswith("https://"):
                             media_data.original_image_url = self._artwork_cache[song_cache_key]["url"]
                             palette["original_image_url"] = media_data.original_image_url
-                            await storage_mgr.async_save_master(storage_cache_key, master_img, cached_source, palette)
+                            self.image_processor.hass.async_create_task(
+                                storage_mgr.async_save_master(storage_cache_key, master_img, cached_source, dict(palette))
+                            )
                         elif cached_source and cached_source not in ("Cache", "Original", "TV", "Internal"):
-                            resolved_url = await self._resolve_remote_url_for_cached(cached_source, media_data, known_album)
-                            if resolved_url and resolved_url.startswith("https://"):
-                                media_data.original_image_url = resolved_url
-                                self._save_to_artwork_cache(song_cache_key, resolved_url, cached_source)
-                                palette["original_image_url"] = resolved_url
-                                await storage_mgr.async_save_master(storage_cache_key, master_img, cached_source, palette)
-                    proc_res = await self.image_processor.render_from_master(master_img, palette, media_data, is_slide_pass)
+                            async def _backfill_cached_url():
+                                resolved_url = await self._resolve_remote_url_for_cached(cached_source, media_data, known_album)
+                                if resolved_url and resolved_url.startswith("https://"):
+                                    media_data.original_image_url = resolved_url
+                                    self._save_to_artwork_cache(song_cache_key, resolved_url, cached_source)
+                                    updated_pal = dict(palette)
+                                    updated_pal["original_image_url"] = resolved_url
+                                    await storage_mgr.async_save_master(storage_cache_key, master_img, cached_source, updated_pal)
+
+                            self.image_processor.hass.async_create_task(_backfill_cached_url())
+                    media_data.pic_source = "AI (Cached)" if cached_source == "AI" else f"{cached_source} (Cached)"
+                    proc_res = await self.image_processor.render_from_master(master_img, palette, media_data, is_slide_pass, mem_key=mem_tag)
                     if proc_res:
+                        proc_res["master_source"] = cached_source
+                        proc_res["pic_source"] = media_data.pic_source
                         media_data.pic_url = media_data.original_image_url or (picture if (picture and str(picture).startswith("https://") and "/api/media_player_proxy/" not in picture) else None) or proc_res.get("live_display_url") or f"cache://{storage_cache_key}"
-                        media_data.pic_source = f"{cached_source} (Cached)"
                         return proc_res
+                    media_data.pic_source = None
 
         if not is_spotify_slider and not is_artist_slider and is_force_ai:
             ai_res = await self._try_ai_generation(media_data)
             if ai_res:
-                await self._persist_master_artwork(storage_cache_key, ai_res, "AI", getattr(media_data, "original_image_url", None))
+                ai_orig_url = media_data.pic_url if (media_data.pic_url and str(media_data.pic_url).startswith("https://")) else getattr(media_data, "original_image_url", None)
+                await self._persist_master_artwork(storage_cache_key, ai_res, "AI", ai_orig_url)
+                self._store_ram_master(mem_tag, ai_res, "AI")
                 return ai_res
             _LOGGER.warning("Force AI artwork generation failed; falling back to standard album art to preserve display.")
 
         if song_cache_key in self._artwork_cache:
             cached = self._artwork_cache[song_cache_key]
-            if not is_spotify_slider and not is_artist_slider or cached.get("source") in ["Spotify", "Spotify Artist", "Spotify (Artist Profile Image)", "Original"]:
-                if cached.get("url") and str(cached["url"]).startswith("https://") and "/api/media_player_proxy/" not in cached["url"]:
-                    media_data.original_image_url = cached["url"]
-                proc_res = await self.image_processor.get_image(cached["url"], media_data, is_slide_pass)
-                if proc_res:
-                    media_data.pic_url = cached["url"]
-                    media_data.pic_source = cached["source"]
-                    return proc_res
+            cached_src = cached.get("source")
+            if not (not is_force_ai and cached_src == "AI"):
+                if not is_spotify_slider and not is_artist_slider or cached_src in ["Spotify", "Spotify Artist", "Spotify (Artist Profile Image)", "Original"]:
+                    cached_url = cached.get("url")
+                    if cached_url and "/api/media_player_proxy/" not in str(cached_url):
+                        if str(cached_url).startswith("https://"):
+                            media_data.original_image_url = cached_url
+                        media_data.pic_source = cached_src
+                        proc_res = await self.image_processor.get_image(cached_url, media_data, is_slide_pass)
+                        if proc_res:
+                            media_data.pic_url = cached_url
+                            media_data.pic_source = cached_src
+                            self._store_ram_master(mem_tag, proc_res, cached_src)
+                            return proc_res
+                        media_data.pic_source = None
 
         if not (is_spotify_slider or is_artist_slider):
-            if res := await self._resolve_upstream_providers(picture, media_data, known_album, is_slide_pass, song_cache_key, storage_cache_key):
+            if res := await self._resolve_upstream_providers(picture, media_data, known_album, is_slide_pass, song_cache_key, storage_cache_key, is_force_ai):
+                self._store_ram_master(mem_tag, res, getattr(media_data, "pic_source", None))
                 return res
 
         media_data.pic_url, media_data.pic_source = "Fallback Image", "Internal"
         return await self.image_processor.hass.async_add_executor_job(self._get_fallback_black_image_data, media_data)
 
     async def _resolve_upstream_providers(
-        self, picture: Optional[str], media_data: "MediaData", known_album: Optional[str], is_slide_pass: bool, song_cache_key: str, storage_cache_key: str
+        self, picture: Optional[str], media_data: "MediaData", known_album: Optional[str], is_slide_pass: bool, song_cache_key: str, storage_cache_key: str, is_force_ai: bool = False
     ) -> Optional[dict]:
         has_providers = bool(
             (getattr(self.config, "spotify_client_id", None) and getattr(self.config, "spotify_client_secret", None))
@@ -259,10 +341,10 @@ class FallbackService(BaseProvider):
                 except Exception as e:
                     _LOGGER.debug("First attempt fetching original artwork failed: %s", e)
 
-                # Retry original art only if entity_picture attribute changed or radio
+                # Retry original art ONLY if entity_picture actually changed
                 if "/api/media_player_proxy/" in picture or getattr(media_data, "playing_radio", False):
                     latest_st = self.image_processor.hass.states.get(getattr(self.config, "media_player", ""))
-                    latest_pic = latest_st.attributes.get("entity_picture") if latest_st else None
+                    latest_pic = (latest_st.attributes.get("entity_picture") if latest_st else None) or picture
                     if latest_pic and latest_pic != picture:
                         try:
                             result = await self.image_processor.get_image(latest_pic, media_data, is_slide_pass)
@@ -278,7 +360,7 @@ class FallbackService(BaseProvider):
                             _LOGGER.debug("Retry attempt fetching original artwork failed: %s", e)
 
             if getattr(self.config, "spotify_client_id", None) and getattr(self.config, "spotify_client_secret", None):
-                sp_res = await self._try_sequential_spotify(media_data, is_slide_pass, song_cache_key, storage_cache_key, tier1_only=True)
+                sp_res = await self._try_sequential_spotify(media_data, is_slide_pass, song_cache_key, storage_cache_key, tier1_only=False)
                 if sp_res:
                     return sp_res
 
@@ -333,17 +415,13 @@ class FallbackService(BaseProvider):
     ) -> Optional[dict]:
         try:
             album_id, first_album = await self.spotify_service.get_spotify_album_id(media_data)
-            if tier1_only:
-                if not album_id or getattr(self.spotify_service, "last_match_tier", 1) != 1:
-                    return None
-                url = await self.spotify_service.get_spotify_album_image_url(album_id)
-                candidates = [(url, "Spotify")] if url else []
-            else:
-                candidates = []
-                if album_id:
-                    candidates.append((await self.spotify_service.get_spotify_album_image_url(album_id), "Spotify"))
-                if first_album and first_album != album_id:
-                    candidates.append((await self.spotify_service.get_spotify_album_image_url(first_album), "Spotify"))
+            candidates = []
+            target_album = album_id or first_album
+            if target_album:
+                url = await self.spotify_service.get_spotify_album_image_url(target_album)
+                if url:
+                    candidates.append((url, "Spotify"))
+            if not tier1_only and not candidates:
                 candidates.append((await self.spotify_service.get_spotify_artist_image_url_by_name(media_data.artist), "Spotify Artist"))
             for url, label in candidates:
                 if url:
@@ -379,11 +457,10 @@ class FallbackService(BaseProvider):
                 res = await self.image_processor.get_image(race_picture, media_data, is_slide_pass)
                 if not res and ("/api/media_player_proxy/" in race_picture or getattr(media_data, "playing_radio", False)):
                     latest_st = self.image_processor.hass.states.get(getattr(self.config, "media_player", ""))
-                    retry_pic = (latest_st.attributes.get("entity_picture") if latest_st else None)
+                    retry_pic = (latest_st.attributes.get("entity_picture") if latest_st else None) or race_picture
                     if retry_pic and retry_pic != race_picture:
                         res = await self.image_processor.get_image(retry_pic, media_data, is_slide_pass)
-                tier = 2 if has_other_providers else 1
-                return (res, race_picture, "Original", tier) if res else None
+                return (res, race_picture, "Original", 1) if res else None
             tasks.append(_fetch_orig())
 
         if include_spotify and getattr(self.config, "spotify_client_id", None) and getattr(self.config, "spotify_client_secret", None):
@@ -392,7 +469,7 @@ class FallbackService(BaseProvider):
                 target = alb_id or first_alb
                 img_url = await self.spotify_service.get_spotify_album_image_url(target) if target else None
                 if img_url and (res := await self.image_processor.get_image(img_url, media_data, is_slide_pass)):
-                    return res, img_url, "Spotify", getattr(self.spotify_service, "last_match_tier", 1)
+                    return res, img_url, "Spotify", 1
                 return None
             tasks.append(_fetch_sp())
 
@@ -418,8 +495,14 @@ class FallbackService(BaseProvider):
 
         pending = {asyncio.create_task(t) for t in tasks}
         best_tier2, tier2_deadline = None, None
+        total_deadline = time.monotonic() + 2.5
         while pending:
-            timeout_left = max(0.05, tier2_deadline - time.monotonic()) if tier2_deadline is not None else None
+            now = time.monotonic()
+            if now >= total_deadline:
+                break
+            timeout_left = total_deadline - now
+            if tier2_deadline is not None:
+                timeout_left = min(timeout_left, max(0.05, tier2_deadline - now))
             done, pending = await asyncio.wait(pending, timeout=timeout_left, return_when=asyncio.FIRST_COMPLETED)
             if not done and tier2_deadline is not None and time.monotonic() >= tier2_deadline:
                 break
@@ -459,6 +542,8 @@ class FallbackService(BaseProvider):
         return None
 
     def _save_to_artwork_cache(self, key: str, url: str, source: str) -> None:
+        if not url or "/api/media_player_proxy/" in str(url):
+            return
         if len(self._artwork_cache) >= 40:
             self._artwork_cache.popitem(last=False)
         self._artwork_cache[key] = {"url": url, "source": source}
@@ -471,7 +556,7 @@ class FallbackService(BaseProvider):
         is_next = getattr(media_data, "is_next_prefetch", False)
         is_live = not is_next
         api_key = str(getattr(self.config, "pollinations", "") or getattr(self.config, "pollinations_key", "") or "").strip()
-        ai_tier = str(getattr(self.config, "ai_tier", "models" if api_key.startswith("sk_") else "free")).lower()
+        ai_tier = str(getattr(self.config, "ai_tier", "free")).lower()
         is_free_tier = (ai_tier == "free") or not api_key.startswith("sk_")
         raw_model = "flux" if is_free_tier else str(getattr(self.config, "ai_fallback", "black-forest-labs/flux.1-schnell") or "flux")
         model_label = "FLUX (Free)" if is_free_tier else raw_model.split("/")[-1].replace(".1", "").capitalize()
@@ -487,19 +572,28 @@ class FallbackService(BaseProvider):
             self.hub.prefetch_status = f"Generating Next AI Art ({model_label})..."
             self.hub._update_prefetch_sensor_state()
 
-        ai_url = self.ai_provider.format_prompt_url(media_data.artist, media_data.title)
-        if not ai_url:
+        urls_to_try = []
+        if not is_free_tier and api_key.startswith("sk_"):
+            ai_url = self.ai_provider.format_prompt_url(media_data.artist, media_data.title)
+            if ai_url:
+                urls_to_try.append(ai_url)
+
+        free_url = self.ai_provider.format_free_prompt_url(media_data.artist, media_data.title)
+        if free_url and free_url not in urls_to_try:
+            urls_to_try.append(free_url)
+
+        encoded_prompt, seed, _ = self.ai_provider._get_prompt_and_seed(media_data.artist, media_data.title)
+        generic_free_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=512&height=512&seed={seed}&nologo=true"
+        if generic_free_url not in urls_to_try:
+            urls_to_try.append(generic_free_url)
+
+        if not urls_to_try:
             if is_live and self.hub and hasattr(self.hub, "set_ai_generating"):
                 self.hub.set_ai_generating(False, "Idle", last_error="No AI prompt could be formed.")
             elif is_next and self.hub and hasattr(self.hub, "_update_prefetch_sensor_state"):
                 self.hub.prefetch_status = "AI prompt failed"
                 self.hub._update_prefetch_sensor_state()
             return None
-
-        free_url = self.ai_provider.format_free_prompt_url(media_data.artist, media_data.title)
-        urls_to_try = [ai_url]
-        if free_url and free_url != ai_url:
-            urls_to_try.append(free_url)
 
         last_err = None
         try:
@@ -520,6 +614,7 @@ class FallbackService(BaseProvider):
 
                 try:
                     is_slide = getattr(media_data, "spotify_slide_pass", False) or getattr(media_data, "artist_slide_pass", False)
+                    media_data.pic_source = "AI"
                     result = await asyncio.wait_for(
                         self.image_processor.get_image(target_url, media_data, is_slide),
                         timeout=28,
@@ -545,17 +640,25 @@ class FallbackService(BaseProvider):
                             self.hub._update_prefetch_sensor_state()
                         return result
                     else:
+                        if getattr(media_data, "pic_source", None) == "AI":
+                            media_data.pic_source = None
                         last_err = getattr(self.image_processor, "last_fetch_error", None) or "Failed to download image"
                 except asyncio.TimeoutError:
+                    if getattr(media_data, "pic_source", None) == "AI":
+                        media_data.pic_source = None
                     last_err = f"Generation timed out after 28s ({model_label})"
                     _LOGGER.warning("AI generation timed out on attempt %d", attempt + 1)
                 except Exception as e:
+                    if getattr(media_data, "pic_source", None) == "AI":
+                        media_data.pic_source = None
                     last_err = str(e)
                     _LOGGER.warning("AI generation error: %s (attempt %d)", e, attempt + 1)
 
                 if attempt < len(urls_to_try) - 1:
                     await asyncio.sleep(1.0)
 
+            if getattr(media_data, "pic_source", None) == "AI":
+                media_data.pic_source = None
             if is_live and self.hub and hasattr(self.hub, "set_ai_generating"):
                 self.hub.set_ai_generating(
                     False,

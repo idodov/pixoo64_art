@@ -12,11 +12,11 @@ class ImageCropper:
     """Smart, fast, and surgical image cropping engine for 64x64 pixel displays."""
 
     @classmethod
-    def crop_image_borders(cls, img: Image.Image, config: "Config", radio_logo: bool) -> Image.Image:
+    def crop_image_borders(cls, img: Image.Image, config: "Config", radio_logo: bool = False) -> Image.Image:
         if getattr(config, "force_ai", False) or str(getattr(config, "display_mode", "")).lower() == "force ai":
             return img
         crop_mode = getattr(config, "crop_mode", "No Crop")
-        if radio_logo or crop_mode == "No Crop" or not getattr(config, "crop_borders", False):
+        if crop_mode == "No Crop" or not getattr(config, "crop_borders", False):
             return img
         if (crop_mode == "Extra Crop" or getattr(config, "crop_extra", False) or getattr(config, "special_mode", False)) and not getattr(config, "vinyl_mode", False):
             return cls._perform_extra_subject_crop(img)
@@ -24,9 +24,10 @@ class ImageCropper:
 
     @classmethod
     def apply(cls, img: Image.Image, crop_mode: str = "Crop", sensitivity: bool = False) -> Image.Image:
-        if not crop_mode or crop_mode in ("No", "No Crop", "False"):
+        crop_lower = str(crop_mode).lower().strip()
+        if not crop_mode or crop_lower in ("no", "no crop", "false", "none", "off"):
             return img
-        if crop_mode in ("Extra Crop", "Aggressive Crop") or sensitivity:
+        if crop_lower in ("extra", "extra crop", "aggressive crop") or sensitivity:
             return cls._perform_extra_subject_crop(img)
         return cls._perform_standard_crop(img)
 
@@ -35,12 +36,24 @@ class ImageCropper:
         """Finds the dominant outer border color and its uniformity ratio."""
         pw, ph = proxy.size
         pixels = proxy.load()
-        samples = [
-            pixels[x, y]
-            for y in range(ph)
-            for x in range(pw)
-            if x < depth or x >= pw - depth or y < depth or y >= ph - depth
-        ]
+        samples = []
+        top_limit = min(depth, ph)
+        bot_start = max(top_limit, ph - depth)
+        left_limit = min(depth, pw)
+        right_start = max(left_limit, pw - depth)
+
+        for y in range(top_limit):
+            for x in range(pw):
+                samples.append(pixels[x, y])
+        for y in range(bot_start, ph):
+            for x in range(pw):
+                samples.append(pixels[x, y])
+        for y in range(top_limit, bot_start):
+            for x in range(left_limit):
+                samples.append(pixels[x, y])
+            for x in range(right_start, pw):
+                samples.append(pixels[x, y])
+
         if not samples:
             return (0, 0, 0), 1.0
 
@@ -111,10 +124,14 @@ class ImageCropper:
             return None
 
         pixels = proxy.load()
-        comp_pixels = comp['pixels']
+        comp_pixels = comp.get('pixels') or []
+        if not comp_pixels:
+            return None
         buckets = Counter(
             (pixels[x, y][0] >> 4, pixels[x, y][1] >> 4, pixels[x, y][2] >> 4) for x, y in comp_pixels
         )
+        if not buckets:
+            return None
         top_bucket, top_count = buckets.most_common(1)[0]
         if (top_count / float(len(comp_pixels))) < 0.30:
             return None
@@ -143,16 +160,25 @@ class ImageCropper:
                 c_pix = []
                 q = deque([(x, y)])
                 visited.add((x, y))
+                min_x = max_x = x
+                min_y = max_y = y
                 while q:
                     cx, cy = q.popleft()
                     c_pix.append((cx, cy))
+                    if cx < min_x:
+                        min_x = cx
+                    elif cx > max_x:
+                        max_x = cx
+                    if cy < min_y:
+                        min_y = cy
+                    elif cy > max_y:
+                        max_y = cy
                     for ny in range(max(0, cy - 2), min(ph, cy + 3)):
                         for nx in range(max(0, cx - 2), min(pw, cx + 3)):
                             if (nx, ny) in inner_mask_set and (nx, ny) not in visited:
                                 visited.add((nx, ny))
                                 q.append((nx, ny))
 
-                xs, ys = [p[0] for p in c_pix], [p[1] for p in c_pix]
                 area = len(c_pix)
                 if area >= int((pw * ph) * 0.004):
                     color_buckets = len(
@@ -160,9 +186,9 @@ class ImageCropper:
                     )
                     inner_comps.append({
                         'area': area,
-                        'min_x': min(xs), 'max_x': max(xs),
-                        'min_y': min(ys), 'max_y': max(ys),
-                        'w': max(xs) - min(xs) + 1, 'h': max(ys) - min(ys) + 1,
+                        'min_x': min_x, 'max_x': max_x,
+                        'min_y': min_y, 'max_y': max_y,
+                        'w': max_x - min_x + 1, 'h': max_y - min_y + 1,
                         'pixels': c_pix,
                         'color_variety': color_buckets,
                     })
@@ -208,8 +234,10 @@ class ImageCropper:
         return x1, y1, x2, y2
 
     @classmethod
-    def _find_subject_box(cls, comps: list, pw: int, ph: int, is_unwrapped: bool = False) -> Tuple[int, int, int, int, float]:
+    def _find_subject_box(cls, comps: list, pw: int, ph: int, is_unwrapped: bool = False) -> Optional[Tuple[int, int, int, int, float]]:
         """Filters out marginal typography/stripes and selects the core subject bounding box."""
+        if not comps:
+            return None
         filtered = []
         for c in comps:
             min_x, max_x, min_y, max_y = c['min_x'], c['max_x'], c['min_y'], c['max_y']
@@ -228,6 +256,8 @@ class ImageCropper:
             filtered.append(c)
 
         pool = filtered if filtered else comps
+        if not pool:
+            return None
 
         def comp_score(c: dict) -> float:
             w, h, area = c['w'], c['h'], c['area']
@@ -271,8 +301,10 @@ class ImageCropper:
         min_y: int,
         max_x: int,
         max_y: int,
+        bg_ref: Tuple[int, int, int] = (0, 0, 0),
+        raw_rgb: Optional[bytes] = None,
     ) -> Tuple[float, float]:
-        """Finds the (rel_cx, rel_cy) focal center [0.0..1.0] of visual complexity within the subject box."""
+        """Finds the (rel_cx, rel_cy) focal center [0.0..1.0] of visual complexity and facial/head saliency within the subject box."""
         sub_w = max_x - min_x + 1
         sub_h = max_y - min_y + 1
         rel_cx, rel_cy = 0.5, 0.5
@@ -280,102 +312,155 @@ class ImageCropper:
         if sub_w < 8 or sub_h < 8:
             return rel_cx, rel_cy
 
-        pixels = proxy.load()
         pw, ph = proxy.size
+        if raw_rgb is None:
+            raw_rgb = proxy.tobytes()
+        br, bg, bb = bg_ref
+        row_stride = pw * 3
 
-        # 1. Vertical focus scan when subject is vertically elongated (e.g. portraits, standing figures)
-        if sub_h > int(sub_w * 1.15):
-            win_h = min(sub_w, sub_h)
-            max_y_start = max_y - win_h + 1
-            if max_y_start > min_y:
-                y_range = max_y_start - min_y
-                step = max(1, y_range // 16)
-                candidates = list(range(min_y, max_y_start + 1, step))
-                if max_y_start not in candidates:
-                    candidates.append(max_y_start)
+        # Sliding window focal scan (2D) using O(1) integral images and 4x4 cell color bitmasks
+        win_dim = max(24, min(int(max(sub_w, sub_h) * 0.58), min(sub_w, sub_h, pw, ph)))
+        x_max = max(min_x, max_x - win_dim + 1)
+        y_max = max(min_y, max_y - win_dim + 1)
+        x_step = max(1, (x_max - min_x) // 16) if x_max > min_x else 1
+        y_step = max(1, (y_max - min_y) // 16) if y_max > min_y else 1
 
-                best_score = -1.0
-                best_y_start = min_y
-                x_step = max(1, sub_w // 20)
-                y_step = max(1, win_h // 20)
+        candidates_x = list(range(min_x, x_max + 1, x_step))
+        if x_max not in candidates_x:
+            candidates_x.append(x_max)
+        candidates_y = list(range(min_y, y_max + 1, y_step))
+        if y_max not in candidates_y:
+            candidates_y.append(y_max)
 
-                for y_s in candidates:
-                    edge_energy = 0
-                    color_buckets = set()
-                    sample_count = 0
+        iw = sub_w + 1
+        table_len = (sub_h + 1) * iw
+        sat_edge = [0] * table_len
+        sat_contrast = [0] * table_len
+        sat_skin = [0] * table_len
 
-                    for py in range(y_s, y_s + win_h, y_step):
-                        for px in range(min_x, max_x + 1, x_step):
-                            r, g, b = pixels[px, py]
-                            color_buckets.add((r >> 4, g >> 4, b >> 4))
-                            sample_count += 1
-                            if px + 1 < pw:
-                                r2, g2, b2 = pixels[px + 1, py]
-                                edge_energy += abs(r - r2) + abs(g - g2) + abs(b - b2)
-                            if py + 1 < ph:
-                                r3, g3, b3 = pixels[px, py + 1]
-                                edge_energy += abs(r - r3) + abs(g - g3) + abs(b - b3)
+        cw = (sub_w + 3) >> 2
+        ch = (sub_h + 3) >> 2
+        cell_masks = [0] * (cw * ch)
 
-                    avg_edge = edge_energy / float(max(1, sample_count))
-                    variety = len(color_buckets)
-                    rel_pos = (y_s - min_y) / float(max(1, max_y_start - min_y))
-                    # Anatomical top-bias: face/head is naturally in the upper region of human figures
-                    top_bias = 1.0 / (1.0 + rel_pos * 1.15)
-                    score = (avg_edge ** 0.8) * (variety ** 0.9) * top_bias
+        for ry in range(sub_h):
+            py = min_y + ry
+            row_base = py * row_stride
+            next_row_base = row_base + row_stride
+            has_py_next = (py + 1) < ph
+            prev_sat_row = ry * iw
+            curr_sat_row = (ry + 1) * iw
+            cell_row = (ry >> 2) * cw
 
-                    if score > best_score:
-                        best_score = score
-                        best_y_start = y_s
+            run_edge = 0
+            run_contrast = 0
+            run_skin = 0
 
-                focal_cy_proxy = best_y_start + (win_h / 2.0)
-                rel_cy = max(0.15, min(0.85, (focal_cy_proxy - min_y) / float(sub_h)))
+            for rx in range(sub_w):
+                px = min_x + rx
+                off = row_base + px * 3
+                r = raw_rgb[off]
+                g = raw_rgb[off + 1]
+                b = raw_rgb[off + 2]
 
-        # 2. Horizontal focus scan when subject is horizontally elongated
-        elif sub_w > int(sub_h * 1.25):
-            win_w = min(sub_w, sub_h)
-            max_x_start = max_x - win_w + 1
-            if max_x_start > min_x:
-                x_range = max_x_start - min_x
-                step = max(1, x_range // 16)
-                candidates = list(range(min_x, max_x_start + 1, step))
-                if max_x_start not in candidates:
-                    candidates.append(max_x_start)
+                cell_masks[cell_row + (rx >> 2)] |= 1 << (((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4))
 
-                best_score = -1.0
-                best_x_start = min_x
-                x_step = max(1, win_w // 20)
-                y_step = max(1, sub_h // 20)
+                d_r = r - br if r >= br else br - r
+                d_g = g - bg if g >= bg else bg - g
+                d_b = b - bb if b >= bb else bb - b
+                diff_bg = d_r if (d_r >= d_g and d_r >= d_b) else (d_g if d_g >= d_b else d_b)
 
-                for x_s in candidates:
-                    edge_energy = 0
-                    color_buckets = set()
-                    sample_count = 0
+                if diff_bg > 18:
+                    run_contrast += 1
+                    if ((r > g > b) and (r - b > 14) and (r > 85)) or (diff_bg > 20 and r < 85 and g < 85 and b < 85):
+                        run_skin += 1
 
-                    for py in range(min_y, max_y + 1, y_step):
-                        for px in range(x_s, x_s + win_w, x_step):
-                            r, g, b = pixels[px, py]
-                            color_buckets.add((r >> 4, g >> 4, b >> 4))
-                            sample_count += 1
-                            if px + 1 < pw:
-                                r2, g2, b2 = pixels[px + 1, py]
-                                edge_energy += abs(r - r2) + abs(g - g2) + abs(b - b2)
-                            if py + 1 < ph:
-                                r3, g3, b3 = pixels[px, py + 1]
-                                edge_energy += abs(r - r3) + abs(g - g3) + abs(b - b3)
+                edge_px = 0
+                if px + 1 < pw:
+                    r2 = raw_rgb[off + 3]
+                    g2 = raw_rgb[off + 4]
+                    b2 = raw_rgb[off + 5]
+                    edge_px += (r - r2 if r >= r2 else r2 - r) + (g - g2 if g >= g2 else g2 - g) + (b - b2 if b >= b2 else b2 - b)
+                if has_py_next:
+                    off_n = next_row_base + px * 3
+                    r3 = raw_rgb[off_n]
+                    g3 = raw_rgb[off_n + 1]
+                    b3 = raw_rgb[off_n + 2]
+                    edge_px += (r - r3 if r >= r3 else r3 - r) + (g - g3 if g >= g3 else g3 - g) + (b - b3 if b >= b3 else b3 - b)
+                run_edge += edge_px
 
-                    avg_edge = edge_energy / float(max(1, sample_count))
-                    variety = len(color_buckets)
-                    rel_pos = (x_s - min_x) / float(max(1, max_x_start - min_x))
-                    center_bias = 1.0 / (1.0 + abs(rel_pos - 0.5) * 0.8)
-                    score = (avg_edge ** 0.8) * (variety ** 0.9) * center_bias
+                c_idx = curr_sat_row + rx + 1
+                p_idx = prev_sat_row + rx + 1
+                sat_edge[c_idx] = sat_edge[p_idx] + run_edge
+                sat_contrast[c_idx] = sat_contrast[p_idx] + run_contrast
+                sat_skin[c_idx] = sat_skin[p_idx] + run_skin
 
-                    if score > best_score:
-                        best_score = score
-                        best_x_start = x_s
+        # Pre-combine horizontal cell spans for each candidate x_s across each cell row
+        cand_rx_spans = []
+        for x_s in candidates_x:
+            rx0 = x_s - min_x
+            rx1 = rx0 + win_dim
+            cx0 = rx0 >> 2
+            cx1 = (rx1 - 1) >> 2
+            row_spans = [0] * ch
+            for cy_i in range(ch):
+                base_c = cy_i * cw
+                m = 0
+                for cx_i in range(cx0, cx1 + 1):
+                    m |= cell_masks[base_c + cx_i]
+                row_spans[cy_i] = m
+            cand_rx_spans.append((x_s, rx0, rx1, row_spans))
 
-                focal_cx_proxy = best_x_start + (win_w / 2.0)
-                rel_cx = max(0.15, min(0.85, (focal_cx_proxy - min_x) / float(sub_w)))
+        best_score = -1e9
+        best_x, best_y = min_x, min_y
+        inv_area = 1.0 / float(max(1, win_dim * win_dim))
+        denom_y = float(max(1, sub_h - win_dim))
+        denom_x = float(max(1, sub_w - win_dim))
 
+        for y_s in candidates_y:
+            ry0 = y_s - min_y
+            ry1 = ry0 + win_dim
+            cy0 = ry0 >> 2
+            cy1 = (ry1 - 1) >> 2
+            r0_iw = ry0 * iw
+            r1_iw = ry1 * iw
+            rel_y = ry0 / denom_y if sub_h > win_dim else 0.5
+            # Anatomical top-bias: face/head is naturally situated in the upper portion of a human figure
+            top_bias = 1.0 / (1.0 + rel_y * 1.5)
+
+            for x_s, rx0, rx1, row_spans in cand_rx_spans:
+                tl, tr, bl, br_i = r0_iw + rx0, r0_iw + rx1, r1_iw + rx0, r1_iw + rx1
+                edge_energy = sat_edge[br_i] - sat_edge[tr] - sat_edge[bl] + sat_edge[tl]
+                contrast_hits = sat_contrast[br_i] - sat_contrast[tr] - sat_contrast[bl] + sat_contrast[tl]
+                skin_hair_hits = sat_skin[br_i] - sat_skin[tr] - sat_skin[bl] + sat_skin[tl]
+
+                win_mask = 0
+                for cy_i in range(cy0, cy1 + 1):
+                    win_mask |= row_spans[cy_i]
+
+                avg_edge = edge_energy * inv_area
+                variety = win_mask.bit_count()
+                contrast_ratio = contrast_hits * inv_area
+                skin_ratio = skin_hair_hits * inv_area
+                rel_x = rx0 / denom_x if sub_w > win_dim else 0.5
+                x_center_bias = 1.0 / (1.0 + abs(rel_x - 0.5) * 0.7)
+
+                score = (
+                    (avg_edge ** 0.75)
+                    * (variety ** 0.85)
+                    * (1.0 + skin_ratio * 3.5)
+                    * (0.2 if contrast_ratio < 0.12 else 1.0)
+                    * top_bias
+                    * x_center_bias
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best_x, best_y = x_s, y_s
+
+        focal_cx_proxy = best_x + (win_dim / 2.0)
+        focal_cy_proxy = best_y + (win_dim / 2.0)
+        rel_cx = max(0.12, min(0.88, (focal_cx_proxy - min_x) / float(sub_w)))
+        rel_cy = max(0.12, min(0.88, (focal_cy_proxy - min_y) / float(sub_h)))
         return rel_cx, rel_cy
 
     @classmethod
@@ -394,45 +479,93 @@ class ImageCropper:
         max_diff = ImageChops.lighter(ImageChops.lighter(r_d, g_d), b_d)
 
         thresh = 16 if border_uniformity > 0.75 else 24
-        diff_pixels = max_diff.load()
-        proxy_pixels = proxy.load()
-        visited = [[False] * pw for _ in range(ph)]
+        raw_diff = max_diff.tobytes()
+        raw_rgb = proxy.tobytes()
+        total_px = pw * ph
+        visited = bytearray(total_px)
         comps = []
 
-        for y in range(ph):
-            for x in range(pw):
-                if diff_pixels[x, y] > thresh and not visited[y][x]:
-                    comp_pixels = []
-                    q = deque([(x, y)])
-                    visited[y][x] = True
-                    while q:
-                        cx, cy = q.popleft()
-                        comp_pixels.append((cx, cy))
-                        c_min_ch = min(proxy_pixels[cx, cy])
-                        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                            nx, ny = cx + dx, cy + dy
-                            if 0 <= nx < pw and 0 <= ny < ph and not visited[ny][nx] and diff_pixels[nx, ny] > thresh:
-                                if abs(c_min_ch - min(proxy_pixels[nx, ny])) > 110:
-                                    continue
-                                visited[ny][nx] = True
-                                q.append((nx, ny))
+        for idx in range(total_px):
+            if raw_diff[idx] > thresh and not visited[idx]:
+                sx = idx % pw
+                sy = idx // pw
+                comp_pixels = []
+                q = deque([(sx, sy, idx)])
+                visited[idx] = 1
+                min_x = max_x = sx
+                min_y = max_y = sy
+                color_mask = 0
+                while q:
+                    cx, cy, c_idx = q.popleft()
+                    comp_pixels.append((cx, cy))
+                    if cx < min_x:
+                        min_x = cx
+                    elif cx > max_x:
+                        max_x = cx
+                    if cy < min_y:
+                        min_y = cy
+                    elif cy > max_y:
+                        max_y = cy
+                    c_off = c_idx * 3
+                    cr, cg, cb = raw_rgb[c_off], raw_rgb[c_off + 1], raw_rgb[c_off + 2]
+                    color_mask |= 1 << (((cr >> 4) << 8) | ((cg >> 4) << 4) | (cb >> 4))
+                    c_min_ch = cr if (cr <= cg and cr <= cb) else (cg if cg <= cb else cb)
 
-                    xs, ys = [p[0] for p in comp_pixels], [p[1] for p in comp_pixels]
-                    w, h, area = max(xs) - min(xs) + 1, max(ys) - min(ys) + 1, len(comp_pixels)
-                    is_outer_frame = w > pw * 0.78 and h > ph * 0.78 and (area / float(w * h)) < 0.25
-                    if area >= int((pw * ph) * 0.0025) and not is_outer_frame:
-                        color_buckets = len({
-                            (proxy_pixels[px, py][0] >> 4, proxy_pixels[px, py][1] >> 4, proxy_pixels[px, py][2] >> 4)
-                            for px, py in comp_pixels
-                        })
-                        comps.append({
-                            'area': area,
-                            'min_x': min(xs), 'max_x': max(xs),
-                            'min_y': min(ys), 'max_y': max(ys),
-                            'w': w, 'h': h,
-                            'pixels': comp_pixels,
-                            'color_variety': color_buckets,
-                        })
+                    if cx > 0:
+                        n_idx = c_idx - 1
+                        if not visited[n_idx] and raw_diff[n_idx] > thresh:
+                            n_off = n_idx * 3
+                            nr, ng, nb = raw_rgb[n_off], raw_rgb[n_off + 1], raw_rgb[n_off + 2]
+                            n_min = nr if (nr <= ng and nr <= nb) else (ng if ng <= nb else nb)
+                            if abs(c_min_ch - n_min) <= 110:
+                                visited[n_idx] = 1
+                                q.append((cx - 1, cy, n_idx))
+                    if cx + 1 < pw:
+                        n_idx = c_idx + 1
+                        if not visited[n_idx] and raw_diff[n_idx] > thresh:
+                            n_off = n_idx * 3
+                            nr, ng, nb = raw_rgb[n_off], raw_rgb[n_off + 1], raw_rgb[n_off + 2]
+                            n_min = nr if (nr <= ng and nr <= nb) else (ng if ng <= nb else nb)
+                            if abs(c_min_ch - n_min) <= 110:
+                                visited[n_idx] = 1
+                                q.append((cx + 1, cy, n_idx))
+                    if cy > 0:
+                        n_idx = c_idx - pw
+                        if not visited[n_idx] and raw_diff[n_idx] > thresh:
+                            n_off = n_idx * 3
+                            nr, ng, nb = raw_rgb[n_off], raw_rgb[n_off + 1], raw_rgb[n_off + 2]
+                            n_min = nr if (nr <= ng and nr <= nb) else (ng if ng <= nb else nb)
+                            if abs(c_min_ch - n_min) <= 110:
+                                visited[n_idx] = 1
+                                q.append((cx, cy - 1, n_idx))
+                    if cy + 1 < ph:
+                        n_idx = c_idx + pw
+                        if not visited[n_idx] and raw_diff[n_idx] > thresh:
+                            n_off = n_idx * 3
+                            nr, ng, nb = raw_rgb[n_off], raw_rgb[n_off + 1], raw_rgb[n_off + 2]
+                            n_min = nr if (nr <= ng and nr <= nb) else (ng if ng <= nb else nb)
+                            if abs(c_min_ch - n_min) <= 110:
+                                visited[n_idx] = 1
+                                q.append((cx, cy + 1, n_idx))
+
+                w, h, area = max_x - min_x + 1, max_y - min_y + 1, len(comp_pixels)
+                color_buckets = color_mask.bit_count()
+                # Outer frame detection: must touch all 4 canvas borders, be mostly hollow, and have low color diversity
+                is_outer_frame = (
+                    w > pw * 0.82 and h > ph * 0.82
+                    and min_x <= 2 and min_y <= 2 and max_x >= pw - 3 and max_y >= ph - 3
+                    and (area / float(w * h)) < 0.15
+                    and color_buckets <= 8
+                )
+                if area >= int(total_px * 0.0025) and not is_outer_frame:
+                    comps.append({
+                        'area': area,
+                        'min_x': min_x, 'max_x': max_x,
+                        'min_y': min_y, 'max_y': max_y,
+                        'w': w, 'h': h,
+                        'pixels': comp_pixels,
+                        'color_variety': color_buckets,
+                    })
 
         if not comps:
             return cls._perform_standard_crop(img)
@@ -466,9 +599,12 @@ class ImageCropper:
                     left, top = int(max(0, min(cx - half, orig_w - crop_dim))), int(max(0, min(cy - half, orig_h - crop_dim)))
                     return img.crop((left, top, left + crop_dim, top + crop_dim))
 
-        sub_min_x, sub_min_y, sub_max_x, sub_max_y, subj_solidity = cls._find_subject_box(
+        box_res = cls._find_subject_box(
             candidate_comps, pw, ph, is_unwrapped=is_unwrapped
         )
+        if not box_res:
+            return cls._perform_standard_crop(img)
+        sub_min_x, sub_min_y, sub_max_x, sub_max_y, subj_solidity = box_res
         scale_to_orig = 1.0 / scale
         rough_box = (
             int(round(sub_min_x * scale_to_orig)),
@@ -481,17 +617,15 @@ class ImageCropper:
         if sub_w < 12 or sub_h < 12:
             return cls._perform_standard_crop(img)
 
-        touches_canvas_edge = sub_min_x <= 2 or sub_min_y <= 2 or sub_max_x >= pw - 3 or sub_max_y >= ph - 3
-        is_freeform_silhouette = subj_solidity < 0.52 and not is_unwrapped and not touches_canvas_edge
+        is_freeform_silhouette = (subj_solidity < 0.48 or (subj_solidity < 0.55 and sub_h > sub_w * 1.15)) and not is_unwrapped
 
-        rel_cx, rel_cy = cls._find_saliency_focus(proxy, sub_min_x, sub_min_y, sub_max_x, sub_max_y)
+        rel_cx, rel_cy = cls._find_saliency_focus(
+            proxy, sub_min_x, sub_min_y, sub_max_x, sub_max_y, bg_ref=target_bg_color, raw_rgb=raw_rgb
+        )
         cx, cy = x1 + sub_w * rel_cx, y1 + sub_h * rel_cy
 
         if is_freeform_silhouette:
-            if sub_h > sub_w * 1.3:
-                crop_dim = max(16, min(int(sub_w * 1.35), min(orig_w, orig_h, sub_h)))
-            else:
-                crop_dim = min(max(sub_w, sub_h), min(orig_w, orig_h))
+            crop_dim = max(16, min(int(min(sub_w, sub_h) * 1.15), int(max(sub_w, sub_h) * 0.65), min(orig_w, orig_h)))
             half = crop_dim / 2.0
             left = int(max(0, min(cx - half, orig_w - crop_dim)))
             top = int(max(0, min(cy - half, orig_h - crop_dim)))

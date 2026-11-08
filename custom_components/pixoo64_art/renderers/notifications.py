@@ -465,14 +465,8 @@ class NotificationManager:
 
             await self.pixoo.send_command({"Command": "Channel/OnOffScreen", "OnOff": 1}, force=True)
             await self.pixoo.send_command({"Command": "Channel/SetIndex", "SelectIndex": 4}, force=True)
-            await self.pixoo.send_command({
-                "Command": "Draw/CommandList",
-                "CommandList": [
-                    {"Command": "Draw/ClearHttpText"},
-                    {"Command": "Draw/ResetHttpGifId"},
-                ],
-            }, force=True)
-            await asyncio.sleep(0.04)
+            await self.pixoo.send_command({"Command": "Draw/ClearHttpText"}, force=True)
+            await self.pixoo.send_command({"Command": "Draw/ResetHttpGifId"}, force=True)
 
             for offset, b64_frame in enumerate(b64_frames):
                 await self.pixoo.send_command({

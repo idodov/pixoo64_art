@@ -1,12 +1,10 @@
-<h1 align="center">🎨 Pixoo64 Media Album Art for Home Assistant (v2.1.2)</h1>
+<h1 align="center">🎨 Pixoo64 Media Album Art for Home Assistant (v2.1.3)</h1>
 
 <p align="center">
   <a href="https://www.home-assistant.io/"><img src="https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blueviolet.svg?style=for-the-badge&logo=home-assistant" alt="Home Assistant 2024.1+"></a>
   <a href="https://www.home-assistant.io/blog/2026/11/04/release-202611/#welcome-to-the-marketplace"><img src="https://img.shields.io/badge/Marketplace-Custom%20Repo-purple.svg?style=for-the-badge&logo=home-assistant" alt="Marketplace Ready"></a>
   <a href="https://hacs.xyz/"><img src="https://img.shields.io/badge/HACS-Compatible-orange.svg?style=for-the-badge&logo=hacs" alt="HACS Compatible"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT"></a>
-  <a href="https://github.com/idodov/pixoo64_art/releases"><img src="https://img.shields.io/badge/Version-2.1.2-emerald.svg?style=for-the-badge" alt="Version 2.1.2"></a>
-  <a href="https://github.com/idodov/pixoo64_art/issues"><img src="https://img.shields.io/github/issues/idodov/pixoo64_art?style=for-the-badge&color=red" alt="GitHub Issues"></a>
 </p>
 
 <p align="center">
@@ -29,24 +27,6 @@ Unlike traditional media display scripts that rely on single-platform APIs or cl
 * **🛡️ Smart Channel Memory & Black-Screen Immunity** — Strictly guards against getting trapped on Channel 4 (the empty HTTP GIF screen). Your preferred channel (Clock, Cloud, Visualizer, or Custom) is remembered and restored automatically.
 * **Zero Paid Subscriptions Required** — Core playback works with native Home Assistant metadata and free community databases. Optional free developer keys (Spotify, TIDAL, Discogs, Last.fm) can be added for enhanced resolution and animated carousel modes.
 * **100% Local LAN Communication** — Sends pixel payloads directly over your local Wi-Fi via HTTP POST requests, guaranteeing privacy, zero external cloud dependencies, and instant response times.
-
----
-
-## 🚀 What's New in Version 2.1.2
-
-Version 2.1.2 introduces Pollinations Connect browser login, granular AI tier selection, and fixes pause screen power handling when Full Control is turned off:
-
-| Feature | Enhancement | User Benefit |
-| :--- | :--- | :--- |
-| **🤖 Pollinations Account Login (OAuth Device Flow)** | Authenticate your Pollinations account via a 1-click browser authorization link using standard RFC 8628 device flow. | Connect your personal Pollinations account in seconds without copying or pasting secret keys manually. |
-| **🎛️ Dedicated AI Service Tier Selection** | Choose cleanly between **Free Tier** (uses free `512×512` models with no account/key needed) and **Model Services** (faster generations, premium custom models with account login or secret key). | Zero setup needed for free AI art; smooth switch to premium model services when desired. |
-| **🛡️ Pause Screen Power Restoration (Full Control Fix)** | Corrected `_send_off_command` logic so hardware display power is only turned off when **Full Control** is actively enabled. | When pausing playback or after pause timeout expires with Full Control OFF, the Pixoo64 cleanly returns to your Clock channel with the screen remaining ON instead of turning black. |
-| **🏬 Home Assistant Marketplace Support** | Fully aligned with Home Assistant 2026.11 built-in Marketplace (`Settings > Marketplace`). | Direct installation via core Marketplace custom repositories with zero external downloader scripts. |
-| **🤖 Free-Tier Pollinations AI (No Key Needed)** | Standardized on Pollinations' free-tier endpoint at `512×512` resolution (`image.pollinations.ai`). | Generates bespoke pop-art for songs and radio streams completely free out-of-the-box with zero configuration or API key. |
-| **🪙 Pollen Coin Balance & Model Cost Display** | Replaced dollar symbols with Pollinations coin emoji (`🪙`) and added per-model cost badges across configuration and status cards. | Clear visual tracking of model costs and account balance. |
-| **⚡ Instant Startup State Restoration Barrier** | Added an asynchronous synchronization barrier (`mark_entity_restored`) across all 15 restore entities (`select`, `switch`, `number`). | Restored settings (e.g. `Extra Crop`, `Force AI`) are applied immediately on reboot without requiring manual option clicks. |
-| **📺 Chromecast & Cast Receiver Compatibility** | Injected Cast receiver heuristics (`isCastReceiver`) and strict HTTPS asset validation. | In Force AI mode on Cast devices (or when encountering insecure HTTP URLs on HTTPS streams), the card cleanly falls back to the dynamic retro SVG pixel screen instead of mismatched covers or broken image icons. |
-| **🎛️ Card Advanced Master & Full Control Toggles** | Added one-click **Master Control** and **Full Control** toggle buttons directly inside the Advanced section of `pixoo-media-card`. | Instant control over software loop processing and hardware display power straight from your dashboard. |
 
 ---
 
@@ -598,7 +578,7 @@ The integration supports generative AI pop-art via **Pollinations.ai** for track
 
 * **Free Tier (Zero Config / No Key Needed):** In integration settings, select **Free Tier** (or leave credentials empty). Generation routes through the free public endpoint (`image.pollinations.ai`) producing crisp `512×512` images at no cost.
 * **Model Services (Secret Key or Browser Login):** For faster generations, higher rate limits, and custom models (FLUX, Recraft Vector, etc.), select **Model Services**. You can authenticate by:
-  * **Entering a Secret Key (`sk_...`)** from [enter.pollinations.ai/keys](https://enter.pollinations.ai/?ref=19820046).
+  * **Entering a Secret Key (`sk_...`)** from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys).
   * **OR Logging in with your Pollinations account**: Toggle **Log in with Pollinations Account**, submit, and follow the short browser authorization link.
 * **⚠️ Publishable Keys (`pk_...`) are NOT supported:** When creating an "App" on Pollinations, it generates an App / Publishable Key (`pk_...`). These are intended strictly for client-side browser payment widgets (*Pollinations Pay*). Passing a `pk_` key to Home Assistant will cause Pollinations to reject requests with `HTTP 401 Unauthorized`. Use a **Secret Key (`sk_`)**, the built-in **Browser Login**, or the **Free Tier**.
 

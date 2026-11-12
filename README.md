@@ -1,4 +1,4 @@
-<h1 align="center">🎨 Pixoo64 Media Album Art for Home Assistant (v2.1.3)</h1>
+<h1 align="center">🎨 Pixoo64 Media Album Art for Home Assistant (v2.1.4)</h1>
 
 <p align="center">
   <a href="https://www.home-assistant.io/"><img src="https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blueviolet.svg?style=for-the-badge&logo=home-assistant" alt="Home Assistant 2024.1+"></a>

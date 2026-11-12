@@ -437,8 +437,11 @@ class MediaData:
 
         # Traditional music streaming services always provide track-specific artwork even in station/radio mode
         is_music_service = any(
-            srv in media_content_id or srv in app_name or srv in source
-            for srv in ("apple", "spotify", "tidal", "deezer", "amazon", "youtube", "qobuz", "soundcloud")
+            srv in media_content_id or srv in app_name or srv in source or (media_channel and srv in str(media_channel).lower())
+            for srv in (
+                "apple", "spotify", "tidal", "deezer", "amazon", "youtube", "qobuz", "soundcloud",
+                "radioparadise", "radio paradise", "somafm", "soma fm"
+            )
         )
 
         is_radio_stream = bool(
@@ -452,13 +455,24 @@ class MediaData:
             ))
         )
 
+        has_track_album = bool(
+            self.album
+            and str(self.album).strip().lower() not in ("", "unknown album", "unknown", "none", "single", "singles")
+        )
+        pic_changed = bool(
+            self.picture
+            and getattr(self, "prev_picture", None)
+            and self.picture != self.prev_picture
+        )
+
         if is_music_service:
             self.playing_radio = False
             self.radio_logo = False
         elif is_radio_stream:
             self.playing_radio = True
-            # Real broadcast radio stations provide static station logos, not track art
-            self.radio_logo = True
+            # Real broadcast radio stations provide static station logos, not track art.
+            # If the stream provides distinct album metadata or dynamic track artwork, it is track-specific art.
+            self.radio_logo = not (has_track_album or pic_changed)
         else:
             self.playing_radio = False
             self.radio_logo = False
